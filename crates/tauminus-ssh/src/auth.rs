@@ -701,6 +701,10 @@ async fn connect_agent(
     for candidate in crate::windows_agent::candidates(source, std::env::var_os("SSH_AUTH_SOCK")) {
         match crate::windows_agent::connect(&candidate).await {
             Ok(pipe) => return Some(AgentClient::connect(pipe)),
+            // Someone else's pipe under an agent's name: worth a warning.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                tracing::warn!(?candidate, %error, "refusing an agent pipe");
+            }
             Err(error) => tracing::debug!(?candidate, %error, "no agent here"),
         }
     }

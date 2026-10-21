@@ -12,10 +12,20 @@
 //! to whoever got there first. As PuTTY does, the client checks who owns the
 //! pipe it reached: Pageant's must belong to the current user. An OpenSSH
 //! agent pipe may also belong to LocalSystem or Administrators, because
-//! Windows runs ssh-agent as a service.
+//! Windows runs ssh-agent as a service, and what LocalSystem creates belongs
+//! to Administrators by default.
+//!
+//! Only local pipes are opened. A `\\host\pipe\...` path, or a `\\.\pipe\`
+//! path that climbs out with `..`, would send the user's Windows credentials
+//! to that host, and the remote side writes the owner the check reads.
+//!
+//! The check reads the pipe's owner, not the process serving it. That holds
+//! because both real agents create their pipes with a DACL that lets no one
+//! else add a pipe instance: Pageant grants only the user, and OpenSSH's
+//! agent grants other users read and write but not `FILE_CREATE_PIPE_INSTANCE`.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use data_encoding::HEXLOWER;
 use sha2::{Digest, Sha256};
@@ -66,6 +76,25 @@ pub(crate) fn candidates(source: &AgentSource, auth_sock: Option<OsString>) -> V
     }
 }
 
+/// Whether `path` names a pipe on this machine: `\\.\pipe\` followed by one
+/// name with no `\` or `/` in it and that is not `.` or `..`. The prefix is
+/// matched without regard to case, as Windows does.
+pub(crate) fn is_local_pipe(path: &Path) -> bool {
+    const PREFIX: &str = r"\\.\pipe\";
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    let Some(head) = text.get(..PREFIX.len()) else {
+        return false;
+    };
+    let name = &text[PREFIX.len()..];
+    head.eq_ignore_ascii_case(PREFIX)
+        && !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['\\', '/'])
+}
+
 /// Whether a pipe owner passes: the current user, or for `UserOrSystem`
 /// also LocalSystem or Administrators.
 pub(crate) const fn owner_allowed(
@@ -76,20 +105,26 @@ pub(crate) const fn owner_allowed(
     is_user || (matches!(owners, Owners::UserOrSystem) && is_system_or_admins)
 }
 
-/// Pageant's pipe name: `\\.\pipe\pageant.<user>.<suffix>`, where the suffix
-/// is the hex SHA-256 of the 32-bit big-endian length of `obfuscated`
-/// followed by `obfuscated` itself, the string "Pageant" run through
-/// `CryptProtectMemory`. That is PuTTY's `agent_named_pipe_name`. Only
-/// processes of the same logon session compute the same suffix.
-pub(crate) fn pageant_pipe_name(user: &str, obfuscated: &[u8]) -> String {
+/// The user part of Pageant's pipe name: the ANSI bytes of the user name up
+/// to the first NUL, cut at the first `@`, as PuTTY's `get_username` and
+/// `agent_named_pipe_name` do with a user principal name.
+pub(crate) fn pageant_user(ansi: &[u8]) -> &[u8] {
+    let name = ansi.split(|&b| b == 0).next().unwrap_or_default();
+    name.split(|&b| b == b'@').next().unwrap_or_default()
+}
+
+/// The last part of Pageant's pipe name: the hex SHA-256 of the 32-bit
+/// big-endian length of `obfuscated` followed by `obfuscated`, the string
+/// "Pageant" run through `CryptProtectMemory` with
+/// `CRYPTPROTECTMEMORY_CROSS_PROCESS`. That key is the same for every
+/// process on the machine until it restarts, so the suffix is no secret:
+/// the owner check is what stops another user taking the name.
+pub(crate) fn pageant_suffix(obfuscated: &[u8]) -> String {
     let length = u32::try_from(obfuscated.len()).unwrap_or(u32::MAX);
     let mut hash = Sha256::new();
     hash.update(length.to_be_bytes());
     hash.update(obfuscated);
-    let suffix = HEXLOWER.encode(&hash.finalize());
-    // PuTTY drops the domain of a user principal name.
-    let user = user.split_once('@').map_or(user, |(name, _)| name);
-    format!(r"\\.\pipe\pageant.{user}.{suffix}")
+    HEXLOWER.encode(&hash.finalize())
 }
 
 /// "Pageant" with its terminating NUL, zero-padded to one
@@ -109,8 +144,9 @@ pub(crate) use sys::connect;
     reason = "Win32 calls that read a pipe's owner, the user's SID and Pageant's pipe name"
 )]
 mod sys {
-    use std::ffi::{CStr, OsStr};
+    use std::ffi::{OsStr, OsString};
     use std::io;
+    use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
     use std::ptr;
     use std::time::Duration;
@@ -119,6 +155,7 @@ mod sys {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_PIPE_BUSY, ERROR_SUCCESS, HANDLE, LocalFree,
     };
+    use windows_sys::Win32::Globalization::{CP_ACP, MultiByteToWideChar};
     use windows_sys::Win32::Security::Authentication::Identity::{
         GetUserNameExA, NameUserPrincipal,
     };
@@ -134,13 +171,22 @@ mod sys {
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
     use windows_sys::Win32::System::WindowsProgramming::GetUserNameA;
 
-    use super::{Candidate, Owners, owner_allowed, pageant_pipe_name, pageant_plaintext};
+    use super::{
+        Candidate, Owners, is_local_pipe, owner_allowed, pageant_plaintext, pageant_suffix,
+        pageant_user,
+    };
 
     /// Opens the candidate's pipe and checks its owner.
     pub(crate) async fn connect(candidate: &Candidate) -> io::Result<NamedPipeClient> {
         let path = match candidate {
-            Candidate::Pipe(path) => path.clone().into_os_string(),
-            Candidate::Pageant => pageant_pipe()?.into(),
+            Candidate::Pipe(path) if is_local_pipe(path) => path.clone().into_os_string(),
+            Candidate::Pipe(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "only pipes on this machine (\\\\.\\pipe\\name) can be agents",
+                ));
+            }
+            Candidate::Pageant => pageant_pipe()?,
         };
         let pipe = open(&path).await?;
         if !owned_by(&pipe, candidate.owners())? {
@@ -266,9 +312,9 @@ mod sys {
         }
     }
 
-    /// Pageant's pipe name for this user and logon session.
-    fn pageant_pipe() -> io::Result<String> {
-        let user = user_name()?;
+    /// Pageant's pipe name for this user, as Pageant builds it.
+    fn pageant_pipe() -> io::Result<OsString> {
+        let ansi = user_name_ansi()?;
         let mut block = pageant_plaintext();
         // SAFETY: the buffer is writable and one CryptProtectMemory block
         // (16 bytes) long, as the call requires.
@@ -279,36 +325,65 @@ mod sys {
                 CRYPTPROTECTMEMORY_CROSS_PROCESS,
             )
         };
-        // Without the obfuscation the name is guessable; do not fall back.
+        // Without it the name cannot match the one Pageant made.
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(pageant_pipe_name(&user, &block))
+        let mut name = OsString::from(r"\\.\pipe\pageant.");
+        name.push(ansi_to_os(pageant_user(&ansi))?);
+        name.push(".");
+        name.push(pageant_suffix(&block));
+        Ok(name)
     }
 
     /// The user principal name if the machine has one, else the account
-    /// name, as PuTTY picks.
-    fn user_name() -> io::Result<String> {
-        let mut buffer = [0_u8; 512];
-        let mut length = 512_u32;
-        // SAFETY: the buffer is writable for `length` bytes.
-        if unsafe { GetUserNameExA(NameUserPrincipal, buffer.as_mut_ptr(), &raw mut length) } {
-            return c_string(&buffer);
+    /// name, as PuTTY picks, in the ANSI code page PuTTY reads it in.
+    fn user_name_ansi() -> io::Result<Vec<u8>> {
+        let mut length = 0_u32;
+        // SAFETY: a null buffer only asks for the size, in bytes with the NUL.
+        unsafe { GetUserNameExA(NameUserPrincipal, ptr::null_mut(), &raw mut length) };
+        if length > 0 {
+            let mut buffer = vec![0_u8; length as usize + 1];
+            let mut size = length;
+            // SAFETY: the buffer is writable for `size` bytes.
+            if unsafe { GetUserNameExA(NameUserPrincipal, buffer.as_mut_ptr(), &raw mut size) } {
+                return Ok(buffer);
+            }
         }
-        let mut length = 512_u32;
+        // No principal name off a domain: the account name, at most 257 bytes.
+        let mut buffer = vec![0_u8; 258];
+        let mut size = 258_u32;
         // SAFETY: as above.
-        if unsafe { GetUserNameA(buffer.as_mut_ptr(), &raw mut length) } == 0 {
+        if unsafe { GetUserNameA(buffer.as_mut_ptr(), &raw mut size) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        c_string(&buffer)
+        Ok(buffer)
     }
 
-    fn c_string(buffer: &[u8]) -> io::Result<String> {
-        CStr::from_bytes_until_nul(buffer)
-            .ok()
-            .and_then(|name| name.to_str().ok())
-            .map(str::to_owned)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "user name is not UTF-8"))
+    /// ANSI code page bytes as the UTF-16 Windows uses for pipe names.
+    fn ansi_to_os(ansi: &[u8]) -> io::Result<OsString> {
+        if ansi.is_empty() {
+            return Ok(OsString::new());
+        }
+        let length = i32::try_from(ansi.len())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "user name too long"))?;
+        // SAFETY: the input is `length` readable bytes; a null output asks
+        // for the size in UTF-16 units.
+        let units =
+            unsafe { MultiByteToWideChar(CP_ACP, 0, ansi.as_ptr(), length, ptr::null_mut(), 0) };
+        if units <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut wide = vec![0_u16; units.unsigned_abs() as usize];
+        // SAFETY: the output holds `units` UTF-16 units, as the first call asked.
+        let written = unsafe {
+            MultiByteToWideChar(CP_ACP, 0, ansi.as_ptr(), length, wide.as_mut_ptr(), units)
+        };
+        if written <= 0 {
+            return Err(io::Error::last_os_error());
+        }
+        wide.truncate(written.unsigned_abs() as usize);
+        Ok(OsString::from_wide(&wide))
     }
 }
 
@@ -350,6 +425,31 @@ mod tests {
     }
 
     #[test]
+    fn only_pipes_on_this_machine_are_agents() {
+        for good in [
+            OPENSSH_AGENT_PIPE,
+            r"\\.\PIPE\openssh-ssh-agent",
+            r"\\.\pipe\1password.agent",
+        ] {
+            assert!(is_local_pipe(Path::new(good)), "{good}");
+        }
+        for bad in [
+            r"\\attacker.example\pipe\agent",
+            r"\\.\pipe\..\UNC\attacker.example\pipe\agent",
+            r"\\.\pipe\sub\agent",
+            r"\\.\pipe\a/b",
+            r"\\.\pipe\..",
+            r"\\.\pipe\.",
+            r"\\.\pipe\",
+            r"\\?\pipe\agent",
+            r"C:\agent",
+            "",
+        ] {
+            assert!(!is_local_pipe(Path::new(bad)), "{bad}");
+        }
+    }
+
+    #[test]
     fn pageant_must_belong_to_the_user_and_an_openssh_pipe_may_belong_to_the_system() {
         assert!(owner_allowed(Owners::User, true, false));
         assert!(!owner_allowed(Owners::User, false, true));
@@ -364,13 +464,15 @@ mod tests {
     }
 
     #[test]
-    fn pageant_pipe_name_matches_putty() {
+    fn pageant_name_parts_match_putty() {
         // sha256 of 00 00 00 10 followed by 16 zero bytes, from Python's hashlib.
-        let name = pageant_pipe_name("alice@corp.example", &[0; 16]);
         assert_eq!(
-            name,
-            r"\\.\pipe\pageant.alice.0d3fc7ca63979d9b01e0546b5523c37c6230cee3f3d053cd9b71f51ff98191b2"
+            pageant_suffix(&[0; 16]),
+            "0d3fc7ca63979d9b01e0546b5523c37c6230cee3f3d053cd9b71f51ff98191b2"
         );
+        assert_eq!(pageant_user(b"alice@corp.example\0junk"), b"alice");
+        assert_eq!(pageant_user(b"Ngh\xeca\0"), b"Ngh\xeca");
+        assert_eq!(pageant_user(b"\0"), b"");
         assert_eq!(&pageant_plaintext()[..8], b"Pageant\0");
     }
 
@@ -390,8 +492,11 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn a_missing_agent_is_an_error() {
+    async fn a_missing_or_remote_agent_is_an_error() {
         let missing = Candidate::Pipe(r"\\.\pipe\tauminus-no-such-agent".into());
         assert!(connect(&missing).await.is_err());
+        let remote = Candidate::Pipe(r"\\192.0.2.1\pipe\agent".into());
+        let error = connect(&remote).await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     }
 }
