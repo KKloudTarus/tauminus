@@ -4444,6 +4444,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauminus-store"
+version = "0.0.0"
+dependencies = [
+ "rand",
+ "serde",
+ "serde_json",
+ "tauminus-app",
+ "tauminus-domain",
+ "tokio",
+]
+
+[[package]]
 name = "tauri"
 version = "2.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
