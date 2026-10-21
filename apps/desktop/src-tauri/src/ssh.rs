@@ -481,6 +481,10 @@ impl From<SshOpenError> for CommandError {
 
 /// Connects to an SSH host and opens a shell. Questions for the user arrive
 /// on `on_prompt`; answer each with `ssh_prompt_reply`.
+///
+/// A `ProxyCommand` is refused here: the shell would run it, and it must not
+/// come from the webview. Saved hosts imported from `~/.ssh/config` connect
+/// through `host_connect` instead, which reads theirs from the store.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn ssh_open(
@@ -492,6 +496,12 @@ pub(crate) async fn ssh_open(
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
+    if matches!(target.route, RouteSpec::ProxyCommand { .. }) {
+        return Err(CommandError::new(
+            ErrorCode::InvalidArgument,
+            "a ProxyCommand can only come from a saved host",
+        ));
+    }
     let target = SshTarget::try_from(target)?;
     open_target(&ssh, &broker, &target, size, on_output, on_exit, on_prompt).await
 }

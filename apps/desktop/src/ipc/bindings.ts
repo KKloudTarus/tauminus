@@ -24,6 +24,10 @@ export const commands = {
 	/**
 	 *  Connects to an SSH host and opens a shell. Questions for the user arrive
 	 *  on `on_prompt`; answer each with `ssh_prompt_reply`.
+	 * 
+	 *  A `ProxyCommand` is refused here: the shell would run it, and it must not
+	 *  come from the webview. Saved hosts imported from `~/.ssh/config` connect
+	 *  through `host_connect` instead, which reads theirs from the store.
 	 */
 	sshOpen: (target: SshTargetSpec, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("ssh_open", { target, size, onOutput, onExit, onPrompt })),
 	/**  Answers a prompt. Returns false when the prompt is no longer waiting. */
