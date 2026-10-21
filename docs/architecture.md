@@ -11,7 +11,8 @@ crates/
   tauminus-domain/         rules and types, no I/O, no runtime
   tauminus-app/            use cases (SessionManager, LocalShells) and ports
   tauminus-pty/            adapter: local shells over portable-pty
-  tauminus-ssh/            adapter: SSH shells over russh, known_hosts, auth, proxies
+  tauminus-ssh/            adapter: SSH shells over russh, known_hosts, auth, proxies, ssh_config import
+  tauminus-store/          adapter: saved hosts in one JSON file, written atomically
 apps/desktop/
   src-tauri/               Tauri shell: composition root, IPC commands, wire types
   src/
@@ -20,6 +21,7 @@ apps/desktop/
     features/workspace/    tabs, split-pane layout tree, PaneTree and TabBar views
     features/keymap/       shortcut parsing, defaults per platform, user overrides
     features/ssh/          quick connect, destination parsing, host key and secret prompts
+    features/hosts/        saved hosts sidebar, search, host and group editors
     app/                   AppShell (actions, theme, palette state), App, CommandPalette
     ipc/                   the only code that imports @tauri-apps; bindings.ts is generated
 xtask/                     `cargo xtask ci`, `deps`, `bindings`
@@ -46,7 +48,8 @@ The compiler enforces the direction, because a crate can only use what its
 manifest lists. Two checks keep the manifests honest: `cargo xtask deps`
 allowlists the normal dependencies of the domain and app crates, and
 `deny.toml` bans `portable-pty` outside `tauminus-pty`, `russh` outside
-`tauminus-ssh`, and `tauri` and `specta` outside the desktop shell.
+`tauminus-ssh`, and `tauri` and `specta` outside the desktop shell. The
+domain keeps serde out too: `tauminus-store` maps hosts to its file format.
 
 ## A terminal session, end to end
 
@@ -200,6 +203,35 @@ while the view is paused, on top of the pump's 832 KiB. Prompts are bounded
 too: 3 passphrase tries per key, 3 passwords, 10 keyboard-interactive rounds,
 4 passes over the method list after partial successes.
 
+### Saved hosts
+
+A host sets what it needs and inherits the rest from its group, then from
+that group's parents: the nearest value wins. Jump hosts and the route
+(ProxyCommand or a proxy) are one choice, so both come from the nearest
+level that sets either. `Inventory` keeps four invariants on every write:
+unique ids, existing groups, no cycles, depth at most 16. Deleting a group
+moves its hosts and subgroups up a level with the settings they inherited,
+so no host changes how it connects. Details in
+[ADR 0005](adr/0005-saved-hosts.md).
+
+`HostBook` applies each change to a copy, saves it, and only then shows it.
+The store writes a temporary file, flushes it, and renames it over the old
+one, so a crash leaves the old list or the new one. Before writing it
+checks that the file still holds what it last read; if another window
+changed it, the save is refused and the list reloaded.
+
+Importing `~/.ssh/config` lists the `Host` aliases (with `Include`, which
+OpenSSH applies conditionally) and resolves each one with `ssh -G`, so the
+result is what `ssh` itself would use. Without an `ssh` binary a built-in
+resolver handles the keywords Tauminus imports; a corpus of 33 configs
+checks it against `ssh -G`. Reading is capped at 256 files and 8 MiB; each
+`ssh -G` at 5 s, the whole import at 30 s.
+
+A ProxyCommand reaches a shell, so only the store and the importer write
+one. `ssh_open` refuses one from the view, and saving a host may keep a
+stored ProxyCommand but not add or change it; saved hosts connect through
+`host_connect`, which reads the target from the store.
+
 ### Complexity
 
 | Operation | Time | Space |
@@ -215,6 +247,11 @@ too: 3 passphrase tries per key, 3 passwords, 10 keyboard-interactive rounds,
 | Check a host key, L lines of k patterns | O(L·k·\|p\|·\|h\|) worst case, linear for plain patterns; one HMAC per hashed line; keys decoded only for matching lines | O(1) beyond the loaded file |
 | Glob match of pattern p against host h | O(\|p\|·\|h\|), \|h\| ≤ 261 | O(1) |
 | Prompt routing (register, reply, cancel) | O(1) expected | O(c) for c connects waiting |
+| Resolve a saved host | O(d), d ≤ 16 | O(d) |
+| Move a group | O(G·d) to recheck its subtree | O(1) |
+| Save the host list | O(H + G): copy, serialize, one read for the conflict check, write; 44 ms at H = 10 000 | O(H + G) |
+| Search saved hosts, T words | O(H·T·L), most fields rejected in O(1) by a letter mask; under 60 ms at H = 10 000 with every field at its limit | O(H) cached haystacks |
+| Read ssh_config | O(n) in bytes read, at most 256 files and 8 MiB | O(n) |
 
 ### The view side
 
