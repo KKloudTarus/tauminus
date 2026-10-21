@@ -51,6 +51,8 @@ export const commands = {
 	hostsImportSshConfig: () => typedError<ImportResult, CommandError>(__TAURI_INVOKE("hosts_import_ssh_config")),
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
+	/**  Opens an `http` or `https` link in the default browser. */
+	openLink: (url: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_link", { url })),
 };
 
 /* Types */

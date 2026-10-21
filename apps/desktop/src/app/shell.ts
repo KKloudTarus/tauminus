@@ -13,7 +13,7 @@ import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
-import type { HostView, HostsClient, SessionClient, SessionSpec } from "@/ipc/index.ts";
+import type { HostView, HostsClient, LinkOpener, SessionClient, SessionSpec } from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
@@ -67,6 +67,7 @@ export class AppShell {
   constructor(options: {
     sessions: SessionClient;
     hosts: HostsClient;
+    links?: LinkOpener;
     userAgent: string;
     storage: Storage | undefined;
     root: HTMLElement;
@@ -97,9 +98,20 @@ export class AppShell {
     applyTheme(options.root, this.#state.theme);
 
     this.workspace = new Workspace<TerminalController, SessionSpec>((_paneId, spec) => {
+      const links = options.links;
       const controller = new TerminalController(options.sessions, {
         ...(options.renderer ? { renderer: options.renderer } : {}),
         ...(spec ? { spec } : {}),
+        mac: this.platform === "mac",
+        ...(links
+          ? {
+              openLink: (url: string) => {
+                links
+                  .open(url)
+                  .catch((error: unknown) => console.warn("could not open link", error));
+              },
+            }
+          : {}),
       });
       controller.setKeyHandler((event) => this.handleKey(event));
       return controller;

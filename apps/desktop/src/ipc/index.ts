@@ -4,6 +4,7 @@
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
 import type { HostsClient } from "./hosts.ts";
+import type { LinkOpener } from "./links.ts";
 import type { SessionClient } from "./sessions.ts";
 
 export {
@@ -17,6 +18,7 @@ export {
   type SettingsSpec,
   tauriHosts,
 } from "./hosts.ts";
+export { type LinkOpener, tauriLinks } from "./links.ts";
 export {
   type AnswerSpec,
   type EndpointSpec,
@@ -51,4 +53,12 @@ export async function hostsClient(): Promise<HostsClient> {
     return (await import("./fake-hosts.ts")).fakeHosts();
   }
   return (await import("./hosts.ts")).tauriHosts;
+}
+
+/** Opens links; the `e2e` build records them instead. */
+export async function linkOpener(): Promise<LinkOpener> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-links.ts")).fakeLinks;
+  }
+  return (await import("./links.ts")).tauriLinks;
 }

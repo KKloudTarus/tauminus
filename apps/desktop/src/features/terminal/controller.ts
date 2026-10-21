@@ -4,6 +4,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
@@ -21,6 +22,7 @@ import {
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
+import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { webglBudget } from "./webgl-budget.ts";
 
@@ -61,6 +63,8 @@ export class TerminalController {
   readonly #acks = new AckBatcher(ACK_THRESHOLD_BYTES);
   readonly #input: InputQueue;
   readonly #listeners = new Set<Listener>();
+  readonly #openLink: ((url: string) => void) | undefined;
+  readonly #mac: boolean;
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
@@ -104,10 +108,18 @@ export class TerminalController {
 
   constructor(
     sessions: SessionClient,
-    options: { renderer?: RendererPreference; spec?: SessionSpec } = {},
+    options: {
+      renderer?: RendererPreference;
+      spec?: SessionSpec;
+      /** Opens a link the user Ctrl+clicked (Cmd+clicked on macOS). */
+      openLink?: (url: string) => void;
+      mac?: boolean;
+    } = {},
   ) {
     this.#sessions = sessions;
     this.spec = options.spec ?? LOCAL;
+    this.#openLink = options.openLink;
+    this.#mac = options.mac ?? false;
     this.#webglRetired =
       chooseRenderer(options.renderer ?? "auto", globalThis.navigator?.userAgent ?? "") === "dom";
     this.terminal = new Terminal({
@@ -120,6 +132,20 @@ export class TerminalController {
     this.terminal.loadAddon(this.#fit);
     this.terminal.loadAddon(this.#search);
     this.terminal.loadAddon(new Unicode11Addon());
+    // Plain URLs in the output, and OSC 8 hyperlinks a program declares.
+    const hint = this.#mac ? "Cmd+click to open" : "Ctrl+click to open";
+    this.terminal.loadAddon(
+      new WebLinksAddon((event, url) => this.#activateLink(event, url), {
+        hover: () => this.terminal.element?.setAttribute("title", hint),
+        leave: () => this.terminal.element?.removeAttribute("title"),
+      }),
+    );
+    this.terminal.options.linkHandler = {
+      activate: (event, url) => this.#activateLink(event, url),
+      hover: () => this.terminal.element?.setAttribute("title", hint),
+      leave: () => this.terminal.element?.removeAttribute("title"),
+      allowNonHttpProtocols: false,
+    };
     this.terminal.unicode.activeVersion = "11";
 
     this.#input = new InputQueue(
@@ -307,6 +333,11 @@ export class TerminalController {
           this.#setStatus({ kind: "failed", message: errorMessage(error), code });
         }
       });
+  }
+
+  /** Output is whatever a remote program printed: open only what passes. */
+  #activateLink(event: MouseEvent, url: string): void {
+    if (asksToOpen(event, this.#mac) && isOpenableLink(url)) this.#openLink?.(url);
   }
 
   #ask(prompt: PromptKind): Promise<AnswerSpec> {
