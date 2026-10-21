@@ -39,8 +39,7 @@ jobs:
             args: ""
     runs-on: ${{ matrix.os }}
     permissions:
-      # Creates the draft release and uploads the bundles to it.
-      contents: write
+      contents: write # creates the draft release and uploads the bundles to it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
