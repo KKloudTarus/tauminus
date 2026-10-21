@@ -68,3 +68,14 @@ body,
   overflow: hidden;
   background: var(--background);
 }
+
+/*
+ * xterm.js sets nowrap, which collapses spaces. WebKitGTK then commits an
+ * input method's trailing space as U+00A0 and turns it back into a space on
+ * the next commit, so xterm.js no longer finds the old text and sends the
+ * whole buffer again: Telex "tieesng Vieejt" arrived as "tiếng tiếng Việt".
+ * pre still keeps the textarea on one line but leaves spaces alone.
+ */
+.xterm .xterm-helper-textarea {
+  white-space: pre;
+}

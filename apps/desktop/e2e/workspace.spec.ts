@@ -176,3 +176,74 @@ test("opens a link only on Ctrl+click, and only http and https", async ({ page }
   await page.keyboard.up("Control");
   expect(await opened()).toEqual(["https://example.com/docs"]);
 });
+
+test("takes text from an input method, as Telex sends it", async ({ page }) => {
+  // An IME such as ibus-unikey composes "tiếng" from "tieesng": the page
+  // sees a composition, then the committed text once.
+  await page.keyboard.type("echo ");
+  const cdp = await page.context().newCDPSession(page);
+  for (const step of ["t", "ti", "tie", "tiê", "tiế", "tiến", "tiếng"]) {
+    // oxlint-disable-next-line no-await-in-loop -- composition steps arrive in order
+    await cdp.send("Input.imeSetComposition", {
+      text: step,
+      selectionStart: step.length,
+      selectionEnd: step.length,
+    });
+  }
+  await cdp.send("Input.insertText", { text: "tiếng" });
+  await page.keyboard.type(" ");
+  for (const step of ["V", "Vi", "Việ", "Việt"]) {
+    // oxlint-disable-next-line no-await-in-loop -- composition steps arrive in order
+    await cdp.send("Input.imeSetComposition", {
+      text: step,
+      selectionStart: step.length,
+      selectionEnd: step.length,
+    });
+  }
+  await cdp.send("Input.insertText", { text: "Việt" });
+  await page.keyboard.press("Enter");
+  const rows = screenOf(focusedPane(page)).locator("> div");
+  // The echo prints the text once: nothing doubled, nothing lost.
+  await expect(rows.nth(1)).toHaveText(/^tiếng Việt\s*$/);
+});
+
+test("takes text from IBus on WebKitGTK, which never starts a composition", async ({ page }) => {
+  await page.keyboard.type("echo ");
+  // What WebKitGTK sends for ibus-unikey typing "tieesng Vieejt", all
+  // inside the keydown: keydown 229, beforeinput and input of type
+  // insertFromComposition, compositionend. No compositionstart.
+  for (const word of ["tiếng ", "Việt"]) {
+    // oxlint-disable-next-line no-await-in-loop -- one commit after the other, as typed
+    await page.evaluate((text) => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'section[data-focused="true"] textarea',
+      );
+      if (!textarea) throw new Error("no terminal textarea");
+      // Chromium blanks input types it does not implement; WebKit sends this one.
+      const composed = (type: string) => {
+        const event = new InputEvent(type, { data: text, bubbles: true });
+        Object.defineProperty(event, "inputType", { value: "insertFromComposition" });
+        return event;
+      };
+      const keydown = new KeyboardEvent("keydown", { key: "Unidentified", bubbles: true });
+      Object.defineProperty(keydown, "keyCode", { value: 229 });
+      textarea.dispatchEvent(keydown);
+      textarea.dispatchEvent(composed("beforeinput"));
+      textarea.value += text;
+      textarea.dispatchEvent(composed("input"));
+      textarea.dispatchEvent(new CompositionEvent("compositionend", { data: text, bubbles: true }));
+    }, word);
+  }
+  await page.keyboard.press("Enter");
+  const rows = screenOf(focusedPane(page)).locator("> div");
+  await expect(rows.nth(1)).toHaveText(/^tiếng Việt\s*$/);
+});
+
+test("keeps spaces in the input textarea, so WebKit never commits them as U+00A0", async ({
+  page,
+}) => {
+  const whiteSpace = await page
+    .locator('section[data-focused="true"] textarea')
+    .evaluate((textarea) => getComputedStyle(textarea).whiteSpace);
+  expect(whiteSpace).toBe("pre");
+});
