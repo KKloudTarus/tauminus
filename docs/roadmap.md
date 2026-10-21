@@ -57,10 +57,10 @@ SSH
 
 Hosts
 
-- [ ] Host, group, and tag model with inherited settings
-- [ ] Host list sidebar with search
-- [ ] Import `~/.ssh/config`: resolve with `ssh -G` when OpenSSH is present, else `ssh2-config`
-- [ ] First-run screen offering the import
+- [x] Host, group, and tag model with inherited settings
+- [x] Host list sidebar with search (`Ctrl+Shift+H` shows or hides it)
+- [x] Import `~/.ssh/config`: resolve with `ssh -G` when OpenSSH is present, else a built-in resolver checked against `ssh -G`
+- [x] First-run screen offering the import
 
 Release
 
@@ -74,7 +74,7 @@ Release
 - [ ] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine
 - [ ] Integration tests run `russh` against OpenSSH in CI for every auth method and ProxyJump
 - [ ] `known_hosts` parser passes a corpus of real-world files, including hashed and `@cert-authority` lines
-- [ ] `~/.ssh/config` import matches `ssh -G` output for a corpus of at least 20 configs
+- [x] `~/.ssh/config` import matches `ssh -G` output for a corpus of at least 20 configs (33 today)
 
 ## v0.2: Prod guard and memory
 
