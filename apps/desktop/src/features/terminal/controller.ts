@@ -24,6 +24,7 @@ import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
+import { type Lane, type OutputScheduler, outputScheduler } from "./output-scheduler.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { dropsRepeat } from "./repeat-guard.ts";
 import { webglBudget } from "./webgl-budget.ts";
@@ -63,6 +64,8 @@ export class TerminalController {
   readonly #fit = new FitAddon();
   readonly #search = new SearchAddon();
   readonly #acks = new AckBatcher(ACK_THRESHOLD_BYTES);
+  /** Output on its way to xterm.js, parsed in turns shared with other panes. */
+  readonly #output: Lane;
   readonly #input: InputQueue;
   readonly #listeners = new Set<Listener>();
   readonly #openLink: ((url: string) => void) | undefined;
@@ -118,6 +121,8 @@ export class TerminalController {
       /** Opens a link the user Ctrl+clicked (Cmd+clicked on macOS). */
       openLink?: (url: string) => void;
       mac?: boolean;
+      /** Shares parsing time with other panes; one per window by default. */
+      output?: OutputScheduler;
     } = {},
   ) {
     this.#sessions = sessions;
@@ -133,6 +138,15 @@ export class TerminalController {
       fontSize: 13,
       scrollback: 10_000,
     });
+    this.#output = (options.output ?? outputScheduler).lane(
+      (chunk, parsed) => this.terminal.write(chunk, parsed),
+      (bytes) => {
+        const ready = this.#acks.add(bytes);
+        if (ready > 0) {
+          this.#acknowledge(ready);
+        }
+      },
+    );
     this.terminal.loadAddon(this.#fit);
     this.terminal.loadAddon(this.#search);
     this.terminal.loadAddon(new Unicode11Addon());
@@ -302,6 +316,7 @@ export class TerminalController {
     this.#retireWebgl();
     this.#input.close();
     this.#stopImeFix?.();
+    this.#output.close();
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
@@ -363,12 +378,7 @@ export class TerminalController {
     if (this.#disposed) {
       return;
     }
-    this.terminal.write(data, () => {
-      const ready = this.#acks.add(data.byteLength);
-      if (ready > 0) {
-        this.#acknowledge(ready);
-      }
-    });
+    this.#output.push(data);
   }
 
   #acknowledge(bytes: number): void {

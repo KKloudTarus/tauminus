@@ -63,7 +63,7 @@ domain keeps serde out too: `tauminus-store` maps hosts to its file format.
                                                                    │   quiet ≥ 8 ms → send now
                                                                    │   else → send at 8 ms or 64 KiB
                                                                    ▼
- xterm.js ◄─write─ TerminalController ◄─ Channel<OutputChunk> (raw ArrayBuffer) ◄─ ChannelSink
+ xterm.js ◄─write─ OutputScheduler (one pane per turn) ◄─ TerminalController ◄─ Channel<OutputChunk> (raw ArrayBuffer) ◄─ ChannelSink
      │
      └─ write callback ─► AckBatcher (64 KiB) ─► session_acknowledge ─► FlowControl
 ```
@@ -241,6 +241,7 @@ stored ProxyCommand but not add or change it; saved hosts connect through
 | Flow control update | O(1) | O(1) |
 | Input queue, n bytes in m chunks | O(n + m) | O(n) until sent |
 | WebGL budget, acquire or release | O(1) | O(12) |
+| Output scheduler: push n bytes, send a chunk, grant or release a turn | O(n / 4 KiB) views, no copy; O(1) amortized per chunk; O(1) per turn | O(p) for p panes, plus what flow control lets each hold |
 | Split, close, resize, or spatial focus in a tab | O(n), n ≤ 31 nodes | O(n) for the rebuilt path |
 | Shortcut lookup per keystroke | O(1) | O(b) for b bindings |
 | Load `known_hosts`, n bytes over all files | O(n), off the async workers | O(n) |
@@ -258,6 +259,26 @@ stored ProxyCommand but not add or change it; saved hosts connect through
 `TerminalController` lives outside React and owns the `Terminal` and its
 session. `TerminalView` attaches it to a DOM node on mount and detaches it on
 unmount; moving a pane remounts the view without touching the session.
+
+Every pane parses its output on the one main thread. xterm.js parses for up
+to 12 ms before it yields, so three panes flooding at once ran back to back,
+dropped 41% of frames and delayed a keystroke echo by up to 91 ms.
+`OutputScheduler` gives one pane at a time a turn of about 6 ms. A turn keeps
+two 4 KiB chunks with xterm.js and sends the next from each chunk's parse
+callback, so chunks within a turn cost no timer hop, and it ends on time,
+not on bytes: `yes` parses far slower per byte than long lines. Turns go
+round robin and pass on through a `MessageChannel` task, which the browser
+never clamps the way it clamps nested timers. A write of at most 4 KiB to a
+pane with nothing queued skips the line, so typing in a quiet pane stays
+fast, and so does every write while the window is hidden.
+
+A turn never waits on xterm.js for good: after 250 ms without a parsed
+chunk it ends, and that pane gets no new turn until its chunk is back.
+xterm.js 6 stops parsing for good after a throw inside its parser, and
+without this rule one such pane would stop every pane. The REP sequence
+(`CSI n b`) was one such throw: xterm.js allocates n cells at once, so
+`CSI 2147483647 b` asks for 8 GiB. The terminal drops a REP longer than one
+screenful. [benchmarks.md](benchmarks.md) has the numbers before and after.
 
 Browsers cap live WebGL contexts at about 16 and silently drop the oldest.
 `WebglBudget` hands out 12 slots and evicts the least recently attached
