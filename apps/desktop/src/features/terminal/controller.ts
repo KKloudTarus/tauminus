@@ -4,7 +4,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebglAddon } from "@xterm/addon-webgl";
+import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
 import { type SessionClient, SessionCommandError, type TerminalSession } from "@/ipc/index.ts";
@@ -48,6 +48,7 @@ export class TerminalController {
   readonly #input: InputQueue;
   readonly #listeners = new Set<Listener>();
   #status: TerminalStatus = { kind: "starting" };
+  #title = "";
   #session: TerminalSession | undefined;
   #opening = false;
   #disposed = false;
@@ -69,6 +70,7 @@ export class TerminalController {
    * WebKitGTK.
    */
   #webglRetired = false;
+  #webglLoading = false;
   #observer: ResizeObserver | undefined;
   #frame = 0;
 
@@ -95,6 +97,11 @@ export class TerminalController {
       },
       ignoreEndedSession,
     );
+    this.terminal.onTitleChange((title) => {
+      // Remote programs set the title; keep it short and printable.
+      this.#title = sanitizeTitle(title);
+      this.#notify();
+    });
     this.terminal.onData((data) => this.#input.push({ kind: "text", data }));
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
@@ -120,6 +127,28 @@ export class TerminalController {
   };
 
   getStatus = (): TerminalStatus => this.#status;
+
+  /** The title the shell or program set with OSC 0 or 2, or "" if none. */
+  get title(): string {
+    return this.#title;
+  }
+
+  /**
+   * Lets the app handle its own shortcuts before xterm.js sees the key.
+   * `handle` returns true when it consumed the event.
+   */
+  setKeyHandler(handle: (event: KeyboardEvent) => boolean): void {
+    this.terminal.attachCustomKeyEventHandler(
+      (event) => !(event.type === "keydown" && handle(event)),
+    );
+  }
+
+  /** Re-reads the theme tokens, after the app switches light or dark. */
+  refreshTheme(): void {
+    if (this.#host) {
+      this.terminal.options.theme = themeFrom(this.#host);
+    }
+  }
 
   /** Shows the terminal in `host`. Opens the session on the first call. */
   attach(host: HTMLElement): void {
@@ -258,15 +287,37 @@ export class TerminalController {
     if (this.#webglRetired) {
       return;
     }
-    this.#webgl ??= this.#loadWebgl();
     if (this.#webgl) {
       webglBudget.acquire(this, () => this.#retireWebgl());
+      return;
     }
+    if (this.#webglLoading) {
+      return;
+    }
+    // Loaded on demand: webviews that use the DOM renderer never fetch or
+    // parse the addon.
+    this.#webglLoading = true;
+    import("@xterm/addon-webgl")
+      .then(({ WebglAddon }) => {
+        this.#webglLoading = false;
+        if (this.#disposed || this.#webglRetired || this.#webgl) {
+          return;
+        }
+        this.#webgl = this.#loadWebgl(WebglAddon);
+        if (this.#webgl) {
+          webglBudget.acquire(this, () => this.#retireWebgl());
+        }
+      })
+      .catch((error: unknown) => {
+        this.#webglLoading = false;
+        this.#webglRetired = true;
+        console.warn("WebGL renderer unavailable; using the DOM renderer", error);
+      });
   }
 
-  #loadWebgl(): WebglAddon | undefined {
+  #loadWebgl(Addon: typeof WebglAddon): WebglAddon | undefined {
     try {
-      const webgl = new WebglAddon();
+      const webgl = new Addon();
       webgl.onContextLoss(() => this.#retireWebgl());
       this.terminal.loadAddon(webgl);
       return webgl;
@@ -310,6 +361,10 @@ export class TerminalController {
 
   #setStatus(status: TerminalStatus): void {
     this.#status = status;
+    this.#notify();
+  }
+
+  #notify(): void {
     for (const listener of this.#listeners) {
       listener();
     }
@@ -344,6 +399,16 @@ function ignoreEndedSession(error: unknown): void {
 
 function isEndedSession(error: unknown): boolean {
   return error instanceof SessionCommandError && error.code === "not_found";
+}
+
+/** Strips C0 and C1 control characters and caps the length; titles come from untrusted output. O(n). */
+export function sanitizeTitle(title: string): string {
+  let clean = "";
+  for (const char of title) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code >= 0x20 && !(code >= 0x7f && code <= 0x9f)) clean += char;
+  }
+  return clean.trim().slice(0, 120);
 }
 
 function errorMessage(error: unknown): string {
