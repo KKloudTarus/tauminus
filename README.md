@@ -20,13 +20,19 @@ Pre-alpha. Nothing is usable yet.
 
 ## Roadmap
 
-| Version | Scope |
-|---|---|
-| v0.1 | Local shell, SSH (password, key, agent, ProxyJump), `known_hosts`, import `~/.ssh/config`, tabs and panes, command palette |
-| v0.2 | Prod guard, searchable history, encrypted vault |
-| v0.3 | SFTP, port forwarding, snippets, multi-host commands, auto-reconnect |
-| v0.4 | Bring-your-own-storage sync, team sharing, audit log export |
-| v1.0+ | Web build (SSH in WASM over an encrypted relay), mobile |
+| Version | Goal | Scope |
+|---|---|---|
+| v0.1 | Daily driver | Local shell, SSH (password, keys, certificates, agent, ProxyJump, ProxyCommand, proxies), `known_hosts`, `~/.ssh/config` import, tabs, panes, command palette |
+| v0.2 | Prod guard and memory | Prod guard, searchable history, encrypted vault, identities, biometric unlock |
+| v0.3 | Termius Starter parity | SFTP, port forwarding, snippets with variables, broadcast, workspaces, auto-reconnect, Telnet, serial, Mosh |
+| v0.4 | Beat Termius Pro | Session recording and replay, triggers, autocomplete, AI with command approval, FIDO2, hardware-bound keys |
+| v0.5 | Sync without an account | End-to-end encrypted sync to git, S3, or a folder; cloud and app imports; auto-update |
+| v0.6 | Team features | Self-hosted Tauminus Hub: team vaults, roles, revocation, OIDC/SAML, SCIM, audit log, live sharing |
+| v1.0+ | More platforms | Web, mobile, Kerberos, smart cards, Kubernetes, RDP |
+
+Details and exit criteria: [docs/roadmap.md](docs/roadmap.md).
+Feature comparison with Termius and others: [docs/feature-parity.md](docs/feature-parity.md).
+Decisions: [docs/adr/](docs/adr/).
 
 ## License
 
