@@ -225,10 +225,9 @@ impl Authenticator<'_> {
             if !server.permits(MethodKind::PublicKey) || server.partial {
                 break;
             }
-            let Ok(text) = tokio::fs::read_to_string(&path).await else {
+            let Some(text) = read_key_file(&path).await else {
                 continue;
             };
-            let text = Zeroizing::new(text);
             let Some(public) = public_key_of(&path, &text).await else {
                 debug!(path = %path.display(), "skipping unreadable key");
                 continue;
@@ -410,10 +409,7 @@ impl Authenticator<'_> {
     async fn identity_file_public_keys(&self) -> Vec<PublicKey> {
         let mut keys = Vec::new();
         for path in self.candidate_keys() {
-            let text = tokio::fs::read_to_string(&path)
-                .await
-                .map(Zeroizing::new)
-                .unwrap_or_default();
+            let text = read_key_file(&path).await.unwrap_or_default();
             if let Some(key) = public_key_of(&path, &text).await {
                 keys.push(key);
             }
@@ -428,7 +424,7 @@ async fn public_key_of(path: &Path, text: &str) -> Option<PublicKey> {
     if let Ok(key) = PrivateKey::from_openssh(text) {
         return Some(key.public_key().clone());
     }
-    if let Ok(public) = tokio::fs::read_to_string(with_suffix(path, ".pub")).await
+    if let Some(public) = read_key_file(&with_suffix(path, ".pub")).await
         && let Ok(key) = PublicKey::from_openssh(public.trim())
     {
         return Some(key);
@@ -642,8 +638,34 @@ fn expand_home(path: &Path, home: Option<&Path>) -> PathBuf {
 }
 
 async fn read_certificate(path: &Path) -> Option<Certificate> {
-    let text = tokio::fs::read_to_string(path).await.ok()?;
+    let text = read_key_file(path).await?;
     Certificate::from_openssh(text.trim()).ok()
+}
+
+/// Most bytes read from a key, public key, or certificate file. An RSA
+/// 16384-bit private key is about 12 KiB.
+const MAX_KEY_FILE: u64 = 64 * 1024;
+
+/// A key file's text, if it is a regular file of sane size. The type is
+/// checked before opening: opening a FIFO would wait for a writer forever,
+/// and `/dev/zero` would never end. Identity paths can come from an
+/// imported config, so they are not trusted to point at a key.
+async fn read_key_file(path: &Path) -> Option<Zeroizing<String>> {
+    use tokio::io::AsyncReadExt as _;
+    let metadata = tokio::fs::metadata(path).await.ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_KEY_FILE {
+        return None;
+    }
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAX_KEY_FILE + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .ok()?;
+    if bytes.len() as u64 > MAX_KEY_FILE {
+        return None;
+    }
+    String::from_utf8(bytes).ok().map(Zeroizing::new)
 }
 
 /// Where to find ssh-agent.
@@ -685,6 +707,38 @@ async fn connect_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn only_small_regular_files_are_read_as_keys() {
+        let dir = std::env::temp_dir().join(format!("tauminus-keyread-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("small"), "key text").unwrap();
+        let big = std::fs::File::create(dir.join("big")).unwrap();
+        big.set_len(MAX_KEY_FILE + 1).unwrap();
+        assert_eq!(
+            read_key_file(&dir.join("small"))
+                .await
+                .as_deref()
+                .map(String::as_str),
+            Some("key text")
+        );
+        assert!(read_key_file(&dir.join("big")).await.is_none());
+        assert!(read_key_file(&dir).await.is_none(), "a directory");
+        #[cfg(unix)]
+        {
+            assert!(read_key_file(Path::new("/dev/zero")).await.is_none());
+            // A FIFO must be refused without waiting for a writer.
+            let fifo = dir.join("fifo");
+            let status = std::process::Command::new("mkfifo").arg(&fifo).status();
+            if status.is_ok_and(|s| s.success()) {
+                let read =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), read_key_file(&fifo))
+                        .await;
+                assert!(matches!(read, Ok(None)), "returned at once with nothing");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn tilde_paths_expand_under_home() {
