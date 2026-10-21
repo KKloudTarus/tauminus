@@ -69,11 +69,11 @@ Release
 
 ### Exit criteria
 
-- [ ] `vim`, `htop`, `tmux`, `less`, and `mc` render and respond correctly over local and SSH sessions
-- [ ] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md`
-- [ ] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine
+- [x] `vim`, `htop`, `tmux`, `less`, and `mc` render and respond correctly over local and SSH sessions (checked by hand on WebKitGTK, including mouse clicks in `mc` and resizing a split)
+- [ ] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md` (WebKitGTK measured: dropped frames and p95 latency pass; the worst single keystroke, 61 ms, and RSS after `cat` over SSH, +78 MB, do not; WKWebView and WebView2 to do)
+- [ ] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine (Tauminus on Linux recorded; Termius side to do)
 - [ ] Integration tests run `russh` against OpenSSH in CI for every auth method and ProxyJump
-- [ ] `known_hosts` parser passes a corpus of real-world files, including hashed and `@cert-authority` lines
+- [x] `known_hosts` parser passes a corpus of real-world files, including hashed and `@cert-authority` lines (GitHub's published keys, a file hashed by `ssh-keygen -H`, and a hand-edited file, each also checked against `ssh-keygen -F`)
 - [x] `~/.ssh/config` import matches `ssh -G` output for a corpus of at least 20 configs (33 today)
 
 ## v0.2: Prod guard and memory
