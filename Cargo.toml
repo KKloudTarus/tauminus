@@ -19,6 +19,7 @@ publish = false
 tauminus-app = { path = "crates/tauminus-app" }
 tauminus-domain = { path = "crates/tauminus-domain" }
 tauminus-pty = { path = "crates/tauminus-pty" }
+tauminus-ssh = { path = "crates/tauminus-ssh" }
 
 # External crates. Each one is allowed only in the crates listed in deny.toml [bans].
 anyhow = "1.0.104"
@@ -34,6 +35,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.0", default-features = false }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+zeroize = "1.9"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

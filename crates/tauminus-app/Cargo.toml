@@ -16,6 +16,7 @@ tauminus-domain.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

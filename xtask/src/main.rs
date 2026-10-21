@@ -121,9 +121,16 @@ fn check_bindings(root: &Path) -> Result<()> {
 /// growing a runtime, serializer, or driver. Dev-dependencies are not checked.
 const LAYER_RULES: &[(&str, &[&str])] = &[
     ("tauminus-domain", &["thiserror"]),
+    // zeroize: a dependency-free crate that wipes secrets when they drop.
     (
         "tauminus-app",
-        &["tauminus-domain", "thiserror", "tokio", "tracing"],
+        &[
+            "tauminus-domain",
+            "thiserror",
+            "tokio",
+            "tracing",
+            "zeroize",
+        ],
     ),
 ];
 
