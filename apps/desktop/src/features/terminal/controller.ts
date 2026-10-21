@@ -25,6 +25,7 @@ import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
+import { dropsRepeat } from "./repeat-guard.ts";
 import { webglBudget } from "./webgl-budget.ts";
 
 /** Delay before retrying an acknowledgement whose IPC call failed. */
@@ -163,6 +164,10 @@ export class TerminalController {
       this.#title = sanitizeTitle(title);
       this.#notify();
     });
+    // Runs before xterm.js's own REP handler; returning true drops the sequence.
+    this.terminal.parser.registerCsiHandler({ final: "b" }, (params) =>
+      dropsRepeat(params, this.terminal.cols, this.terminal.rows),
+    );
     this.terminal.onData((data) => this.#input.push({ kind: "text", data }));
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
