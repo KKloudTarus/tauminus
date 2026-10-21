@@ -4391,17 +4391,20 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauminus-app",
  "tauminus-domain",
  "tauminus-pty",
+ "tauminus-ssh",
  "tauri",
  "tauri-build",
  "tauri-specta",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]

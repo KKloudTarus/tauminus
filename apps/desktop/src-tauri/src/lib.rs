@@ -6,11 +6,13 @@
 
 mod commands;
 mod ipc;
+mod ssh;
 
 use std::sync::Arc;
 
-use tauminus_app::{LocalShells, SessionConfig, SessionManager};
+use tauminus_app::{LocalShells, SessionConfig, SessionManager, SshSessions};
 use tauminus_pty::NativePtyLauncher;
+use tauminus_ssh::{AgentSource, HostKeyStore, RusshConnector};
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
 use tracing::info;
@@ -26,6 +28,8 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         commands::session_resize,
         commands::session_acknowledge,
         commands::session_close,
+        ssh::ssh_open,
+        ssh::ssh_prompt_reply,
     ])
 }
 
@@ -39,15 +43,29 @@ pub fn run() -> anyhow::Result<()> {
     let builder = specta_builder();
     let sessions = Arc::new(SessionManager::new(SessionConfig::default()));
     let shells = LocalShells::new(Arc::new(NativePtyLauncher), Arc::clone(&sessions));
+    let broker = Arc::new(ssh::PromptBroker::default());
 
     tauri::Builder::default()
-        .manage(sessions)
+        .manage(Arc::clone(&sessions))
         .manage(shells)
+        .manage(broker)
         .invoke_handler(builder.invoke_handler())
+        .setup(move |app| {
+            // Keys the user trusts here go to Tauminus's own file; the
+            // user's OpenSSH files are read but never written.
+            let home = app.path().home_dir().ok();
+            let remember_in = app.path().app_config_dir()?.join("known_hosts");
+            let store =
+                HostKeyStore::new(HostKeyStore::openssh_files(home.as_deref()), remember_in);
+            let connector = RusshConnector::new(store, home, AgentSource::Environment);
+            app.manage(SshSessions::new(Arc::new(connector), sessions));
+            Ok(())
+        })
         // A reload or navigation destroys every view, and nothing can attach
         // to the old sessions again. End them instead of leaking shells.
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Started {
+                webview.state::<Arc<ssh::PromptBroker>>().cancel_all();
                 let closed = webview.state::<Arc<SessionManager>>().close_all();
                 if closed > 0 {
                     info!(closed, "page reloaded; closed orphaned sessions");
@@ -103,9 +121,12 @@ mod tests {
             .expect("bindings render");
         let bindings = std::fs::read_to_string(&rendered).expect("rendered bindings");
         let _ = std::fs::remove_file(&rendered);
+        // Commands returning `Result` render as `__TAURI_INVOKE("name"`, the
+        // others as `__TAURI_INVOKE<T>("name"`.
         let registered: BTreeSet<String> = bindings
-            .split("__TAURI_INVOKE(\"")
+            .split("__TAURI_INVOKE")
             .skip(1)
+            .filter_map(|rest| rest.split_once("(\"").map(|(_, name)| name))
             .filter_map(|rest| rest.split('"').next())
             .map(ToString::to_string)
             .collect();
