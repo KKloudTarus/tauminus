@@ -49,6 +49,24 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo --preserve-env=GITHUB_ENV,GITHUB_ACTIONS bash ci/password-sshd.sh > /dev/null
 
+      # The Windows agent tests need the ssh-agent service of OpenSSH for
+      # Windows and PuTTY's Pageant, pinned by the hash PuTTY publishes.
+      - name: Start ssh-agent and Pageant
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Set-Service ssh-agent -StartupType Manual
+          Start-Service ssh-agent
+          $pageant = Join-Path $env:RUNNER_TEMP 'pageant.exe'
+          Invoke-WebRequest 'https://the.earth.li/~sgtatham/putty/0.85/w64/pageant.exe' -OutFile $pageant
+          $hash = (Get-FileHash $pageant -Algorithm SHA256).Hash
+          if ($hash -ne '3BD76B57FCD09ACC948268C753EA2077B0C557CA435323301A9B572661F98ECD') {
+            throw "pageant.exe has hash $hash"
+          }
+          Start-Process $pageant
+          Start-Sleep -Seconds 3
+          'TAUMINUS_WINDOWS_AGENTS=1' >> $env:GITHUB_ENV
+
       # rustup reads rust-toolchain.toml and installs the pinned compiler.
       - name: Install Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install

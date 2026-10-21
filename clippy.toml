@@ -7,3 +7,6 @@ disallowed-methods = [
   { path = "std::thread::sleep", reason = "blocks the async runtime; use tokio::time::sleep" },
   { path = "std::process::Command::output", reason = "blocks; use tokio::process::Command" },
 ]
+
+# Product and account names that read wrong in backticks.
+doc-valid-idents = ["PuTTY", "LocalSystem", ".."]

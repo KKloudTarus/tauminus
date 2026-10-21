@@ -675,6 +675,8 @@ pub enum AgentSource {
     Environment,
     /// A socket (Unix) or named pipe (Windows) path, like `IdentityAgent`.
     Path(PathBuf),
+    /// PuTTY's Pageant. Windows only; elsewhere there is no agent.
+    Pageant,
     /// Do not use an agent.
     None,
 }
@@ -686,21 +688,23 @@ async fn connect_agent(
     match source {
         AgentSource::Environment => AgentClient::connect_env().await.ok(),
         AgentSource::Path(path) => AgentClient::connect_uds(path).await.ok(),
-        AgentSource::None => None,
+        AgentSource::Pageant | AgentSource::None => None,
     }
 }
 
+/// The first agent that answers and whose pipe has a trusted owner; see
+/// `windows_agent`. O(c) for c candidates, at most two.
 #[cfg(windows)]
 async fn connect_agent(
     source: &AgentSource,
 ) -> Option<AgentClient<impl AgentStream + Send + Unpin + use<>>> {
-    match source {
-        AgentSource::Environment => AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
-            .await
-            .ok(),
-        AgentSource::Path(path) => AgentClient::connect_named_pipe(path).await.ok(),
-        AgentSource::None => None,
+    for candidate in crate::windows_agent::candidates(source, std::env::var_os("SSH_AUTH_SOCK")) {
+        match crate::windows_agent::connect(&candidate).await {
+            Ok(pipe) => return Some(AgentClient::connect(pipe)),
+            Err(error) => tracing::debug!(?candidate, %error, "no agent here"),
+        }
     }
+    None
 }
 
 #[cfg(test)]
