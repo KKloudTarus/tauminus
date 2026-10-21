@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Fast checks before each commit. CI runs the full suite.
+# Opt in with `pnpm hooks:install`. It sets core.hooksPath, so skip it if you
+# already manage git hooks another way.
+pre-commit:
+  parallel: true
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all --check
+    oxfmt:
+      root: apps/desktop/
+      glob: "*.{ts,tsx,css,json}"
+      run: pnpm format:check
+    oxlint:
+      root: apps/desktop/
+      glob: "*.{ts,tsx}"
+      run: pnpm lint

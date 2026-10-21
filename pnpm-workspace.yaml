@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+packages:
+  - apps/*
+
+engineStrict: true
+# Exact versions in package.json; upgrades go through Dependabot PRs.
+saveExact: true
+# pnpm 12 refuses versions published within its default minimum release age;
+# pins that were installed inside that window are listed below. Upgrades
+# arrive through Dependabot after a 7-day cooldown.
+# No dependency may run install scripts. pnpm blocks them by default; this
+# includes lefthook, whose postinstall would install git hooks without asking.
+# Hooks are opt-in through `pnpm hooks:install`.
+minimumReleaseAgeExclude:
+  - '@tauri-apps/cli-darwin-arm64@2.12.4'
+  - '@tauri-apps/cli-darwin-x64@2.12.4'
+  - '@tauri-apps/cli-linux-arm-gnueabihf@2.12.4'
+  - '@tauri-apps/cli-linux-arm64-gnu@2.12.4'
+  - '@tauri-apps/cli-linux-arm64-musl@2.12.4'
+  - '@tauri-apps/cli-linux-riscv64-gnu@2.12.4'
+  - '@tauri-apps/cli-linux-x64-gnu@2.12.4'
+  - '@tauri-apps/cli-linux-x64-musl@2.12.4'
+  - '@tauri-apps/cli-win32-arm64-msvc@2.12.4'
+  - '@tauri-apps/cli-win32-ia32-msvc@2.12.4'
+  - '@tauri-apps/cli-win32-x64-msvc@2.12.4'
+  - '@tauri-apps/cli@2.12.4'
+  - vite@8.3.5

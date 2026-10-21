@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-desktop"
+description = "Tauminus desktop app: Tauri shell and composition root"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+# Tauri mobile builds load the app as a library; desktop uses the binary.
+name = "tauminus_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+specta.workspace = true
+specta-typescript.workspace = true
+tauminus-app.workspace = true
+tauminus-domain.workspace = true
+tauminus-pty.workspace = true
+tauri = { workspace = true, features = ["specta"] }
+tauri-specta.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
