@@ -44,14 +44,16 @@ Terminal
 
 SSH
 
-- [ ] `SshChannel` transport over `russh` 0.64
-- [ ] Auth: password, keyboard-interactive, Ed25519/ECDSA/RSA-SHA2 keys with passphrase, OpenSSH user certificates
-- [ ] System ssh-agent: Unix socket, Windows named pipe, Pageant
-- [ ] ProxyJump chains of any length
-- [ ] ProxyCommand
-- [ ] SOCKS5 and HTTP CONNECT proxy
-- [ ] `known_hosts` parser: hashed entries, wildcards, `!` negation, `@cert-authority`, `@revoked`; first-connect prompt; changed-key block screen
-- [ ] Readable errors with a next step for: auth failure per method, host key changed, DNS failure, connection refused, timeout
+- [x] SSH transport over `russh` 0.64 with the `ring` backend
+- [x] Auth: password, keyboard-interactive, Ed25519/ECDSA/RSA-SHA2 keys with passphrase (asked only for a key the server accepts), OpenSSH user certificates; restarts after partial success
+- [x] System ssh-agent: Unix socket and the Windows OpenSSH named pipe
+- [ ] Pageant
+- [x] ProxyJump chains up to 8 hops, each with its own host key check
+- [x] ProxyCommand
+- [x] SOCKS5 and HTTP CONNECT proxy, without proxy authentication
+- [x] `known_hosts` parser: hashed entries, wildcards, `!` negation, `@cert-authority`, `@revoked`; first-connect prompt; changed-key block screen
+- [x] Readable errors with a next step for: auth failure per method, host key changed, DNS failure, connection refused, timeout
+- [x] Quick connect (`Ctrl+Shift+O`, `Cmd+Shift+O` on macOS) with `ssh -J` style jump hosts; splitting an SSH pane opens the same host
 
 Hosts
 
