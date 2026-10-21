@@ -16,8 +16,26 @@ leave open:
 
 ## Status
 
-Pre-alpha. The skeleton opens a local shell in a terminal window. SSH, hosts,
-and the prod guard are next, per the roadmap below.
+Pre-alpha, working toward v0.1. Local shells, SSH (keys, certificates,
+agent, passwords, ProxyJump, ProxyCommand, SOCKS5 and HTTP proxies, OpenSSH
+`known_hosts` rules), tabs, split panes, the command palette, and saved hosts
+with `~/.ssh/config` import work today. The prod guard comes in v0.2.
+
+## Installing an unsigned build
+
+Release builds are not signed yet, so each system warns before the first
+start. Download them only from this repository's
+[releases page](https://github.com/KKloudTarus/tauminus/releases).
+
+- **macOS.** Open the `.dmg` and drag Tauminus to Applications. The first
+  start is blocked. Open System Settings, then Privacy & Security, find the
+  message about Tauminus, and choose Open Anyway. On macOS 14 and earlier,
+  Control-click the app and choose Open instead.
+- **Windows.** Run the `.msi` or the `-setup.exe`. When SmartScreen says it
+  protected your PC, choose More info, then Run anyway.
+- **Linux.** Install the `.deb` with `sudo apt install ./Tauminus_*.deb`, or
+  the `.rpm` with `sudo dnf install ./Tauminus-*.rpm`. The `.AppImage` runs
+  after `chmod +x`; it needs FUSE 2 (`libfuse2` on Debian and Ubuntu).
 
 ## Development
 

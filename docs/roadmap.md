@@ -64,8 +64,8 @@ Hosts
 
 Release
 
-- [ ] `tauri-action` builds `.AppImage`, `.deb`, `.rpm`, `.dmg` (universal), `.msi`, `.exe` on tag push, unsigned
-- [ ] README section on opening an unsigned build on macOS and Windows
+- [x] `tauri-action` builds `.AppImage`, `.deb`, `.rpm`, `.dmg` (universal), `.msi`, `.exe` on tag push, unsigned
+- [x] README section on opening an unsigned build on macOS and Windows
 
 ### Exit criteria
 
