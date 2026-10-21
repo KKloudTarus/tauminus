@@ -65,20 +65,26 @@ async fn direct_connects_to_the_endpoint() {
 
 #[tokio::test]
 async fn refused_port_is_reported_as_refused() {
-    // Bound but not listening: the port stays reserved for this test, so no
-    // parallel test can take it, and every connect is refused.
-    let socket = tokio::net::TcpSocket::new_v4().unwrap();
-    socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let port = socket.local_addr().unwrap().port();
-    let error = open(&Route::Direct, &endpoint("127.0.0.1", port), TIMEOUT)
-        .await
-        .err()
-        .unwrap();
-    assert!(
-        matches!(error, ConnectError::Refused { port: p, .. } if p == port),
-        "{error:?}"
-    );
-    drop(socket);
+    // A port that was just released. Another process may grab it between
+    // the drop and the connect, so try a few. A bound but not listening
+    // socket would not do: macOS drops the SYN instead of refusing it.
+    for _ in 0..5 {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        match open(&Route::Direct, &endpoint("127.0.0.1", port), TIMEOUT).await {
+            Err(ConnectError::Refused { port: p, .. }) => {
+                assert_eq!(p, port);
+                return;
+            }
+            Ok(_) => {}
+            Err(other) => panic!("{other:?}"),
+        }
+    }
+    panic!("every released port was taken again");
 }
 
 #[tokio::test]
@@ -261,9 +267,16 @@ async fn http_connect_rejects_an_endless_header() {
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         let (mut client, _) = listener.accept().await.unwrap();
+        // Read the request first and close only after the client does:
+        // closing with unread data sends a reset, and Windows then drops
+        // what the client has not read yet.
+        let mut request = vec![0u8; 1024];
+        let _ = client.read(&mut request).await;
         let _ = client.write_all(b"HTTP/1.1 200 OK\r\n").await;
         let filler = vec![b'x'; 64 * 1024];
         let _ = client.write_all(&filler).await;
+        let mut rest = [0u8; 1];
+        let _ = client.read(&mut rest).await;
     });
     let route = Route::HttpConnect {
         host: HostName::parse("127.0.0.1").unwrap(),

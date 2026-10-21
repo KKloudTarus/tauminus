@@ -110,27 +110,8 @@ impl Sshd {
             authorized_keys.push_str(&std::fs::read_to_string(key).unwrap());
         }
         std::fs::write(dir.path("authorized_keys"), authorized_keys).unwrap();
-        let port = free_port();
-        let mut config = vec![
-            format!("Port {port}"),
-            "ListenAddress 127.0.0.1".into(),
-            format!("HostKey {}", dir.path("host").display()),
-            format!("PidFile {}", dir.path("pid").display()),
-            format!(
-                "AuthorizedKeysFile {}",
-                dir.path("authorized_keys").display()
-            ),
-            "StrictModes no".into(),
-            "UsePAM no".into(),
-            "PasswordAuthentication no".into(),
-            "KbdInteractiveAuthentication no".into(),
-            "AllowTcpForwarding yes".into(),
-            "LogLevel ERROR".into(),
-        ];
-        if let Some(ca) = user_ca {
-            config.push(format!("TrustedUserCAKeys {}", ca.display()));
-        }
-        if let Some(ca) = &options.host_ca {
+        let SshdOptions { extra, host_ca } = options;
+        if let Some(ca) = &host_ca {
             keygen(
                 &dir.0,
                 &[
@@ -145,22 +126,53 @@ impl Sshd {
                     "host.pub",
                 ],
             );
-            config.push(format!(
-                "HostCertificate {}",
-                dir.path("host-cert.pub").display()
-            ));
         }
-        config.extend(options.extra);
-        std::fs::write(dir.path("sshd_config"), config.join("\n") + "\n").unwrap();
-        let child = Command::new(binary)
-            .args(["-D", "-e", "-f"])
-            .arg(dir.path("sshd_config"))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("sshd starts");
-        wait_for_port(port);
-        Self { child, port, dir }
+        // Another test can take the port between `free_port` and sshd's
+        // bind. Our sshd then exits, and the port answers with someone
+        // else's server, so readiness is our sshd writing its pid file.
+        for _ in 0..10 {
+            let port = free_port();
+            let mut config = vec![
+                format!("Port {port}"),
+                "ListenAddress 127.0.0.1".into(),
+                format!("HostKey {}", dir.path("host").display()),
+                format!("PidFile {}", dir.path("pid").display()),
+                format!(
+                    "AuthorizedKeysFile {}",
+                    dir.path("authorized_keys").display()
+                ),
+                "StrictModes no".into(),
+                "UsePAM no".into(),
+                "PasswordAuthentication no".into(),
+                "KbdInteractiveAuthentication no".into(),
+                "AllowTcpForwarding yes".into(),
+                "LogLevel ERROR".into(),
+            ];
+            if let Some(ca) = user_ca {
+                config.push(format!("TrustedUserCAKeys {}", ca.display()));
+            }
+            if host_ca.is_some() {
+                config.push(format!(
+                    "HostCertificate {}",
+                    dir.path("host-cert.pub").display()
+                ));
+            }
+            config.extend(extra.iter().cloned());
+            std::fs::write(dir.path("sshd_config"), config.join("\n") + "\n").unwrap();
+            let _ = std::fs::remove_file(dir.path("pid"));
+            let mut child = Command::new(binary)
+                .args(["-D", "-e", "-f"])
+                .arg(dir.path("sshd_config"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("sshd starts");
+            if wait_until_listening(&mut child, &dir.path("pid")) {
+                return Self { child, port, dir };
+            }
+            let _ = child.wait();
+        }
+        panic!("sshd could not bind a free port in 10 tries")
     }
 
     pub(crate) fn host_public_key(&self) -> String {
@@ -193,19 +205,25 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-fn wait_for_port(port: u16) {
+/// True once `child` has written its pid to `pid_file`, which sshd does
+/// after it binds; false if it exits first.
+fn wait_until_listening(child: &mut Child, pid_file: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
+    let pid = child.id().to_string();
     while Instant::now() < deadline {
-        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return;
+        if child.try_wait().ok().flatten().is_some() {
+            return false;
+        }
+        if std::fs::read_to_string(pid_file).is_ok_and(|text| text.trim() == pid) {
+            return true;
         }
         #[expect(
             clippy::disallowed_methods,
             reason = "test setup polls a child process"
         )]
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("sshd did not listen on port {port}");
+    panic!("sshd did not start within 10 s");
 }
 
 /// Public-key-only auth with the given identity files.
