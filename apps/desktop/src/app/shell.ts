@@ -12,11 +12,13 @@ import {
 import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
-import type { SessionClient, SessionSpec } from "@/ipc/index.ts";
+import { HostsStore } from "@/features/hosts/hosts-store.ts";
+import type { HostView, HostsClient, SessionClient, SessionSpec } from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
 const KEYMAP_STORAGE_KEY = "tauminus.keymap";
+const SIDEBAR_STORAGE_KEY = "tauminus.sidebar";
 
 export const ACTION_LABELS: Record<Action, string> = {
   "palette.open": "Show all commands",
@@ -38,11 +40,14 @@ export const ACTION_LABELS: Record<Action, string> = {
   "terminal.clear": "Clear scrollback",
   "theme.cycle": "Switch theme (system, light, dark)",
   "ssh.connect": "Connect to SSH host",
+  "hosts.toggle": "Show or hide saved hosts",
+  "hosts.import": "Import hosts from ~/.ssh/config",
 };
 
 interface ShellState {
   paletteOpen: boolean;
   connectOpen: boolean;
+  sidebarOpen: boolean;
   theme: ThemePreference;
 }
 
@@ -53,6 +58,7 @@ interface ShellState {
  */
 export class AppShell {
   readonly workspace: Workspace<TerminalController, SessionSpec>;
+  readonly hosts: HostsStore;
   readonly keymap: Keymap;
   readonly platform: Platform;
   readonly #listeners = new Set<() => void>();
@@ -60,6 +66,7 @@ export class AppShell {
 
   constructor(options: {
     sessions: SessionClient;
+    hosts: HostsClient;
     userAgent: string;
     storage: Storage | undefined;
     root: HTMLElement;
@@ -80,7 +87,13 @@ export class AppShell {
       );
     }
     this.keymap = keymap;
-    this.#state = { paletteOpen: false, connectOpen: false, theme: loadTheme(options.storage) };
+    this.hosts = new HostsStore(options.hosts);
+    this.#state = {
+      paletteOpen: false,
+      connectOpen: false,
+      sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
+      theme: loadTheme(options.storage),
+    };
     applyTheme(options.root, this.#state.theme);
 
     this.workspace = new Workspace<TerminalController, SessionSpec>((_paneId, spec) => {
@@ -129,6 +142,21 @@ export class AppShell {
     }
   }
 
+  /** Connects to a saved host in a new tab, or says why it cannot. */
+  connectHost(host: HostView): void {
+    if (!host.target) {
+      this.hosts.notify(`${host.label}: ${host.problem ?? "cannot connect"}`);
+      return;
+    }
+    this.connect({ kind: "host", hostId: host.id, label: host.label, target: host.target });
+  }
+
+  setSidebarOpen(open: boolean): void {
+    if (this.#state.sidebarOpen === open) return;
+    writeFlag(this.#storage, SIDEBAR_STORAGE_KEY, open);
+    this.#set({ ...this.#state, sidebarOpen: open });
+  }
+
   /** Opens an SSH session in a new tab. Returns false at the pane limit. */
   connect(spec: SessionSpec): boolean {
     const opened = this.workspace.newTab(spec);
@@ -144,6 +172,15 @@ export class AppShell {
         return;
       case "ssh.connect":
         this.setConnectOpen(true);
+        return;
+      case "hosts.toggle":
+        this.setSidebarOpen(!this.#state.sidebarOpen);
+        return;
+      case "hosts.import":
+        this.setSidebarOpen(true);
+        this.hosts
+          .importConfig()
+          .catch((error: unknown) => this.hosts.notify(`Import failed: ${String(error)}`));
         return;
       case "tab.new":
         w.newTab();
@@ -255,5 +292,22 @@ function readOverrides(storage: Storage | undefined): unknown {
   } catch (error) {
     console.warn("ignoring unreadable key bindings", error);
     return {};
+  }
+}
+
+function readFlag(storage: Storage | undefined, key: string, fallback: boolean): boolean {
+  try {
+    const value = storage?.getItem(key);
+    return value === null || value === undefined ? fallback : value === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeFlag(storage: Storage | undefined, key: string, value: boolean): void {
+  try {
+    storage?.setItem(key, value ? "1" : "0");
+  } catch {
+    // Remembering the sidebar is a convenience; private mode may refuse it.
   }
 }

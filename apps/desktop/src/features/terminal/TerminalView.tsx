@@ -18,7 +18,7 @@ export function TerminalView({ controller, className }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const status = useSyncExternalStore(controller.subscribe, controller.getStatus);
   const prompt = useSyncExternalStore(controller.subscribe, controller.getPrompt);
-  const remote = controller.spec.kind === "ssh";
+  const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
     const host = hostRef.current;

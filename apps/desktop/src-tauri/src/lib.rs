@@ -5,14 +5,16 @@
 //! exposes the use cases to the webview as IPC commands.
 
 mod commands;
+mod hosts;
 mod ipc;
 mod ssh;
 
 use std::sync::Arc;
 
-use tauminus_app::{LocalShells, SessionConfig, SessionManager, SshSessions};
+use tauminus_app::{HostBook, LocalShells, SessionConfig, SessionManager, SshSessions};
 use tauminus_pty::NativePtyLauncher;
-use tauminus_ssh::{AgentSource, HostKeyStore, RusshConnector};
+use tauminus_ssh::{AgentSource, HostKeyStore, OpenSshConfig, RusshConnector};
+use tauminus_store::JsonHostStore;
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
 use tracing::info;
@@ -20,8 +22,8 @@ use tracing_subscriber::EnvFilter;
 
 /// Typed command registry. The same builder serves IPC at runtime and
 /// generates `apps/desktop/src/ipc/bindings.ts`.
-pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
-    tauri_specta::Builder::<tauri::Wry>::new().commands(tauri_specta::collect_commands![
+pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
+    tauri_specta::Builder::<R>::new().commands(tauri_specta::collect_commands![
         commands::session_open,
         commands::session_write,
         commands::session_write_bytes,
@@ -30,7 +32,57 @@ pub fn specta_builder() -> tauri_specta::Builder<tauri::Wry> {
         commands::session_close,
         ssh::ssh_open,
         ssh::ssh_prompt_reply,
+        hosts::hosts_list,
+        hosts::host_save,
+        hosts::host_delete,
+        hosts::group_save,
+        hosts::group_delete,
+        hosts::ssh_config_aliases,
+        hosts::hosts_import_ssh_config,
+        ssh::host_connect,
     ])
+}
+
+/// Where the app keeps its files and finds the user's.
+pub(crate) struct Paths {
+    pub(crate) config_dir: std::path::PathBuf,
+    pub(crate) home: Option<std::path::PathBuf>,
+}
+
+/// Builds every adapter and use case and hands them to Tauri as state. The
+/// app and the IPC tests share it, so a command never asks for state the
+/// app does not manage.
+pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
+    let Paths { config_dir, home } = paths;
+    let sessions = Arc::new(SessionManager::new(SessionConfig::default()));
+    app.manage(LocalShells::new(
+        Arc::new(NativePtyLauncher),
+        Arc::clone(&sessions),
+    ));
+    app.manage(Arc::new(ssh::PromptBroker::default()));
+
+    // Keys the user trusts here go to Tauminus's own file; the user's
+    // OpenSSH files are read but never written.
+    let remember_in = config_dir.join("known_hosts");
+    let store = HostKeyStore::new(HostKeyStore::openssh_files(home.as_deref()), remember_in);
+    let connector = RusshConnector::new(store, home.clone(), AgentSource::Environment);
+    app.manage(SshSessions::new(Arc::new(connector), Arc::clone(&sessions)));
+    app.manage(sessions);
+
+    let store = Arc::new(JsonHostStore::new(config_dir.join("hosts.json")));
+    let book = tauri::async_runtime::block_on(HostBook::open(store));
+    app.manage(match book {
+        Ok(book) => hosts::Hosts::Ready(Arc::new(book)),
+        Err(e) => {
+            // Keep the file as it is; saving now would destroy it.
+            tracing::error!(error = %e, "saved hosts unavailable");
+            hosts::Hosts::Unavailable(e.to_string())
+        }
+    });
+    let local = ssh::local_user().unwrap_or_default();
+    app.manage(hosts::SshConfig(
+        home.map(|home| OpenSshConfig::user(home, local)),
+    ));
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -41,24 +93,14 @@ pub fn run() -> anyhow::Result<()> {
         .init();
 
     let builder = specta_builder();
-    let sessions = Arc::new(SessionManager::new(SessionConfig::default()));
-    let shells = LocalShells::new(Arc::new(NativePtyLauncher), Arc::clone(&sessions));
-    let broker = Arc::new(ssh::PromptBroker::default());
-
     tauri::Builder::default()
-        .manage(Arc::clone(&sessions))
-        .manage(shells)
-        .manage(broker)
         .invoke_handler(builder.invoke_handler())
-        .setup(move |app| {
-            // Keys the user trusts here go to Tauminus's own file; the
-            // user's OpenSSH files are read but never written.
-            let home = app.path().home_dir().ok();
-            let remember_in = app.path().app_config_dir()?.join("known_hosts");
-            let store =
-                HostKeyStore::new(HostKeyStore::openssh_files(home.as_deref()), remember_in);
-            let connector = RusshConnector::new(store, home, AgentSource::Environment);
-            app.manage(SshSessions::new(Arc::new(connector), sessions));
+        .setup(|app| {
+            let paths = Paths {
+                config_dir: app.path().app_config_dir()?,
+                home: app.path().home_dir().ok(),
+            };
+            install(app, paths);
             Ok(())
         })
         // A reload or navigation destroys every view, and nothing can attach
@@ -75,6 +117,9 @@ pub fn run() -> anyhow::Result<()> {
         .run(tauri::generate_context!())?;
     Ok(())
 }
+
+#[cfg(test)]
+mod ipc_tests;
 
 #[cfg(test)]
 mod tests {
@@ -95,7 +140,7 @@ mod tests {
     fn export_typescript_bindings() {
         let target = manifest_dir().join("../src/ipc/bindings.ts");
         // REUSE-IgnoreStart
-        super::specta_builder()
+        super::specta_builder::<tauri::Wry>()
             .export(
                 Typescript::default().header(
                     "// SPDX-FileCopyrightText: 2026 Tauminus contributors\n\
@@ -116,7 +161,7 @@ mod tests {
 
         let rendered =
             std::env::temp_dir().join(format!("tauminus-bindings-{}.ts", std::process::id()));
-        super::specta_builder()
+        super::specta_builder::<tauri::Wry>()
             .export(Typescript::default(), &rendered)
             .expect("bindings render");
         let bindings = std::fs::read_to_string(&rendered).expect("rendered bindings");

@@ -4398,6 +4398,7 @@ dependencies = [
  "tauminus-domain",
  "tauminus-pty",
  "tauminus-ssh",
+ "tauminus-store",
  "tauri",
  "tauri-build",
  "tauri-specta",

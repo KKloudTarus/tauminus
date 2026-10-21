@@ -182,7 +182,14 @@ export class TerminalController {
 
   /** What to call this terminal before a program sets a title. */
   get defaultTitle(): string {
-    return this.spec.kind === "ssh" ? formatEndpoint(this.spec.target.destination) : "Terminal";
+    switch (this.spec.kind) {
+      case "host":
+        return this.spec.label;
+      case "ssh":
+        return formatEndpoint(this.spec.target.destination);
+      default:
+        return "Terminal";
+    }
   }
 
   /** The title the shell or program set with OSC 0 or 2, or "" if none. */

@@ -93,6 +93,8 @@ pub(crate) enum ErrorCode {
     /// The user declined a prompt or closed it.
     Cancelled,
     ProtocolError,
+    /// The saved hosts could not be read or written.
+    StoreFailed,
     Internal,
 }
 

@@ -19,8 +19,16 @@ import {
 
 export type { AnswerSpec, EndpointSpec, ErrorCode, GridSize, PromptKind, RouteSpec, SshTargetSpec };
 
-/** What a session runs: the local shell, or a shell on an SSH host. */
-export type SessionSpec = { kind: "local" } | { kind: "ssh"; target: SshTargetSpec };
+/**
+ * What a session runs: the local shell, a shell on an SSH host, or a saved
+ * host. A saved host connects by id, so its settings, including a
+ * ProxyCommand, come from the store and never from the view; `target` is
+ * for showing where it goes.
+ */
+export type SessionSpec =
+  | { kind: "local" }
+  | { kind: "ssh"; target: SshTargetSpec }
+  | { kind: "host"; hostId: string; label: string; target: SshTargetSpec };
 
 /** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
 export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
@@ -98,7 +106,10 @@ export const tauriSessions: SessionClient = {
           .then((answer) => commands.sshPromptReply(id, answer))
           .catch((error: unknown) => console.warn("prompt reply failed", error));
       };
-      opening = commands.sshOpen(spec.target, size, output, exit, prompts);
+      opening =
+        spec.kind === "host"
+          ? commands.hostConnect(spec.hostId, size, output, exit, prompts)
+          : commands.sshOpen(spec.target, size, output, exit, prompts);
     }
     const id = await unwrap(opening);
     return {

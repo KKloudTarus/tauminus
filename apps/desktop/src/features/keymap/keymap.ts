@@ -34,7 +34,9 @@ export type Action =
   | "terminal.paste"
   | "terminal.clear"
   | "theme.cycle"
-  | "ssh.connect";
+  | "ssh.connect"
+  | "hosts.toggle"
+  | "hosts.import";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -56,6 +58,8 @@ export const ACTIONS: readonly Action[] = [
   "terminal.clear",
   "theme.cycle",
   "ssh.connect",
+  "hosts.toggle",
+  "hosts.import",
 ];
 
 export type Platform = "mac" | "other";
@@ -83,6 +87,8 @@ const OTHER: Bindings = {
   "terminal.clear": ["ctrl+shift+k"],
   "theme.cycle": [],
   "ssh.connect": ["ctrl+shift+o"],
+  "hosts.toggle": ["ctrl+shift+h"],
+  "hosts.import": [],
 };
 
 const MAC: Bindings = {
@@ -106,6 +112,8 @@ const MAC: Bindings = {
   "terminal.clear": ["meta+k"],
   "theme.cycle": [],
   "ssh.connect": ["meta+shift+o"],
+  "hosts.toggle": ["meta+shift+h"],
+  "hosts.import": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {
