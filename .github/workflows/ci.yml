@@ -101,7 +101,13 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm e2e
       - run: pnpm exec vite build
+
+      # The in-memory shell used by e2e must never ship.
+      - name: Check the production bundle has no test shell
+        run: "! grep -rl 'command not found' dist/assets"
+
 
   policy:
     name: Licenses, advisories, spelling
