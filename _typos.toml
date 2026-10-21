@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[files]
+extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/"]
+
+[default.extend-words]
+# Proper names and protocol terms
+tauminus = "tauminus"

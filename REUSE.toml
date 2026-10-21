@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+version = 1
+
+# Files that cannot carry a comment header.
+[[annotations]]
+path = [
+  "**/*.json",
+  "**/*.png",
+  "**/*.ico",
+  "**/*.icns",
+  "Cargo.lock",
+  "pnpm-lock.yaml",
+  ".gitignore",
+  "LICENSE",
+  ".github/**/*.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Tauminus contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = ["**/*.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Tauminus contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# Contributor Covenant text keeps its own license.
+[[annotations]]
+path = ["CODE_OF_CONDUCT.md"]
+precedence = "override"
+SPDX-FileCopyrightText = "Organization for Ethical Source"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
