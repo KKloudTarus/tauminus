@@ -393,9 +393,8 @@ impl Authenticator<'_> {
                 .map(|path| expand_home(path, self.home))
                 .collect();
         }
-        if self.options.identities_only {
-            return Vec::new();
-        }
+        // With no files listed, the default ones, as OpenSSH does whether or
+        // not IdentitiesOnly is set.
         let Some(home) = self.home else {
             return Vec::new();
         };

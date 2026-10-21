@@ -171,10 +171,7 @@ fn defaults_are_dropped_so_hosts_inherit_them() {
     assert_eq!(tidy.user, None);
     assert_eq!(tidy.identity_files, Vec::<PathBuf>::new());
     host.identities_only = true;
-    assert_eq!(
-        config.tidy(host).identity_files.len(),
-        DEFAULT_IDENTITIES.len()
-    );
+    assert_eq!(config.tidy(host).identity_files, Vec::<PathBuf>::new());
 }
 
 #[cfg(unix)]
