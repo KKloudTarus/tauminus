@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Password and keyboard-interactive login against an in-process russh
-//! server. A non-root OpenSSH server cannot check passwords, since that needs
-//! PAM or the shadow file.
+//! server, which can script what OpenSSH will not: wrong answers, ten
+//! challenge rounds, a server that never stops asking. `password_sshd.rs`
+//! runs the plain cases against OpenSSH itself.
 
 mod support;
 

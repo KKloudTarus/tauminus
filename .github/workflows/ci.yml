@@ -43,6 +43,12 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev openssh-server
 
+      # The password and keyboard-interactive tests need an sshd that checks
+      # passwords, which only root can run. The runner is thrown away after.
+      - name: Start a password-checking sshd
+        if: runner.os == 'Linux'
+        run: sudo --preserve-env=GITHUB_ENV,GITHUB_ACTIONS bash ci/password-sshd.sh > /dev/null
+
       # rustup reads rust-toolchain.toml and installs the pinned compiler.
       - name: Install Rust toolchain
         run: rustup show active-toolchain || rustup toolchain install
