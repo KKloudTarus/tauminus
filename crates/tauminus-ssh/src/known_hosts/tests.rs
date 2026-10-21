@@ -170,7 +170,7 @@ fn bad_lines_are_skipped_and_reported() {
     )
     .into_bytes();
     // A Latin-1 comment: only this line is lost.
-    text.extend_from_slice(b"# caf\xe9\n");
+    text.extend_from_slice(b"# r\xe9seau\n");
     text.extend_from_slice(format!("web {ED2}\n").as_bytes());
     let (hosts, skipped) = KnownHosts::parse(&text, Path::new("known_hosts"));
     assert_eq!(hosts.len(), 2);
