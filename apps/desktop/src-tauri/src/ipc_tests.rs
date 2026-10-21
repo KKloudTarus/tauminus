@@ -54,7 +54,14 @@ fn call(app: &App<tauri::test::MockRuntime>, cmd: &str, args: Value) -> Result<V
             cmd: cmd.into(),
             callback: CallbackFn(0),
             error: CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            // The app's own origin, which the ACL treats as local.
+            url: if cfg!(windows) {
+                "http://tauri.localhost"
+            } else {
+                "tauri://localhost"
+            }
+            .parse()
+            .unwrap(),
             body: InvokeBody::Json(args),
             headers: tauri::http::HeaderMap::default(),
             invoke_key: INVOKE_KEY.to_string(),
