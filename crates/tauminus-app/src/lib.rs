@@ -11,6 +11,8 @@
 mod local;
 pub mod ports;
 mod session;
+mod ssh;
 
 pub use local::LocalShells;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
+pub use ssh::{SshOpenError, SshSessions};

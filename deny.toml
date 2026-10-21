@@ -6,10 +6,19 @@ all-features = true
 
 [advisories]
 yanked = "deny"
-# Unmaintained, not vulnerable. Both are proc macros that run only at compile
-# time and arrive through dependencies we cannot drop yet. Review when the
-# parent crates upgrade.
+# The first two are unmaintained, not vulnerable: proc macros that run only
+# at compile time and arrive through dependencies we cannot drop yet. Review
+# when the parent crates upgrade.
+#
+# RUSTSEC-2023-0071 (Marvin) has no fixed release. The client signs with an
+# RSA key file only after the server accepted it, once per hop of a connect
+# the user starts: at most nine signatures with ProxyJump. The attack needs a
+# very large number of timed private-key operations on the same key. RSA
+# host key checks are public-key operations, which it does not affect. Keys
+# in ssh-agent are signed by the agent, not by this crate. Revisit before
+# adding automatic reconnect or bulk connects, which raise the count.
 ignore = [
+  { id = "RUSTSEC-2023-0071", reason = "rsa: one signature per user-initiated connect; see comment above" },
   { id = "RUSTSEC-2024-0436", reason = "paste: pulled in by specta 2.0.0-rc.25" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: pulled in by gtk-rs 0.18 via Tauri on Linux" },
 ]
@@ -26,6 +35,7 @@ allow = [
   "BSD-3-Clause",
   "CC0-1.0",
   "GPL-3.0-or-later",
+  "ISC",
   "LGPL-2.1-or-later",
   "MIT",
   "MIT-0",
@@ -44,6 +54,7 @@ allow-wildcard-paths = true
 # `wrappers` list, so a domain or application crate cannot pull in a driver.
 deny = [
   { crate = "portable-pty", wrappers = ["tauminus-pty"], reason = "only the PTY adapter talks to the OS pseudo-terminal" },
+  { crate = "russh", wrappers = ["tauminus-ssh"], reason = "only the SSH adapter speaks the SSH protocol" },
   { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
   { crate = "specta", wrappers = ["tauminus-desktop", "tauri", "tauri-specta", "specta-typescript", "specta-serde", "specta-util"], reason = "IPC types live in the desktop shell" },
 ]
