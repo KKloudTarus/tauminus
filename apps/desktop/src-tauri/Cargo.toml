@@ -21,6 +21,7 @@ tauri-build.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+open.workspace = true
 serde.workspace = true
 specta.workspace = true
 specta-typescript.workspace = true

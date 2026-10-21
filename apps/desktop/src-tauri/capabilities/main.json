@@ -20,6 +20,7 @@
     "allow-group-delete",
     "allow-ssh-config-aliases",
     "allow-hosts-import-ssh-config",
-    "allow-host-connect"
+    "allow-host-connect",
+    "allow-open-link"
   ]
 }

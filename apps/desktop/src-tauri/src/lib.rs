@@ -7,6 +7,7 @@
 mod commands;
 mod hosts;
 mod ipc;
+mod links;
 mod ssh;
 
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         hosts::ssh_config_aliases,
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
+        links::open_link,
     ])
 }
 

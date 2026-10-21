@@ -33,7 +33,7 @@ Terminal
 
 - [x] Local PTY adapter over `portable-pty` (bash, zsh, fish, PowerShell)
 - [x] `TerminalController` with `@xterm/xterm` 6, addons `webgl`, `fit`, `search`, `unicode11`
-- [ ] Clickable links through a vetted opener (http and https only)
+- [x] Clickable links through a vetted opener (http and https only), opened with Ctrl+click (Cmd+click on macOS)
 - [x] Output path: Rust coalesces output (immediate after a quiet period, otherwise every 8 ms or at 64 KiB) and sends raw bytes through `tauri::ipc::Channel`
 - [x] Backpressure: pause reading above 256 KiB unacknowledged, resume below 96 KiB
 - [x] Tabs, split panes, close and reorder (drag and drop, shortcuts)

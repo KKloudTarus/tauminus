@@ -130,3 +130,49 @@ test("leaves plain Ctrl+K to the shell", async ({ page }) => {
   await page.keyboard.press("Control+K");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 });
+
+test("opens a link only on Ctrl+click, and only http and https", async ({ page }) => {
+  await typeIn(page, "echo docs https://example.com/docs file:///etc/passwd");
+  const screen = screenOf(focusedPane(page));
+  await expect(screen).toContainText("https://example.com/docs");
+  const terminal = focusedPane(page).locator(".xterm");
+  const opened = () => page.evaluate(() => window.tauminusOpenedLinks ?? []);
+  const pointAt = async (text: string) => {
+    const box = await screen.locator("span", { hasText: text }).last().boundingBox();
+    if (!box) throw new Error(`no ${text} on screen`);
+    const row = { x: box.x, y: box.y + box.height / 2 };
+    // Find the text's column in the row, one cell at a time.
+    const offset =
+      (await screen.locator("span", { hasText: text }).last().textContent())?.indexOf(text) ?? 0;
+    const cell =
+      box.width /
+      ((await screen.locator("span", { hasText: text }).last().textContent())?.length ?? 1);
+    return { x: row.x + (offset + 1) * cell, y: row.y };
+  };
+  const { x, y } = await pointAt("example.com");
+
+  // xterm finds links on hover; its title says how to open one.
+  await page.mouse.move(x, y + 40);
+  await page.mouse.move(x, y);
+  await expect(terminal).toHaveAttribute("title", "Ctrl+click to open");
+
+  // A plain click selects; it never opens a page.
+  await page.mouse.click(x, y);
+  expect(await opened()).toEqual([]);
+
+  await page.mouse.move(x, y + 40);
+  await page.mouse.move(x + 2, y);
+  await expect(terminal).toHaveAttribute("title", "Ctrl+click to open");
+  await page.keyboard.down("Control");
+  await page.mouse.click(x + 2, y);
+  await page.keyboard.up("Control");
+  await expect.poll(opened).toEqual(["https://example.com/docs"]);
+
+  // file: is not a link Tauminus offers to open.
+  const passwd = await pointAt("passwd");
+  await page.mouse.move(passwd.x, passwd.y);
+  await page.keyboard.down("Control");
+  await page.mouse.click(passwd.x, passwd.y);
+  await page.keyboard.up("Control");
+  expect(await opened()).toEqual(["https://example.com/docs"]);
+});

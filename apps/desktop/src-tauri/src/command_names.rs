@@ -23,4 +23,5 @@ const COMMANDS: &[&str] = &[
     "ssh_config_aliases",
     "hosts_import_ssh_config",
     "host_connect",
+    "open_link",
 ];
