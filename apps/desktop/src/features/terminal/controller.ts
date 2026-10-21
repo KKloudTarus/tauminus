@@ -21,6 +21,7 @@ import {
 } from "@/ipc/index.ts";
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
+import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
@@ -98,6 +99,8 @@ export class TerminalController {
   #webglRetired = false;
   #webglLoading = false;
   #observer: ResizeObserver | undefined;
+  /** Removes the IME fix; set once the terminal has its textarea. */
+  #stopImeFix: (() => void) | undefined;
   #frame = 0;
   /**
    * The grid size the session last heard. Compared with the terminal's own
@@ -254,6 +257,8 @@ export class TerminalController {
       host.append(this.terminal.element);
     } else {
       this.terminal.open(host);
+      const { textarea } = this.terminal;
+      if (textarea) this.#stopImeFix = startUnannouncedCompositions(textarea);
     }
     this.#acquireWebgl();
     this.#fit.fit();
@@ -291,6 +296,7 @@ export class TerminalController {
     clearTimeout(this.#ackRetry);
     this.#retireWebgl();
     this.#input.close();
+    this.#stopImeFix?.();
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
