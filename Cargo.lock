@@ -4467,11 +4467,13 @@ dependencies = [
  "rand",
  "russh",
  "sha1",
+ "sha2 0.11.1",
  "tauminus-app",
  "tauminus-domain",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 

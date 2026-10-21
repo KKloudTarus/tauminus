@@ -15,6 +15,11 @@ mod config;
 mod host_keys;
 pub mod known_hosts;
 mod transport;
+#[cfg_attr(
+    not(any(windows, test)),
+    expect(dead_code, reason = "agent pipes and Pageant exist only on Windows")
+)]
+mod windows_agent;
 
 use std::borrow::Cow;
 use std::path::PathBuf;
