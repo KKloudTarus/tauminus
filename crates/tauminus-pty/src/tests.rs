@@ -18,6 +18,7 @@ fn shell(program: &str, args: &[&str]) -> LocalShell {
 }
 
 /// Reads events until the transport reports an exit.
+#[cfg(unix)]
 async fn collect_until_exit(events: &mut mpsc::Receiver<TerminalEvent>) -> (Vec<u8>, Option<u32>) {
     let mut output = Vec::new();
     let result = tokio::time::timeout(TIMEOUT, async {
@@ -318,6 +319,36 @@ mod unix {
 mod windows {
     use super::*;
 
+    /// `ConPTY` asks for the cursor position (`ESC[6n`) at startup and holds the
+    /// client until the terminal answers. xterm.js answers in the app; here the
+    /// test plays the terminal.
+    async fn collect_answering_cursor_queries(
+        handle: &mut TerminalStream,
+    ) -> (Vec<u8>, Option<u32>) {
+        let mut output = Vec::new();
+        let code = tokio::time::timeout(TIMEOUT, async {
+            loop {
+                match handle.events.recv().await {
+                    Some(TerminalEvent::Output(chunk)) => {
+                        if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                            handle
+                                .input
+                                .send(TerminalInput::Data(b"\x1b[1;1R".to_vec()))
+                                .await
+                                .expect("pty accepts input");
+                        }
+                        output.extend(chunk);
+                    }
+                    Some(TerminalEvent::Exited { code }) => return code,
+                    None => panic!("event channel closed before exit"),
+                }
+            }
+        })
+        .await
+        .expect("process exits before timeout");
+        (output, code)
+    }
+
     #[tokio::test]
     async fn reports_output_and_exit_code() {
         let mut handle = NativePtyLauncher
@@ -326,8 +357,20 @@ mod windows {
                 TerminalSize::default(),
             )
             .unwrap();
-        let (output, code) = collect_until_exit(&mut handle.events).await;
+        let (output, code) = collect_answering_cursor_queries(&mut handle).await;
         assert!(String::from_utf8_lossy(&output).contains("hello"));
         assert_eq!(code, Some(7));
+    }
+
+    #[tokio::test]
+    async fn terminate_ends_a_running_shell() {
+        let mut handle = NativePtyLauncher
+            .launch(
+                &shell("cmd.exe", &["/C", "ping -n 60 127.0.0.1 >NUL"]),
+                TerminalSize::default(),
+            )
+            .unwrap();
+        handle.terminator.terminate();
+        collect_answering_cursor_queries(&mut handle).await;
     }
 }
