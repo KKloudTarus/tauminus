@@ -213,8 +213,8 @@ pub struct AuthOptions {
     pub methods: Vec<AuthMethod>,
     /// Explicit key files. Empty means the default `~/.ssh/id_*` names.
     pub identity_files: Vec<PathBuf>,
-    /// Offer only `identity_files`: no agent keys and no default key names,
-    /// like OpenSSH `IdentitiesOnly`.
+    /// Offer only the key files, never other keys the agent holds, like
+    /// OpenSSH `IdentitiesOnly`. With none listed, the default names.
     pub identities_only: bool,
 }
 

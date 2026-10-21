@@ -161,8 +161,7 @@ impl OpenSshConfig {
 
     /// Drops what equals the default, so the saved host inherits it: the
     /// local user, port 22, and the default key list `ssh -G` prints when no
-    /// `IdentityFile` is set. With `IdentitiesOnly`, listed files are kept,
-    /// since dropping them would leave no key to try.
+    /// `IdentityFile` is set.
     fn tidy(&self, mut host: ConfigHost) -> ConfigHost {
         if host.user.as_deref() == Some(self.local_user.as_str()) {
             host.user = None;
@@ -170,8 +169,9 @@ impl OpenSshConfig {
         if host.port == Some(22) {
             host.port = None;
         }
-        let defaults_only = host.identity_files.iter().all(|f| is_default_identity(f));
-        if defaults_only && !host.identities_only {
+        // The defaults depend on the OpenSSH version, and Tauminus uses its
+        // own when none are listed, with or without IdentitiesOnly.
+        if host.identity_files.iter().all(|f| is_default_identity(f)) {
             host.identity_files.clear();
         }
         host

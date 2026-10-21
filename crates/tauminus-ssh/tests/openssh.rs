@@ -718,3 +718,36 @@ async fn an_abandoned_connect_never_records_the_key_it_was_asking_about() {
         "a late answer must not trust a key for a connection nobody uses"
     );
 }
+
+#[tokio::test]
+async fn identities_only_with_no_files_uses_the_default_key_names() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let dot_ssh = client.scratch.path(".ssh");
+    std::fs::create_dir_all(&dot_ssh).unwrap();
+    keygen(
+        &dot_ssh,
+        &["-q", "-t", "ed25519", "-N", "", "-f", "id_ed25519"],
+    );
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&dot_ssh.join("id_ed25519.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let options = AuthOptions {
+        methods: vec![AuthMethod::PublicKey],
+        identity_files: vec![],
+        identities_only: true,
+    };
+    let target = target(sshd.endpoint(), vec![], Route::Direct, options);
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+    assert_eq!(code, Some(0));
+}
