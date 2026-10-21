@@ -22,7 +22,10 @@ fn main() {
             .join("windows-app-manifest.xml");
         println!("cargo:rerun-if-changed={}", manifest_path.display());
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
-        println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest_path.display());
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+            manifest_path.display()
+        );
     }
 
     tauri_build::try_build(attributes).expect("tauri build script failed");
