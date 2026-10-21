@@ -215,3 +215,54 @@ pub trait SshConnector: Send + Sync + 'static {
         prompter: Arc<dyn Prompter>,
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
 }
+
+/// Why the saved hosts could not be read or written.
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    /// The file exists but is not a host list this version understands.
+    #[error("the saved hosts file is unreadable: {0}")]
+    Corrupt(String),
+    /// Someone else, such as another Tauminus window, changed the file since
+    /// it was read. Nothing was written.
+    #[error("the saved hosts changed in another window; the list was reloaded, try again")]
+    Conflict,
+}
+
+/// Keeps the saved hosts. `save` replaces everything at once, so a crash
+/// leaves either the old list or the new one, never a mix.
+pub trait HostStore: Send + Sync + 'static {
+    /// An empty inventory when nothing was saved yet.
+    fn load(&self) -> BoxFuture<'_, Result<tauminus_domain::Inventory, StoreError>>;
+    fn save<'a>(
+        &'a self,
+        inventory: &'a tauminus_domain::Inventory,
+    ) -> BoxFuture<'a, Result<(), StoreError>>;
+    /// A fresh, unguessable id for a new host or group.
+    fn new_id(&self) -> String;
+}
+
+/// A host as `~/.ssh/config` describes it, before validation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigHost {
+    /// The `Host` alias, which becomes the label.
+    pub alias: String,
+    /// `HostName`, or the alias when none is set.
+    pub hostname: String,
+    pub user: Option<String>,
+    pub port: Option<u16>,
+    /// `ProxyJump`, as written.
+    pub proxy_jump: Option<String>,
+    pub proxy_command: Option<String>,
+    pub identity_files: Vec<std::path::PathBuf>,
+    pub identities_only: bool,
+    /// Why this alias could not be read, for example OpenSSH rejecting the
+    /// config. Such an entry is reported, not imported.
+    pub problem: Option<String>,
+}
+
+/// Reads the hosts an OpenSSH client config defines.
+pub trait SshConfigSource: Send + Sync + 'static {
+    fn hosts(&self) -> BoxFuture<'_, Result<Vec<ConfigHost>, std::io::Error>>;
+}

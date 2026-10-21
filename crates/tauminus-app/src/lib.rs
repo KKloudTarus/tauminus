@@ -8,11 +8,13 @@
 //! commands. Nothing in this crate knows about Tauri or a specific transport
 //! library.
 
+mod hosts;
 mod local;
 pub mod ports;
 mod session;
 mod ssh;
 
+pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use ssh::{SshOpenError, SshSessions};
