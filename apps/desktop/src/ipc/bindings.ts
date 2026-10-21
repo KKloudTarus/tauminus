@@ -28,6 +28,25 @@ export const commands = {
 	sshOpen: (target: SshTargetSpec, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("ssh_open", { target, size, onOutput, onExit, onPrompt })),
 	/**  Answers a prompt. Returns false when the prompt is no longer waiting. */
 	sshPromptReply: (id: number, answer: AnswerSpec) => __TAURI_INVOKE<boolean>("ssh_prompt_reply", { id, answer }),
+	hostsList: () => typedError<HostsView, CommandError>(__TAURI_INVOKE("hosts_list")),
+	/**  Adds a host, or replaces the one with the same id. */
+	hostSave: (host: HostInput) => typedError<HostsView, CommandError>(__TAURI_INVOKE("host_save", { host })),
+	hostDelete: (id: string) => typedError<HostsView, CommandError>(__TAURI_INVOKE("host_delete", { id })),
+	groupSave: (group: GroupInput) => typedError<HostsView, CommandError>(__TAURI_INVOKE("group_save", { group })),
+	/**  Removes a group. Its hosts and subgroups move to its parent. */
+	groupDelete: (id: string) => typedError<HostsView, CommandError>(__TAURI_INVOKE("group_delete", { id })),
+	/**
+	 *  How many hosts `~/.ssh/config` names, for the first-run offer. Reads the
+	 *  files only; nothing runs.
+	 */
+	sshConfigAliases: () => typedError<number, CommandError>(__TAURI_INVOKE("ssh_config_aliases")),
+	/**
+	 *  Imports `~/.ssh/config` into the "SSH config" group. Hosts already saved
+	 *  are skipped, so importing again adds only new ones.
+	 */
+	hostsImportSshConfig: () => typedError<ImportResult, CommandError>(__TAURI_INVOKE("hosts_import_ssh_config")),
+	/**  Connects to a saved host, with its settings and its groups' applied. */
+	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 };
 
 /* Types */
@@ -64,12 +83,64 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 /**  The host key differs from the one on record. Never offered for trust. */
 "host_key_changed" | "host_key_revoked" | "auth_failed" | 
 /**  The user declined a prompt or closed it. */
-"cancelled" | "protocol_error" | "internal";
+"cancelled" | "protocol_error" | 
+/**  The saved hosts could not be read or written. */
+"store_failed" | "internal";
 
 /**  Grid size from the webview, validated before it reaches the use case. */
 export type GridSize = {
 	cols: number,
 	rows: number,
+};
+
+export type GroupInput = {
+	id?: string | null,
+	name: string,
+	parent?: string | null,
+	settings?: SettingsSpec,
+};
+
+export type GroupView = {
+	id: string,
+	name: string,
+	parent: string | null,
+	settings: SettingsSpec,
+};
+
+export type HostInput = {
+	/**  Absent for a new host. */
+	id?: string | null,
+	label: string,
+	address: string,
+	group?: string | null,
+	tags?: string[],
+	settings?: SettingsSpec,
+};
+
+export type HostView = {
+	id: string,
+	label: string,
+	address: string,
+	group: string | null,
+	tags: string[],
+	settings: SettingsSpec,
+	/**
+	 *  What a connect would use, with the group settings applied, or `null`
+	 *  when the settings cannot connect; `problem` then says why.
+	 */
+	target: SshTargetSpec | null,
+	problem: string | null,
+};
+
+export type HostsView = {
+	groups: GroupView[],
+	hosts: HostView[],
+};
+
+export type ImportResult = {
+	added: number,
+	skipped: SkippedHost[],
+	view: HostsView,
 };
 
 export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
@@ -93,6 +164,26 @@ export type SessionExit = {
  *  number; `u64` would need `bigint`.
  */
 export type SessionHandle = number;
+
+/**
+ *  Settings as the view edits them. Every field is optional; a missing one
+ *  inherits from the group.
+ */
+export type SettingsSpec = {
+	user?: string | null,
+	port?: number | null,
+	/**  `ssh -J` form, one hop each. An empty list means no jump hosts. */
+	jumps?: string[] | null,
+	route?: RouteSpec | null,
+	methods?: AuthMethodSpec[] | null,
+	identityFiles?: string[] | null,
+	identitiesOnly?: boolean | null,
+};
+
+export type SkippedHost = {
+	alias: string,
+	reason: string,
+};
 
 /**
  *  Where and how to connect. Omitted auth fields take the defaults: agent,

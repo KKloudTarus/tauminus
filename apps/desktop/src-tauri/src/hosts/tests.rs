@@ -1,0 +1,198 @@
+// SPDX-FileCopyrightText: 2026 Tauminus contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use tauminus_app::ports::{BoxFuture, HostStore, StoreError};
+
+use super::*;
+
+#[derive(Default)]
+struct MemoryStore {
+    saved: Mutex<Inventory>,
+    next: AtomicUsize,
+}
+
+impl HostStore for MemoryStore {
+    fn load(&self) -> BoxFuture<'_, Result<Inventory, StoreError>> {
+        let inventory = self.saved.lock().unwrap().clone();
+        Box::pin(async move { Ok(inventory) })
+    }
+
+    fn save<'a>(&'a self, inventory: &'a Inventory) -> BoxFuture<'a, Result<(), StoreError>> {
+        *self.saved.lock().unwrap() = inventory.clone();
+        Box::pin(async { Ok(()) })
+    }
+
+    fn new_id(&self) -> String {
+        format!("id{}", self.next.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+async fn book() -> HostBook {
+    HostBook::open(Arc::new(MemoryStore::default()))
+        .await
+        .unwrap()
+}
+
+fn input(label: &str, address: &str) -> HostInput {
+    HostInput {
+        id: None,
+        label: label.into(),
+        address: address.into(),
+        group: None,
+        tags: vec![],
+        settings: SettingsSpec::default(),
+    }
+}
+
+#[tokio::test]
+async fn a_saved_host_lists_with_its_resolved_target() {
+    let book = book().await;
+    let group = parse_group(
+        &book,
+        GroupInput {
+            id: None,
+            name: "prod".into(),
+            parent: None,
+            settings: SettingsSpec {
+                user: Some("ops".into()),
+                jumps: Some(vec!["bastion:2222".into()]),
+                ..SettingsSpec::default()
+            },
+        },
+    )
+    .unwrap();
+    let group_id = group.id.to_string();
+    book.edit(|i| i.put_group(group)).await.unwrap();
+    let mut db = input("DB", " db.internal ");
+    db.group = Some(group_id.clone());
+    db.tags = vec!["Prod".into(), "db".into()];
+    db.settings.port = Some(2200);
+    let host = parse_host(&book, db).unwrap();
+    let listed = view(&book.edit(|i| i.put_host(host)).await.unwrap());
+
+    let db = &listed.hosts[0];
+    assert_eq!(db.address, "db.internal");
+    assert_eq!(db.tags, ["db", "prod"]);
+    assert_eq!(db.group.as_deref(), Some(group_id.as_str()));
+    let target = db.target.as_ref().expect("resolved");
+    assert_eq!(target.destination.user, "ops");
+    assert_eq!(target.destination.port, 2200);
+    assert_eq!(target.jumps.len(), 1);
+    assert_eq!(target.jumps[0].port, 2222);
+    assert!(target.methods.is_some(), "defaults are spelled out");
+    assert_eq!(db.problem, None);
+}
+
+#[test]
+fn a_stored_proxy_command_may_be_kept_but_not_added_or_changed() {
+    let command = |c: &str| Settings {
+        route: Some(Route::ProxyCommand(c.into())),
+        ..Settings::default()
+    };
+    let imported = command("nc %h %p");
+    assert!(
+        keep_proxy_command(&imported, Some(&imported)).is_ok(),
+        "unchanged"
+    );
+    assert!(
+        keep_proxy_command(&command("id"), Some(&imported)).is_err(),
+        "changed"
+    );
+    assert!(
+        keep_proxy_command(&imported, None).is_err(),
+        "added to a new host"
+    );
+    assert!(
+        keep_proxy_command(&imported, Some(&Settings::default())).is_err(),
+        "added later"
+    );
+    assert!(
+        keep_proxy_command(&Settings::default(), Some(&imported)).is_ok(),
+        "removed"
+    );
+}
+
+#[tokio::test]
+async fn invalid_input_is_refused_before_anything_is_saved() {
+    let book = book().await;
+    let cases = [
+        input("", "db"),
+        input("db", "db;rm"),
+        HostInput {
+            settings: SettingsSpec {
+                port: Some(0),
+                ..SettingsSpec::default()
+            },
+            ..input("db", "db")
+        },
+        HostInput {
+            settings: SettingsSpec {
+                jumps: Some(vec!["-oProxyCommand=x".into()]),
+                ..SettingsSpec::default()
+            },
+            ..input("db", "db")
+        },
+        HostInput {
+            settings: SettingsSpec {
+                methods: Some(vec![]),
+                ..SettingsSpec::default()
+            },
+            ..input("db", "db")
+        },
+        HostInput {
+            tags: vec!["two words".into()],
+            ..input("db", "db")
+        },
+        HostInput {
+            id: Some("../etc".into()),
+            ..input("db", "db")
+        },
+    ];
+    for (index, case) in cases.into_iter().enumerate() {
+        let error = parse_host(&book, case)
+            .err()
+            .unwrap_or_else(|| panic!("case {index} accepted"));
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "case {index}");
+    }
+}
+
+#[tokio::test]
+async fn settings_survive_a_round_trip_through_the_view() {
+    let book = book().await;
+    let spec = SettingsSpec {
+        user: Some("deploy".into()),
+        port: Some(2222),
+        jumps: Some(vec!["ops@[2001:db8::1]:22".into(), "edge".into()]),
+        route: Some(RouteSpec::Socks5 {
+            host: "proxy".into(),
+            port: 1080,
+        }),
+        methods: Some(vec![AuthMethodSpec::Agent, AuthMethodSpec::Password]),
+        identity_files: Some(vec!["~/.ssh/id_work".into()]),
+        identities_only: Some(true),
+    };
+    let parsed = settings(spec.clone()).unwrap();
+    let back = settings_spec(&parsed);
+    assert_eq!(
+        serde_json::to_value(&back).unwrap(),
+        serde_json::to_value(&spec).unwrap()
+    );
+    // An empty user means inherit.
+    let inherit = settings(SettingsSpec {
+        user: Some(String::new()),
+        ..SettingsSpec::default()
+    })
+    .unwrap();
+    assert_eq!(inherit.user, None);
+    let _ = book;
+}
+
+#[test]
+fn an_unavailable_store_is_reported_on_every_call() {
+    let hosts = Hosts::Unavailable("hosts.json is unreadable".into());
+    let error = hosts.book().err().unwrap();
+    assert_eq!(error.code, ErrorCode::StoreFailed);
+}

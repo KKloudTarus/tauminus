@@ -1,0 +1,478 @@
+// SPDX-FileCopyrightText: 2026 Tauminus contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! Saved hosts over IPC. Each change returns the whole list, so the view
+//! never holds a stale copy; a list is at most 10 000 hosts.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use specta::Type;
+use tauminus_app::{HostBook, HostBookError};
+use tauminus_domain::{
+    Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Route, Settings,
+    Tag, UserName,
+};
+use tauminus_ssh::OpenSshConfig;
+use tauri::State;
+
+use crate::ipc::{CommandError, ErrorCode};
+use crate::ssh::{AuthMethodSpec, RouteSpec, SshTargetSpec, local_user};
+
+/// The host book, or why it could not be opened. A damaged file is kept
+/// as it is and reported; the rest of the app works without saved hosts.
+pub(crate) enum Hosts {
+    Ready(Arc<HostBook>),
+    Unavailable(String),
+}
+
+impl Hosts {
+    pub(crate) fn book(&self) -> Result<&HostBook, CommandError> {
+        match self {
+            Self::Ready(book) => Ok(book),
+            Self::Unavailable(reason) => {
+                Err(CommandError::new(ErrorCode::StoreFailed, reason.clone()))
+            }
+        }
+    }
+}
+
+/// The user's OpenSSH config, or `None` when there is no home directory.
+pub(crate) struct SshConfig(pub(crate) Option<OpenSshConfig>);
+
+/// Settings as the view edits them. Every field is optional; a missing one
+/// inherits from the group.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SettingsSpec {
+    #[serde(default)]
+    pub(crate) user: Option<String>,
+    #[serde(default)]
+    pub(crate) port: Option<u16>,
+    /// `ssh -J` form, one hop each. An empty list means no jump hosts.
+    #[serde(default)]
+    pub(crate) jumps: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) route: Option<RouteSpec>,
+    #[serde(default)]
+    pub(crate) methods: Option<Vec<AuthMethodSpec>>,
+    #[serde(default)]
+    pub(crate) identity_files: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) identities_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GroupView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) parent: Option<String>,
+    pub(crate) settings: SettingsSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostView {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) address: String,
+    pub(crate) group: Option<String>,
+    pub(crate) tags: Vec<String>,
+    pub(crate) settings: SettingsSpec,
+    /// What a connect would use, with the group settings applied, or `null`
+    /// when the settings cannot connect; `problem` then says why.
+    pub(crate) target: Option<SshTargetSpec>,
+    pub(crate) problem: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct HostsView {
+    pub(crate) groups: Vec<GroupView>,
+    pub(crate) hosts: Vec<HostView>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct HostInput {
+    /// Absent for a new host.
+    #[serde(default)]
+    pub(crate) id: Option<String>,
+    pub(crate) label: String,
+    pub(crate) address: String,
+    #[serde(default)]
+    pub(crate) group: Option<String>,
+    #[serde(default)]
+    pub(crate) tags: Vec<String>,
+    #[serde(default)]
+    pub(crate) settings: SettingsSpec,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GroupInput {
+    #[serde(default)]
+    pub(crate) id: Option<String>,
+    pub(crate) name: String,
+    #[serde(default)]
+    pub(crate) parent: Option<String>,
+    #[serde(default)]
+    pub(crate) settings: SettingsSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct SkippedHost {
+    pub(crate) alias: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct ImportResult {
+    pub(crate) added: u32,
+    pub(crate) skipped: Vec<SkippedHost>,
+    pub(crate) view: HostsView,
+}
+
+impl From<HostBookError> for CommandError {
+    fn from(error: HostBookError) -> Self {
+        let code = match &error {
+            HostBookError::Hosts(_) => ErrorCode::InvalidArgument,
+            HostBookError::Store(_) | HostBookError::Config(_) => ErrorCode::StoreFailed,
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+fn invalid(error: impl std::fmt::Display) -> CommandError {
+    CommandError::new(ErrorCode::InvalidArgument, error.to_string())
+}
+
+fn view(inventory: &Inventory) -> HostsView {
+    let me = local_user().ok().and_then(|u| UserName::parse(&u).ok());
+    HostsView {
+        groups: inventory
+            .groups()
+            .map(|g| GroupView {
+                id: g.id.to_string(),
+                name: g.name.as_str().to_owned(),
+                parent: g.parent.as_ref().map(ToString::to_string),
+                settings: settings_spec(&g.settings),
+            })
+            .collect(),
+        hosts: inventory
+            .hosts()
+            .map(|h| {
+                let resolved = me
+                    .as_ref()
+                    .ok_or_else(|| "the local user name is unknown".to_owned())
+                    .and_then(|me| inventory.resolve(&h.id, me).map_err(|e| e.to_string()));
+                let (target, problem) = match resolved {
+                    Ok(target) => (Some(SshTargetSpec::from(&target)), None),
+                    Err(problem) => (None, Some(problem)),
+                };
+                HostView {
+                    id: h.id.to_string(),
+                    label: h.label.as_str().to_owned(),
+                    address: h.address.to_string(),
+                    group: h.group.as_ref().map(ToString::to_string),
+                    tags: h.tags().iter().map(|t| t.as_str().to_owned()).collect(),
+                    settings: settings_spec(&h.settings),
+                    target,
+                    problem,
+                }
+            })
+            .collect(),
+    }
+}
+
+fn settings_spec(s: &Settings) -> SettingsSpec {
+    SettingsSpec {
+        user: s.user.as_ref().map(ToString::to_string),
+        port: s.port,
+        jumps: s
+            .jumps
+            .as_ref()
+            .map(|hops| hops.iter().map(ToString::to_string).collect()),
+        route: s.route.as_ref().map(RouteSpec::from),
+        methods: s
+            .methods
+            .as_ref()
+            .map(|m| m.iter().copied().map(AuthMethodSpec::from).collect()),
+        identity_files: s.identity_files.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|f| f.to_string_lossy().into_owned())
+                .collect()
+        }),
+        identities_only: s.identities_only,
+    }
+}
+
+/// Most entries in one list field, against oversized input.
+const MAX_LIST: usize = 32;
+/// Longest identity file path accepted, in bytes; `PATH_MAX` on Linux.
+const MAX_PATH: usize = 4096;
+
+fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
+    let too_long = |what: &str| invalid(format!("at most {MAX_LIST} {what}"));
+    if spec.jumps.as_ref().is_some_and(|j| j.len() > MAX_LIST) {
+        return Err(too_long("jump hosts"));
+    }
+    if spec
+        .identity_files
+        .as_ref()
+        .is_some_and(|f| f.len() > MAX_LIST)
+    {
+        return Err(too_long("identity files"));
+    }
+    if spec
+        .identity_files
+        .iter()
+        .flatten()
+        .any(|f| f.is_empty() || f.len() > MAX_PATH)
+    {
+        return Err(invalid(
+            "an identity file path is empty or longer than 4096 bytes",
+        ));
+    }
+    if spec
+        .methods
+        .as_ref()
+        .is_some_and(|m| m.is_empty() || m.len() > MAX_LIST)
+    {
+        return Err(invalid(
+            "list between 1 and 32 auth methods, or none to inherit",
+        ));
+    }
+    let host = |h: &str| HostName::parse(h).map_err(invalid);
+    Ok(Settings {
+        user: spec
+            .user
+            .filter(|u| !u.is_empty())
+            .map(|u| UserName::parse(&u))
+            .transpose()
+            .map_err(invalid)?,
+        port: match spec.port {
+            Some(0) => return Err(invalid("port must be between 1 and 65535")),
+            port => port,
+        },
+        jumps: spec
+            .jumps
+            .map(|hops| {
+                hops.iter()
+                    .map(|h| Hop::parse(h))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map_err(invalid)?,
+        route: spec
+            .route
+            .map(|route| {
+                Ok::<_, CommandError>(match route {
+                    RouteSpec::Direct => Route::Direct,
+                    RouteSpec::ProxyCommand { command } => {
+                        if command.trim().is_empty() || command.len() > 4096 {
+                            return Err(invalid("ProxyCommand is empty or too long"));
+                        }
+                        Route::ProxyCommand(command)
+                    }
+                    RouteSpec::Socks5 { host: h, port } => Route::Socks5 {
+                        host: host(&h)?,
+                        port,
+                    },
+                    RouteSpec::HttpConnect { host: h, port } => Route::HttpConnect {
+                        host: host(&h)?,
+                        port,
+                    },
+                })
+            })
+            .transpose()?,
+        methods: spec
+            .methods
+            .map(|m| m.into_iter().map(Into::into).collect()),
+        identity_files: spec
+            .identity_files
+            .map(|files| files.into_iter().map(PathBuf::from).collect()),
+        identities_only: spec.identities_only,
+    })
+}
+
+/// A `ProxyCommand` reaches a shell, so the webview may keep one it was
+/// given, unchanged, but never add or change one. They come from importing
+/// `~/.ssh/config`, which the user wrote.
+fn keep_proxy_command(requested: &Settings, stored: Option<&Settings>) -> Result<(), HostsError> {
+    let is_command = matches!(requested.route, Some(Route::ProxyCommand(_)));
+    if is_command && stored.and_then(|s| s.route.as_ref()) != requested.route.as_ref() {
+        return Err(HostsError::Target(
+            "a ProxyCommand can only come from importing ~/.ssh/config".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_host(book: &HostBook, input: HostInput) -> Result<Host, CommandError> {
+    let id = match input.id {
+        Some(id) => HostId::parse(&id),
+        None => book.new_host_id(),
+    }
+    .map_err(invalid)?;
+    let mut host = Host::new(
+        id,
+        Label::parse(&input.label).map_err(invalid)?,
+        HostName::parse(input.address.trim()).map_err(invalid)?,
+    );
+    host.group = input
+        .group
+        .map(|g| GroupId::parse(&g))
+        .transpose()
+        .map_err(invalid)?;
+    if input.tags.len() > tauminus_domain::MAX_TAGS {
+        return Err(invalid(HostsError::TooManyTags));
+    }
+    let tags = input
+        .tags
+        .iter()
+        .map(|t| Tag::parse(t))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
+    host.set_tags(tags).map_err(invalid)?;
+    host.settings = settings(input.settings)?;
+    Ok(host)
+}
+
+fn parse_group(book: &HostBook, input: GroupInput) -> Result<Group, CommandError> {
+    Ok(Group {
+        id: match input.id {
+            Some(id) => GroupId::parse(&id),
+            None => book.new_group_id(),
+        }
+        .map_err(invalid)?,
+        name: Label::parse(&input.name).map_err(invalid)?,
+        parent: input
+            .parent
+            .map(|p| GroupId::parse(&p))
+            .transpose()
+            .map_err(invalid)?,
+        settings: settings(input.settings)?,
+    })
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn hosts_list(hosts: State<'_, Hosts>) -> Result<HostsView, CommandError> {
+    Ok(view(&hosts.book()?.snapshot().await))
+}
+
+/// Adds a host, or replaces the one with the same id.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn host_save(
+    hosts: State<'_, Hosts>,
+    host: HostInput,
+) -> Result<HostsView, CommandError> {
+    let book = hosts.book()?;
+    let host = parse_host(book, host)?;
+    let inventory = book
+        .edit(|inventory| {
+            keep_proxy_command(
+                &host.settings,
+                inventory.host(&host.id).map(|h| &h.settings),
+            )?;
+            inventory.put_host(host)
+        })
+        .await?;
+    Ok(view(&inventory))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn host_delete(
+    hosts: State<'_, Hosts>,
+    id: String,
+) -> Result<HostsView, CommandError> {
+    let id = HostId::parse(&id).map_err(invalid)?;
+    let inventory = hosts
+        .book()?
+        .edit(|inventory| inventory.remove_host(&id).map(drop))
+        .await?;
+    Ok(view(&inventory))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn group_save(
+    hosts: State<'_, Hosts>,
+    group: GroupInput,
+) -> Result<HostsView, CommandError> {
+    let book = hosts.book()?;
+    let group = parse_group(book, group)?;
+    let inventory = book
+        .edit(|inventory| {
+            keep_proxy_command(
+                &group.settings,
+                inventory.group(&group.id).map(|g| &g.settings),
+            )?;
+            inventory.put_group(group)
+        })
+        .await?;
+    Ok(view(&inventory))
+}
+
+/// Removes a group. Its hosts and subgroups move to its parent.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn group_delete(
+    hosts: State<'_, Hosts>,
+    id: String,
+) -> Result<HostsView, CommandError> {
+    let id = GroupId::parse(&id).map_err(invalid)?;
+    let inventory = hosts
+        .book()?
+        .edit(|inventory| inventory.remove_group(&id).map(drop))
+        .await?;
+    Ok(view(&inventory))
+}
+
+/// How many hosts `~/.ssh/config` names, for the first-run offer. Reads the
+/// files only; nothing runs.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn ssh_config_aliases(config: State<'_, SshConfig>) -> Result<u32, CommandError> {
+    let Some(config) = &config.0 else {
+        tracing::debug!("no home directory; no ssh config to offer");
+        return Ok(0);
+    };
+    let count = config.alias_count().await;
+    tracing::debug!(count, "hosts named in ssh config");
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// Imports `~/.ssh/config` into the "SSH config" group. Hosts already saved
+/// are skipped, so importing again adds only new ones.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn hosts_import_ssh_config(
+    hosts: State<'_, Hosts>,
+    config: State<'_, SshConfig>,
+) -> Result<ImportResult, CommandError> {
+    let config = config.0.as_ref().ok_or_else(|| {
+        CommandError::new(
+            ErrorCode::StoreFailed,
+            "no home directory to read ~/.ssh/config from",
+        )
+    })?;
+    let (report, inventory) = hosts.book()?.import(config).await?;
+    Ok(ImportResult {
+        added: u32::try_from(report.added.len()).unwrap_or(u32::MAX),
+        skipped: report
+            .skipped
+            .into_iter()
+            .map(|(alias, reason)| SkippedHost { alias, reason })
+            .collect(),
+        view: view(&inventory),
+    })
+}
+
+#[cfg(test)]
+mod tests;

@@ -15,4 +15,12 @@ const COMMANDS: &[&str] = &[
     "session_close",
     "ssh_open",
     "ssh_prompt_reply",
+    "hosts_list",
+    "host_save",
+    "host_delete",
+    "group_save",
+    "group_delete",
+    "ssh_config_aliases",
+    "hosts_import_ssh_config",
+    "host_connect",
 ];

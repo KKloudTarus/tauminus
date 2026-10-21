@@ -114,7 +114,7 @@ function fail(code: CommandError["code"], message: string): SessionCommandError 
  * has a changed host key; anything else cannot be reached.
  */
 async function fakeSsh(
-  spec: Extract<SessionSpec, { kind: "ssh" }>,
+  spec: Exclude<SessionSpec, { kind: "local" }>,
   events: SessionEvents,
 ): Promise<string> {
   const ask = events.onPrompt ?? (async () => ({ kind: "cancel" }) as const);
@@ -166,7 +166,7 @@ async function fakeSsh(
 
 export const fakeSessions: SessionClient = {
   async open(spec, size, events) {
-    const banner = spec.kind === "ssh" ? await fakeSsh(spec, events) : "";
+    const banner = spec.kind === "local" ? "" : await fakeSsh(spec, events);
     const id = nextId;
     nextId += 1;
     return new FakeShell(id, size, events, banner);

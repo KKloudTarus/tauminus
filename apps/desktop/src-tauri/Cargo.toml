@@ -28,6 +28,7 @@ tauminus-app.workspace = true
 tauminus-domain.workspace = true
 tauminus-pty.workspace = true
 tauminus-ssh.workspace = true
+tauminus-store.workspace = true
 tauri = { workspace = true, features = ["specta"] }
 tauri-specta.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
@@ -37,6 +38,8 @@ zeroize.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# The mock runtime, to call commands with the state the app really manages.
+tauri = { workspace = true, features = ["specta", "test"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "time"] }
 
 [lints]

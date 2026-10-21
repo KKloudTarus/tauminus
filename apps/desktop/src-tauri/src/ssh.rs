@@ -24,7 +24,7 @@ use crate::ipc::{
 };
 
 /// `user@host:port` as the view sends it.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub(crate) struct EndpointSpec {
     /// Empty means the local user name, as `ssh` does.
     pub(crate) user: String,
@@ -54,7 +54,7 @@ impl TryFrom<EndpointSpec> for Endpoint {
 }
 
 /// The name `ssh` would log in as when none is given.
-fn local_user() -> Result<String, CommandError> {
+pub(crate) fn local_user() -> Result<String, CommandError> {
     ["USER", "LOGNAME", "USERNAME"]
         .iter()
         .find_map(|name| std::env::var(name).ok().filter(|v| !v.is_empty()))
@@ -66,7 +66,7 @@ fn local_user() -> Result<String, CommandError> {
         })
 }
 
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub(crate) enum RouteSpec {
     Direct,
@@ -75,13 +75,81 @@ pub(crate) enum RouteSpec {
     HttpConnect { host: String, port: u16 },
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AuthMethodSpec {
     Agent,
     PublicKey,
     KeyboardInteractive,
     Password,
+}
+
+impl From<AuthMethod> for AuthMethodSpec {
+    fn from(method: AuthMethod) -> Self {
+        match method {
+            AuthMethod::Agent => Self::Agent,
+            AuthMethod::PublicKey => Self::PublicKey,
+            AuthMethod::KeyboardInteractive => Self::KeyboardInteractive,
+            AuthMethod::Password => Self::Password,
+        }
+    }
+}
+
+impl From<&Route> for RouteSpec {
+    fn from(route: &Route) -> Self {
+        match route {
+            Route::Direct => Self::Direct,
+            Route::ProxyCommand(command) => Self::ProxyCommand {
+                command: command.clone(),
+            },
+            Route::Socks5 { host, port } => Self::Socks5 {
+                host: host.to_string(),
+                port: *port,
+            },
+            Route::HttpConnect { host, port } => Self::HttpConnect {
+                host: host.to_string(),
+                port: *port,
+            },
+        }
+    }
+}
+
+impl From<&Endpoint> for EndpointSpec {
+    fn from(endpoint: &Endpoint) -> Self {
+        Self {
+            user: endpoint.user.to_string(),
+            host: endpoint.host.to_string(),
+            port: endpoint.port,
+        }
+    }
+}
+
+impl From<&SshTarget> for SshTargetSpec {
+    /// Every field spelled out, so the view can connect without knowing
+    /// the defaults.
+    fn from(target: &SshTarget) -> Self {
+        Self {
+            destination: (&target.destination).into(),
+            jumps: target.jumps.iter().map(EndpointSpec::from).collect(),
+            route: (&target.route).into(),
+            methods: Some(
+                target
+                    .auth
+                    .methods
+                    .iter()
+                    .copied()
+                    .map(AuthMethodSpec::from)
+                    .collect(),
+            ),
+            identity_files: target
+                .auth
+                .identity_files
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
+            identities_only: target.auth.identities_only,
+        }
+    }
 }
 
 impl From<AuthMethodSpec> for AuthMethod {
@@ -97,7 +165,7 @@ impl From<AuthMethodSpec> for AuthMethod {
 
 /// Where and how to connect. Omitted auth fields take the defaults: agent,
 /// default key files, keyboard-interactive, then password.
-#[derive(Debug, Clone, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SshTargetSpec {
     pub(crate) destination: EndpointSpec,
@@ -425,9 +493,50 @@ pub(crate) async fn ssh_open(
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
     let target = SshTarget::try_from(target)?;
+    open_target(&ssh, &broker, &target, size, on_output, on_exit, on_prompt).await
+}
+
+/// Connects to a saved host, with its settings and its groups' applied.
+#[tauri::command]
+#[specta::specta]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri passes each IPC argument separately"
+)]
+pub(crate) async fn host_connect(
+    ssh: State<'_, SshSessions>,
+    broker: State<'_, Arc<PromptBroker>>,
+    hosts: State<'_, crate::hosts::Hosts>,
+    id: String,
+    size: GridSize,
+    on_output: Channel<OutputChunk>,
+    on_exit: Channel<SessionExit>,
+    on_prompt: Channel<PromptRequest>,
+) -> Result<SessionHandle, CommandError> {
+    let invalid =
+        |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
+    let id = tauminus_domain::HostId::parse(&id).map_err(|e| invalid(&e))?;
+    let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
+    let target = hosts
+        .book()?
+        .resolve(&id, &me)
+        .await
+        .map_err(|e| invalid(&e))?;
+    open_target(&ssh, &broker, &target, size, on_output, on_exit, on_prompt).await
+}
+
+async fn open_target(
+    ssh: &SshSessions,
+    broker: &Arc<PromptBroker>,
+    target: &SshTarget,
+    size: GridSize,
+    on_output: Channel<OutputChunk>,
+    on_exit: Channel<SessionExit>,
+    on_prompt: Channel<PromptRequest>,
+) -> Result<SessionHandle, CommandError> {
     let size = size.try_into()?;
     let prompter = Arc::new(ChannelPrompter {
-        broker: Arc::clone(broker.inner()),
+        broker: Arc::clone(broker),
         channel: on_prompt,
         timeout: PROMPT_TIMEOUT,
     });
@@ -435,7 +544,7 @@ pub(crate) async fn ssh_open(
         output: on_output,
         exit: on_exit,
     };
-    let id = ssh.open(&target, size, sink, prompter).await?;
+    let id = ssh.open(target, size, sink, prompter).await?;
     SessionHandle::try_from(id)
 }
 

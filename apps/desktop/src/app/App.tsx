@@ -4,6 +4,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import { displayChord } from "@/features/keymap/keymap.ts";
+import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
@@ -15,6 +16,7 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
+  const { sidebarOpen } = useSyncExternalStore(shell.subscribe, shell.getState);
 
   // Shortcuts that arrive while focus is outside a terminal, such as on the tab bar.
   useEffect(() => {
@@ -39,34 +41,39 @@ export function App({ shell }: { shell: AppShell }) {
         activeTabId={activeTabId}
         newTabHint={`New tab (${chord("tab.new")})`}
       />
-      <div className="min-h-0 flex-1">
-        {active ? (
-          <PaneTree key={active.id} workspace={workspace} tab={active} />
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm opacity-80">
-            <p>No open terminals.</p>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-                onClick={() => workspace.newTab()}
-              >
-                New tab <kbd className="ml-2 text-xs opacity-60">{chord("tab.new")}</kbd>
-              </button>
-              <button
-                type="button"
-                className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-                onClick={() => shell.setConnectOpen(true)}
-              >
-                Connect to host{" "}
-                <kbd className="ml-2 text-xs opacity-60">{chord("ssh.connect")}</kbd>
-              </button>
-            </div>
-            <p className="opacity-60">
-              All commands: <kbd>{chord("palette.open")}</kbd>
-            </p>
-          </div>
+      <div className="flex min-h-0 flex-1">
+        {sidebarOpen && (
+          <Sidebar store={shell.hosts} onConnect={(host) => shell.connectHost(host)} />
         )}
+        <div className="min-w-0 flex-1">
+          {active ? (
+            <PaneTree key={active.id} workspace={workspace} tab={active} />
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm opacity-80">
+              <p>No open terminals.</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+                  onClick={() => workspace.newTab()}
+                >
+                  New tab <kbd className="ml-2 text-xs opacity-60">{chord("tab.new")}</kbd>
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+                  onClick={() => shell.setConnectOpen(true)}
+                >
+                  Connect to host{" "}
+                  <kbd className="ml-2 text-xs opacity-60">{chord("ssh.connect")}</kbd>
+                </button>
+              </div>
+              <p className="opacity-60">
+                All commands: <kbd>{chord("palette.open")}</kbd>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
       {/* Mounted up front so the first keystroke after opening reaches its input. */}
       <CommandPalette shell={shell} />
