@@ -11,6 +11,7 @@
 
 mod auth;
 mod bridge;
+mod config;
 mod host_keys;
 pub mod known_hosts;
 mod transport;
@@ -27,6 +28,7 @@ use tauminus_domain::{Endpoint, SshTarget, TerminalSize};
 use tokio::sync::{Notify, watch};
 
 pub use auth::AgentSource;
+pub use config::OpenSshConfig;
 pub use host_keys::HostKeyStore;
 
 use crate::known_hosts::KnownHosts;

@@ -335,7 +335,7 @@ fn matches_patterns(patterns: &[(bool, String)], name: &str) -> bool {
 /// mismatch it retries from the most recent `*` one byte further. Each
 /// backtrack advances the text position, so the worst case is
 /// O(|pattern| * |text|) and ordinary host patterns run in linear time.
-fn wildcard(pattern: &[u8], text: &[u8]) -> bool {
+pub(crate) fn wildcard(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
     while t < text.len() {

@@ -4432,6 +4432,7 @@ version = "0.0.0"
 dependencies = [
  "data-encoding",
  "hmac",
+ "nix 0.28.0",
  "rand",
  "russh",
  "sha1",
