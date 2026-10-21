@@ -16,7 +16,20 @@ leave open:
 
 ## Status
 
-Pre-alpha. Nothing is usable yet.
+Pre-alpha. The skeleton opens a local shell in a terminal window. SSH, hosts,
+and the prod guard are next, per the roadmap below.
+
+## Development
+
+```sh
+pnpm install
+pnpm exec playwright install chromium
+pnpm dev            # run the app
+cargo xtask ci      # every check CI runs
+```
+
+Setup details and contribution rules: [CONTRIBUTING.md](CONTRIBUTING.md).
+Code layout and data flow: [docs/architecture.md](docs/architecture.md).
 
 ## Roadmap
 

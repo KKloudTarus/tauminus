@@ -8,8 +8,9 @@ item names a platform. Feature sources and library choices are in
 Rules that apply to every version:
 
 - Every behavior change ships with tests in the same pull request.
-- Terminal bytes never enter React state. One `TerminalHost` component owns the
-  `xterm.js` instance and the IPC `Channel` ([ADR 0001](adr/0001-ui-framework.md)).
+- Terminal bytes never enter React state. A `TerminalController`, outside
+  React, owns each `xterm.js` instance and its session; views only attach and
+  detach ([ADR 0001](adr/0001-ui-framework.md), [architecture](architecture.md)).
 - The domain crate imports no Tauri, `russh`, `portable-pty`, or SQLite type.
 - The app works fully without the Hub. Hub features are additive
   ([ADR 0002](adr/0002-hub-server.md)).
@@ -22,18 +23,19 @@ Goal: replace the system terminal plus `ssh` for one person on one machine.
 
 Project skeleton
 
-- [ ] Cargo workspace: `tauminus-domain`, `tauminus-core` (application), `tauminus-ssh`, `tauminus-pty`, `tauminus-store`, `src-tauri`
-- [ ] React 19 + Vite + TypeScript frontend from `create-tauri-app` `react-ts`
-- [ ] SPDX header `GPL-3.0-or-later` on every source file, `license` field in `Cargo.toml` and `package.json`
-- [ ] CI on `ubuntu-22.04`, `macos-latest`, `windows-latest`: build, `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `tsc --noEmit`, frontend tests
-- [ ] `Transport` trait in the domain: `write`, `read` stream, `resize`, `close`
+- [x] Cargo workspace: `tauminus-domain`, `tauminus-app` (use cases and ports), `tauminus-pty`, `apps/desktop/src-tauri`; `tauminus-ssh` and `tauminus-store` follow
+- [x] React 19 + Vite + TypeScript frontend
+- [x] SPDX header `GPL-3.0-or-later` on every source file, `license` field in `Cargo.toml` and `package.json`
+- [x] CI on `ubuntu-22.04`, `macos-latest`, `windows-latest`: build, `cargo test`, `cargo clippy -D warnings`, `cargo fmt --check`, `tsc --noEmit`, frontend tests
+- [x] Terminal stream port in `tauminus-app`: bounded input and event channels plus a `Terminator`
 
 Terminal
 
-- [ ] `LocalPty` transport over `portable-pty` (bash, zsh, fish, PowerShell)
-- [ ] `TerminalHost` with `@xterm/xterm` 6, addons `webgl`, `fit`, `search`, `unicode11`, `web-links`
-- [ ] Output path: Rust coalesces PTY output (flush at 8 ms or 64 KiB, minimum 1 KiB when busy) and sends it through `tauri::ipc::Channel`
-- [ ] Backpressure: pause the transport read loop when the `xterm.js` write queue passes a high watermark
+- [x] Local PTY adapter over `portable-pty` (bash, zsh, fish, PowerShell)
+- [x] `TerminalController` with `@xterm/xterm` 6, addons `webgl`, `fit`, `search`, `unicode11`
+- [ ] Clickable links through a vetted opener (http and https only)
+- [x] Output path: Rust coalesces output (immediate after a quiet period, otherwise every 8 ms or at 64 KiB) and sends raw bytes through `tauri::ipc::Channel`
+- [x] Backpressure: pause reading above 256 KiB unacknowledged, resume below 96 KiB
 - [ ] Tabs, split panes, close and reorder
 - [ ] Command palette (`Ctrl+K` / `Cmd+K`)
 - [ ] Themes shared by UI and terminal through CSS variables, light and dark
