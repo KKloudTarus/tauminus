@@ -11,6 +11,7 @@ crates/
   tauminus-domain/         rules and types, no I/O, no runtime
   tauminus-app/            use cases (SessionManager, LocalShells) and ports
   tauminus-pty/            adapter: local shells over portable-pty
+  tauminus-ssh/            adapter: SSH shells over russh, known_hosts, auth, proxies
 apps/desktop/
   src-tauri/               Tauri shell: composition root, IPC commands, wire types
   src/
@@ -18,6 +19,7 @@ apps/desktop/
     features/terminal/     TerminalController, TerminalView, input queue, ack batching, renderer choice
     features/workspace/    tabs, split-pane layout tree, PaneTree and TabBar views
     features/keymap/       shortcut parsing, defaults per platform, user overrides
+    features/ssh/          quick connect, destination parsing, host key and secret prompts
     app/                   AppShell (actions, theme, palette state), App, CommandPalette
     ipc/                   the only code that imports @tauri-apps; bindings.ts is generated
 xtask/                     `cargo xtask ci`, `deps`, `bindings`
@@ -28,7 +30,7 @@ docs/                      roadmap, ADRs, benchmarks
 
 ```
 tauminus-desktop ──► tauminus-pty ──► tauminus-app ──► tauminus-domain
-        │                                  ▲
+        │      └───► tauminus-ssh ──►      ▲
         └──────────────────────────────────┘
 ```
 
@@ -43,8 +45,8 @@ tauminus-desktop ──► tauminus-pty ──► tauminus-app ──► tauminu
 The compiler enforces the direction, because a crate can only use what its
 manifest lists. Two checks keep the manifests honest: `cargo xtask deps`
 allowlists the normal dependencies of the domain and app crates, and
-`deny.toml` bans `portable-pty` outside `tauminus-pty` and `tauri` and
-`specta` outside the desktop shell.
+`deny.toml` bans `portable-pty` outside `tauminus-pty`, `russh` outside
+`tauminus-ssh`, and `tauri` and `specta` outside the desktop shell.
 
 ## A terminal session, end to end
 
@@ -159,6 +161,45 @@ Cmd on macOS. Plain Ctrl+K stays with the shell (kill to end of line), so the
 palette is Ctrl+Shift+P, or Cmd+K on macOS. Chords match on
 `KeyboardEvent.code`, so an input method such as Telex cannot move them.
 
+### SSH sessions
+
+An SSH session enters the same pump as a local shell: `SshSessions` reserves
+a slot, `RusshConnector` returns a `TerminalStream`, and `SessionManager`
+attaches it. Batching, flow control, and close escalation are shared.
+
+A connect walks the hops in order. The first goes over the target's route
+(direct TCP, `ProxyCommand`, SOCKS5, HTTP CONNECT); each later hop runs over a
+`direct-tcpip` channel of the one before, as `ProxyJump` does. Every hop
+checks its own host key and authenticates on its own.
+
+Host keys follow OpenSSH, with the rules in
+[ADR 0004](adr/0004-ssh-host-keys-and-auth.md):
+
+- Any recorded key that does not match, whatever its type, stops the connect.
+  The client offers recorded key types first, so a server that still has its
+  recorded key presents it.
+- `@revoked` stops the connect, for a plain key, a certificate's key, or its
+  authority. A certificate that fails for any other reason falls back to its
+  plain key.
+- Only a host with nothing on record gets a prompt. Tauminus reads the user's
+  and the system's `known_hosts` files and writes only its own, hashed, mode
+  0600.
+
+Key files are offered by their public half. The server asks for a signature
+only for a key it accepts, so a passphrase is asked only then. Decryption runs
+on the blocking pool: bcrypt takes about 200 ms per attempt.
+
+The bridge reads and writes on separate tasks. A write waits while the
+server's window is full, and the window reopens only after russh reads what
+came before. One task doing both deadlocks after a paste larger than the
+window (2 MiB with OpenSSH) into a program that echoes it.
+
+Bounds per SSH session: 1 output chunk waiting in the bridge, 4 in the queue
+to the pump, and 32 packets of at most 32 KiB in russh, so at most 1.2 MiB
+while the view is paused, on top of the pump's 832 KiB. Prompts are bounded
+too: 3 passphrase tries per key, 3 passwords, 10 keyboard-interactive rounds,
+4 passes over the method list after partial successes.
+
 ### Complexity
 
 | Operation | Time | Space |
@@ -170,6 +211,10 @@ palette is Ctrl+Shift+P, or Cmd+K on macOS. Chords match on
 | WebGL budget, acquire or release | O(1) | O(12) |
 | Split, close, resize, or spatial focus in a tab | O(n), n ≤ 31 nodes | O(n) for the rebuilt path |
 | Shortcut lookup per keystroke | O(1) | O(b) for b bindings |
+| Load `known_hosts`, n bytes over all files | O(n), off the async workers | O(n) |
+| Check a host key, L lines of k patterns | O(L·k·\|p\|·\|h\|) worst case, linear for plain patterns; one HMAC per hashed line; keys decoded only for matching lines | O(1) beyond the loaded file |
+| Glob match of pattern p against host h | O(\|p\|·\|h\|), \|h\| ≤ 261 | O(1) |
+| Prompt routing (register, reply, cancel) | O(1) expected | O(c) for c connects waiting |
 
 ### The view side
 
@@ -195,17 +240,18 @@ terminal renders nothing on WebKitGTK.
 | A UI feature | `apps/desktop/src/features/<feature>/` |
 | A backend call from the UI | `apps/desktop/src/ipc/` |
 
-### Adding a transport (SSH next)
+### Adding a transport
 
-1. Add a crate `crates/tauminus-ssh` that turns a `russh` channel into a
-   `TerminalStream`: bounded input and event channels plus a `Terminator`
-   that closes the channel.
-2. Add a connector port in `tauminus-app::ports` and a use case next to
+SSH went in this way; serial or Mosh would follow the same steps.
+
+1. An adapter crate turns the transport into a `TerminalStream`: bounded
+   input and event channels plus a `Terminator`.
+2. A connector port in `tauminus-app::ports` and a use case next to
    `LocalShells` that reserves a slot, connects, and calls
    `SessionManager::attach`. The pump, batching, and flow control are reused
    as they are.
-3. Ban `russh` outside `tauminus-ssh` in `deny.toml`.
-4. Add a command in the desktop shell and regenerate bindings.
+3. A `deny.toml` ban keeps the transport library inside its crate.
+4. A command in the desktop shell, then regenerated bindings.
 
 ## Generated code
 
