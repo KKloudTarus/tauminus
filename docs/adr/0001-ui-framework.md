@@ -40,11 +40,12 @@ React 19 with Vite and TypeScript.
 
 ## Consequences
 
-- One `TerminalHost` component owns the `Terminal` instance and the channel.
-  Terminal bytes never enter React state, context, or a store.
-- Effects that create a `Terminal` or subscribe a channel must clean up
-  (`term.dispose()`, unsubscribe), because StrictMode mounts effects twice in
-  development.
+- A `TerminalController` outside React owns each `Terminal` instance and its
+  channel; views attach and detach. Terminal bytes never enter React state,
+  context, or a store.
+- Long-lived objects are created outside components, because StrictMode
+  mounts effects twice in development and a remount must not close a
+  session.
 - Larger runtime than Svelte or Solid. The app loads from local disk, so the
   cost is parse time and memory, not download time.
 
