@@ -4,14 +4,26 @@
 import { Channel } from "@tauri-apps/api/core";
 
 import {
+  type AnswerSpec,
   type CommandError,
+  type EndpointSpec,
   type ErrorCode,
   type GridSize,
+  type PromptKind,
+  type PromptRequest,
+  type RouteSpec,
   type SessionExit,
+  type SshTargetSpec,
   commands,
 } from "./bindings.ts";
 
-export type { ErrorCode, GridSize };
+export type { AnswerSpec, EndpointSpec, ErrorCode, GridSize, PromptKind, RouteSpec, SshTargetSpec };
+
+/** What a session runs: the local shell, or a shell on an SSH host. */
+export type SessionSpec = { kind: "local" } | { kind: "ssh"; target: SshTargetSpec };
+
+/** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
+export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
 
 /** A failed session command, carrying the stable code from the backend. */
 export class SessionCommandError extends Error {
@@ -29,6 +41,8 @@ export interface SessionEvents {
   onOutput(data: Uint8Array): void;
   /** Called once when the session ends. */
   onExit(exitCode: number | null): void;
+  /** Called for each question an SSH connect raises. Without it, every prompt is declined. */
+  onPrompt?: PromptHandler;
 }
 
 export interface TerminalSession {
@@ -44,7 +58,7 @@ export interface TerminalSession {
 
 /** Opens terminal sessions. Components depend on this, never on Tauri. */
 export interface SessionClient {
-  open(size: GridSize, events: SessionEvents): Promise<TerminalSession>;
+  open(spec: SessionSpec, size: GridSize, events: SessionEvents): Promise<TerminalSession>;
 }
 
 type CommandResult<T> = Promise<
@@ -63,14 +77,30 @@ async function done(result: CommandResult<null>): Promise<void> {
   await unwrap(result);
 }
 
+const CANCEL: AnswerSpec = { kind: "cancel" };
+
 export const tauriSessions: SessionClient = {
-  async open(size, events) {
+  async open(spec, size, events) {
     const output = new Channel<ArrayBuffer>();
     output.onmessage = (buffer) => events.onOutput(new Uint8Array(buffer));
     const exit = new Channel<SessionExit>();
     exit.onmessage = (event) => events.onExit(event.exitCode);
 
-    const id = await unwrap(commands.sessionOpen(size, output, exit));
+    let opening: CommandResult<number>;
+    if (spec.kind === "local") {
+      opening = commands.sessionOpen(size, output, exit);
+    } else {
+      const prompts = new Channel<PromptRequest>();
+      prompts.onmessage = ({ id, prompt }) => {
+        const ask = events.onPrompt ?? (async () => CANCEL);
+        ask(prompt)
+          .catch(() => CANCEL)
+          .then((answer) => commands.sshPromptReply(id, answer))
+          .catch((error: unknown) => console.warn("prompt reply failed", error));
+      };
+      opening = commands.sshOpen(spec.target, size, output, exit, prompts);
+    }
+    const id = await unwrap(opening);
     return {
       id,
       write: (data) => done(commands.sessionWrite(id, data)),

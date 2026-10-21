@@ -12,7 +12,7 @@ import {
 import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
-import type { SessionClient } from "@/ipc/index.ts";
+import type { SessionClient, SessionSpec } from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
@@ -37,10 +37,12 @@ export const ACTION_LABELS: Record<Action, string> = {
   "terminal.paste": "Paste",
   "terminal.clear": "Clear scrollback",
   "theme.cycle": "Switch theme (system, light, dark)",
+  "ssh.connect": "Connect to SSH host",
 };
 
 interface ShellState {
   paletteOpen: boolean;
+  connectOpen: boolean;
   theme: ThemePreference;
 }
 
@@ -50,7 +52,7 @@ interface ShellState {
  * key, the palette, or a button.
  */
 export class AppShell {
-  readonly workspace: Workspace<TerminalController>;
+  readonly workspace: Workspace<TerminalController, SessionSpec>;
   readonly keymap: Keymap;
   readonly platform: Platform;
   readonly #listeners = new Set<() => void>();
@@ -78,14 +80,14 @@ export class AppShell {
       );
     }
     this.keymap = keymap;
-    this.#state = { paletteOpen: false, theme: loadTheme(options.storage) };
+    this.#state = { paletteOpen: false, connectOpen: false, theme: loadTheme(options.storage) };
     applyTheme(options.root, this.#state.theme);
 
-    this.workspace = new Workspace((_paneId) => {
-      const controller = new TerminalController(
-        options.sessions,
-        options.renderer ? { renderer: options.renderer } : {},
-      );
+    this.workspace = new Workspace<TerminalController, SessionSpec>((_paneId, spec) => {
+      const controller = new TerminalController(options.sessions, {
+        ...(options.renderer ? { renderer: options.renderer } : {}),
+        ...(spec ? { spec } : {}),
+      });
       controller.setKeyHandler((event) => this.handleKey(event));
       return controller;
     });
@@ -120,11 +122,28 @@ export class AppShell {
     }
   }
 
+  setConnectOpen(open: boolean): void {
+    if (this.#state.connectOpen !== open) {
+      this.#set({ ...this.#state, connectOpen: open });
+      if (!open) this.#focusActivePane();
+    }
+  }
+
+  /** Opens an SSH session in a new tab. Returns false at the pane limit. */
+  connect(spec: SessionSpec): boolean {
+    const opened = this.workspace.newTab(spec);
+    if (opened) this.#focusActivePane();
+    return opened;
+  }
+
   run(action: Action): void {
     const w = this.workspace;
     switch (action) {
       case "palette.open":
         this.setPaletteOpen(true);
+        return;
+      case "ssh.connect":
+        this.setConnectOpen(true);
         return;
       case "tab.new":
         w.newTab();

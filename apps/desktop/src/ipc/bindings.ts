@@ -21,25 +21,66 @@ export const commands = {
 	/**  Reports bytes the terminal view has finished parsing, for flow control. */
 	sessionAcknowledge: (id: SessionHandle, bytes: number) => typedError<null, CommandError>(__TAURI_INVOKE("session_acknowledge", { id, bytes })),
 	sessionClose: (id: SessionHandle) => typedError<null, CommandError>(__TAURI_INVOKE("session_close", { id })),
+	/**
+	 *  Connects to an SSH host and opens a shell. Questions for the user arrive
+	 *  on `on_prompt`; answer each with `ssh_prompt_reply`.
+	 */
+	sshOpen: (target: SshTargetSpec, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("ssh_open", { target, size, onOutput, onExit, onPrompt })),
+	/**  Answers a prompt. Returns false when the prompt is no longer waiting. */
+	sshPromptReply: (id: number, answer: AnswerSpec) => __TAURI_INVOKE<boolean>("ssh_prompt_reply", { id, answer }),
 };
 
 /* Types */
+/**  The user's reply to a prompt. */
+export type AnswerSpec = { kind: "trustHostKey"; remember: boolean } | { kind: "secret"; value: string } | { kind: "responses"; values: string[] } | { kind: "cancel" };
+
+export type AuthMethodSpec = "agent" | "publicKey" | "keyboardInteractive" | "password";
+
+export type ChallengeFieldSpec = {
+	text: string,
+	echo: boolean,
+};
+
 export type CommandError = {
 	code: ErrorCode,
 	message: string,
+};
+
+/**  `user@host:port` as the view sends it. */
+export type EndpointSpec = {
+	/**  Empty means the local user name, as `ssh` does. */
+	user: string,
+	host: string,
+	port: number,
 };
 
 /**
  *  Stable error codes the view can branch on. Messages are for logs and may
  *  change.
  */
-export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "launch_failed" | "internal";
+export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "launch_failed" | 
+/**  Could not reach the host: DNS, refused, timeout, proxy, or network. */
+"connect_failed" | 
+/**  The host key differs from the one on record. Never offered for trust. */
+"host_key_changed" | "host_key_revoked" | "auth_failed" | 
+/**  The user declined a prompt or closed it. */
+"cancelled" | "protocol_error" | "internal";
 
 /**  Grid size from the webview, validated before it reaches the use case. */
 export type GridSize = {
 	cols: number,
 	rows: number,
 };
+
+export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
+
+/**  A question for the user, sent on the connect's prompt channel. */
+export type PromptRequest = {
+	id: number,
+	prompt: PromptKind,
+};
+
+export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
 
 /**  Sent once when a session ends. */
 export type SessionExit = {
@@ -52,6 +93,19 @@ export type SessionExit = {
  *  number; `u64` would need `bigint`.
  */
 export type SessionHandle = number;
+
+/**
+ *  Where and how to connect. Omitted auth fields take the defaults: agent,
+ *  default key files, keyboard-interactive, then password.
+ */
+export type SshTargetSpec = {
+	destination: EndpointSpec,
+	jumps?: EndpointSpec[],
+	route: RouteSpec,
+	methods?: AuthMethodSpec[] | null,
+	identityFiles?: string[],
+	identitiesOnly?: boolean,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

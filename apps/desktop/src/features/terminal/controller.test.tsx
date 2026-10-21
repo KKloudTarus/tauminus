@@ -10,6 +10,7 @@ import {
   type SessionClient,
   SessionCommandError,
   type SessionEvents,
+  type SessionSpec,
   type TerminalSession,
 } from "@/ipc/index.ts";
 
@@ -19,7 +20,7 @@ import { TerminalView } from "./TerminalView.tsx";
 
 /** A session client the test drives by hand. */
 class FakeSessions implements SessionClient {
-  opened: { size: GridSize; events: SessionEvents }[] = [];
+  opened: { spec: SessionSpec; size: GridSize; events: SessionEvents }[] = [];
   session = {
     id: 1,
     write: vi.fn<TerminalSession["write"]>(async () => {}),
@@ -31,8 +32,8 @@ class FakeSessions implements SessionClient {
   #resolve: ((session: TerminalSession) => void) | undefined;
   #reject: ((error: unknown) => void) | undefined;
 
-  open(size: GridSize, events: SessionEvents): Promise<TerminalSession> {
-    this.opened.push({ size, events });
+  open(spec: SessionSpec, size: GridSize, events: SessionEvents): Promise<TerminalSession> {
+    this.opened.push({ spec, size, events });
     return new Promise((resolve, reject) => {
       this.#resolve = resolve;
       this.#reject = reject;
@@ -194,6 +195,120 @@ describe("TerminalController with TerminalView", () => {
     await expect
       .element(screen.getByRole("status"))
       .toHaveTextContent("Could not start the shell: no such shell");
+  });
+
+  it("opens what it was created with", async () => {
+    const sessions = new FakeSessions();
+    const spec: SessionSpec = {
+      kind: "ssh",
+      target: { destination: { user: "a", host: "db", port: 2222 }, route: { kind: "direct" } },
+    };
+    const controller = new TerminalController(sessions, { spec });
+    controllers.push(controller);
+    expect(controller.defaultTitle).toBe("a@db:2222");
+    await mount(controller);
+    expect(sessions.opened[0]?.spec).toBe(spec);
+  });
+
+  it("shows prompts one at a time and returns each answer", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    const ask = sessions.events.onPrompt;
+    if (!ask) throw new Error("no prompt handler");
+    const first = ask({ kind: "password", endpoint: "a@db" });
+    const second = ask({ kind: "passphrase", keyPath: "/k" });
+    expect(controller.getPrompt()?.kind).toBe("password");
+    controller.answer({ kind: "secret", value: "pw" });
+    await expect(first).resolves.toEqual({ kind: "secret", value: "pw" });
+    expect(controller.getPrompt()?.kind).toBe("passphrase");
+    controller.answer({ kind: "cancel" });
+    await expect(second).resolves.toEqual({ kind: "cancel" });
+    expect(controller.getPrompt()).toBeUndefined();
+  });
+
+  it("cancels waiting prompts when disposed or when the connect fails", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    const pending = sessions.events.onPrompt?.({ kind: "password", endpoint: "a@db" });
+    sessions.rejectOpen(new SessionCommandError({ code: "connect_failed", message: "down" }));
+    await expect(pending).resolves.toEqual({ kind: "cancel" });
+    expect(controller.getPrompt()).toBeUndefined();
+
+    controller.retry();
+    const later = sessions.events.onPrompt?.({ kind: "password", endpoint: "a@db" });
+    controller.dispose();
+    await expect(later).resolves.toEqual({ kind: "cancel" });
+  });
+
+  it("retries after a failed start and only then", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    controller.retry();
+    expect(sessions.opened).toHaveLength(1);
+    sessions.rejectOpen(new SessionCommandError({ code: "auth_failed", message: "no" }));
+    await vi.waitFor(() =>
+      expect(controller.status).toEqual({ kind: "failed", message: "no", code: "auth_failed" }),
+    );
+    controller.retry();
+    expect(controller.status.kind).toBe("starting");
+    expect(sessions.opened).toHaveLength(2);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+  });
+
+  it("puts the prompt dialog over the pane and answers from it", async () => {
+    const sessions = new FakeSessions();
+    const controller = new TerminalController(sessions, {
+      spec: {
+        kind: "ssh",
+        target: { destination: { user: "a", host: "db", port: 22 }, route: { kind: "direct" } },
+      },
+    });
+    controllers.push(controller);
+    const screen = await mount(controller);
+    const answer = sessions.events.onPrompt?.({
+      kind: "unknownHostKey",
+      host: "db",
+      port: 22,
+      algorithm: "ssh-ed25519",
+      fingerprint: "SHA256:abc",
+      certificateExpected: true,
+    });
+    await expect.element(screen.getByRole("dialog", { name: "New host: db" })).toBeVisible();
+    await expect.element(screen.getByText("SHA256:abc")).toBeVisible();
+    await expect.element(screen.getByText(/did not present a certificate/)).toBeVisible();
+    await expect.element(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    // Shortcuts that refocus the active pane must not pull focus from the prompt.
+    controller.focus();
+    await expect.element(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    // A DOM click: these tests run without the app's CSS, so the overlay is
+    // in normal flow and never "stable" for a pointer click. The end-to-end
+    // test clicks it for real.
+    const trust = screen.getByRole("button", { name: "Trust and remember" }).element();
+    if (!(trust instanceof HTMLElement)) throw new Error("not a button");
+    trust.click();
+    await expect(answer).resolves.toEqual({ kind: "trustHostKey", remember: true });
+    await expect.element(screen.getByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("explains a changed host key and offers no retry", async () => {
+    const sessions = new FakeSessions();
+    const controller = new TerminalController(sessions, {
+      spec: {
+        kind: "ssh",
+        target: { destination: { user: "a", host: "db", port: 22 }, route: { kind: "direct" } },
+      },
+    });
+    controllers.push(controller);
+    const screen = await mount(controller);
+    sessions.rejectOpen(
+      new SessionCommandError({ code: "host_key_changed", message: "recorded at kh:3" }),
+    );
+    await expect
+      .element(screen.getByRole("heading", { name: "Warning: the host key for a@db has changed" }))
+      .toBeVisible();
+    await expect.element(screen.getByText("recorded at kh:3")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try again" }).query()).toBeNull();
   });
 
   it("closes the session on dispose, not on unmount", async () => {

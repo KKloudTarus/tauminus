@@ -4,6 +4,7 @@
 import { useEffect, useSyncExternalStore } from "react";
 
 import { displayChord } from "@/features/keymap/keymap.ts";
+import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
 
@@ -18,7 +19,8 @@ export function App({ shell }: { shell: AppShell }) {
   // Shortcuts that arrive while focus is outside a terminal, such as on the tab bar.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.defaultPrevented && !shell.getState().paletteOpen) shell.handleKey(event);
+      const { paletteOpen, connectOpen } = shell.getState();
+      if (!event.defaultPrevented && !paletteOpen && !connectOpen) shell.handleKey(event);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -43,13 +45,23 @@ export function App({ shell }: { shell: AppShell }) {
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm opacity-80">
             <p>No open terminals.</p>
-            <button
-              type="button"
-              className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-              onClick={() => workspace.newTab()}
-            >
-              New tab <kbd className="ml-2 text-xs opacity-60">{chord("tab.new")}</kbd>
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+                onClick={() => workspace.newTab()}
+              >
+                New tab <kbd className="ml-2 text-xs opacity-60">{chord("tab.new")}</kbd>
+              </button>
+              <button
+                type="button"
+                className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+                onClick={() => shell.setConnectOpen(true)}
+              >
+                Connect to host{" "}
+                <kbd className="ml-2 text-xs opacity-60">{chord("ssh.connect")}</kbd>
+              </button>
+            </div>
             <p className="opacity-60">
               All commands: <kbd>{chord("palette.open")}</kbd>
             </p>
@@ -58,6 +70,7 @@ export function App({ shell }: { shell: AppShell }) {
       </div>
       {/* Mounted up front so the first keystroke after opening reaches its input. */}
       <CommandPalette shell={shell} />
+      <ConnectDialog shell={shell} />
     </main>
   );
 }

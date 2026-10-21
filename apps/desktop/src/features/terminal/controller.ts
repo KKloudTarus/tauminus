@@ -7,10 +7,15 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
+import { formatEndpoint } from "@/features/ssh/destination.ts";
 import {
+  type AnswerSpec,
+  type ErrorCode,
   type GridSize,
+  type PromptKind,
   type SessionClient,
   SessionCommandError,
+  type SessionSpec,
   type TerminalSession,
 } from "@/ipc/index.ts";
 
@@ -29,7 +34,10 @@ export type TerminalStatus =
   | { kind: "starting" }
   | { kind: "running" }
   | { kind: "exited"; code: number | null }
-  | { kind: "failed"; message: string };
+  | { kind: "failed"; message: string; code: ErrorCode | undefined };
+
+const CANCEL: AnswerSpec = { kind: "cancel" };
+const LOCAL: SessionSpec = { kind: "local" };
 
 type Listener = () => void;
 
@@ -46,6 +54,7 @@ type Listener = () => void;
  */
 export class TerminalController {
   readonly terminal: Terminal;
+  readonly spec: SessionSpec;
   readonly #sessions: SessionClient;
   readonly #fit = new FitAddon();
   readonly #search = new SearchAddon();
@@ -55,12 +64,15 @@ export class TerminalController {
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
+  #opening = false;
   /**
    * Set by the first attach. A view that remounts after the session ended
    * must show the ended session, not quietly start a new one; only `retry`
    * opens again.
    */
   #started = false;
+  /** Questions from the connect, oldest first; the view shows the first. */
+  #prompts: { prompt: PromptKind; resolve: (answer: AnswerSpec) => void }[] = [];
   #disposed = false;
   /**
    * Parsed bytes not yet acknowledged to the backend: waiting for `open` to
@@ -90,8 +102,12 @@ export class TerminalController {
    */
   #sentSize: GridSize | undefined;
 
-  constructor(sessions: SessionClient, options: { renderer?: RendererPreference } = {}) {
+  constructor(
+    sessions: SessionClient,
+    options: { renderer?: RendererPreference; spec?: SessionSpec } = {},
+  ) {
     this.#sessions = sessions;
+    this.spec = options.spec ?? LOCAL;
     this.#webglRetired =
       chooseRenderer(options.renderer ?? "auto", globalThis.navigator?.userAgent ?? "") === "dom";
     this.terminal = new Terminal({
@@ -143,6 +159,31 @@ export class TerminalController {
   };
 
   getStatus = (): TerminalStatus => this.#status;
+
+  /** The question waiting for the user, if any. For `useSyncExternalStore`. */
+  getPrompt = (): PromptKind | undefined => this.#prompts[0]?.prompt;
+
+  /** Answers the question `getPrompt` returned. */
+  answer(answer: AnswerSpec): void {
+    const pending = this.#prompts.shift();
+    if (!pending) return;
+    pending.resolve(answer);
+    this.#notify();
+    if (this.#prompts.length === 0) this.focus();
+  }
+
+  /** Opens the session again after it failed to start. */
+  retry(): void {
+    if (this.#disposed || this.#status.kind !== "failed" || this.#opening) return;
+    this.terminal.reset();
+    this.#setStatus({ kind: "starting" });
+    this.#open();
+  }
+
+  /** What to call this terminal before a program sets a title. */
+  get defaultTitle(): string {
+    return this.spec.kind === "ssh" ? formatEndpoint(this.spec.target.destination) : "Terminal";
+  }
 
   /** The title the shell or program set with OSC 0 or 2, or "" if none. */
   get title(): string {
@@ -201,7 +242,9 @@ export class TerminalController {
     this.#host = undefined;
   }
 
+  /** Focuses the terminal, unless a prompt is open: the prompt keeps focus. */
   focus(): void {
+    if (this.#prompts.length > 0) return;
     this.terminal.focus();
   }
 
@@ -215,6 +258,7 @@ export class TerminalController {
     clearTimeout(this.#ackRetry);
     this.#retireWebgl();
     this.#input.close();
+    for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
     this.terminal.dispose();
@@ -222,19 +266,19 @@ export class TerminalController {
   }
 
   #open(): void {
+    this.#opening = true;
     this.#sentSize = { cols: this.terminal.cols, rows: this.terminal.rows };
     this.#sessions
-      .open(
-        this.#sentSize,
-        {
-          onOutput: (data) => this.#write(data),
-          onExit: (code) => {
-            this.#session = undefined;
-            this.#setStatus({ kind: "exited", code });
-          },
+      .open(this.spec, this.#sentSize, {
+        onPrompt: (prompt) => this.#ask(prompt),
+        onOutput: (data) => this.#write(data),
+        onExit: (code) => {
+          this.#session = undefined;
+          this.#setStatus({ kind: "exited", code });
         },
-      )
+      })
       .then((opened) => {
+        this.#opening = false;
         if (this.#disposed) {
           opened.close().catch(ignoreEndedSession);
           return;
@@ -248,10 +292,22 @@ export class TerminalController {
         this.#resizeSession();
       })
       .catch((error: unknown) => {
+        this.#opening = false;
+        // Questions the connect left unanswered no longer matter.
+        for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
         if (!this.#disposed) {
-          this.#setStatus({ kind: "failed", message: errorMessage(error) });
+          const code = error instanceof SessionCommandError ? error.code : undefined;
+          this.#setStatus({ kind: "failed", message: errorMessage(error), code });
         }
       });
+  }
+
+  #ask(prompt: PromptKind): Promise<AnswerSpec> {
+    if (this.#disposed) return Promise.resolve(CANCEL);
+    return new Promise((resolve) => {
+      this.#prompts.push({ prompt, resolve });
+      this.#notify();
+    });
   }
 
   #write(data: Uint8Array): void {

@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { useState, useSyncExternalStore } from "react";
+import type { SessionSpec } from "@/ipc/index.ts";
 
 import type { TerminalController } from "@/features/terminal/controller.ts";
 
 import type { Tab, Workspace } from "./workspace.ts";
 
 interface TabBarProps {
-  workspace: Workspace<TerminalController>;
+  workspace: Workspace<TerminalController, SessionSpec>;
   tabs: readonly Tab[];
   activeTabId: string | undefined;
   newTabHint: string;
@@ -61,7 +62,7 @@ function TabButton({
   onDragEnd,
   onDrop,
 }: {
-  workspace: Workspace<TerminalController>;
+  workspace: Workspace<TerminalController, SessionSpec>;
   tab: Tab;
   active: boolean;
   onDragStart: () => void;
@@ -73,7 +74,7 @@ function TabButton({
     (listener) => controller?.subscribe(listener) ?? (() => {}),
     () => controller?.title ?? "",
   );
-  const label = title || "Terminal";
+  const label = title || controller?.defaultTitle || "Terminal";
 
   return (
     <div

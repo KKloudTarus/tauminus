@@ -18,7 +18,7 @@ import {
 
 /** What the workspace needs from a terminal; `TerminalController` satisfies it. */
 export interface PaneTerminal {
-  getStatus(): { kind: string; code?: number | null };
+  getStatus(): { kind: string; code?: unknown };
   subscribe(listener: () => void): () => void;
   focus(): void;
   dispose(): void;
@@ -51,19 +51,25 @@ export const MAX_PANES = 64;
  * closes. A pane whose shell exits with code 0 closes itself, like a terminal
  * window; any other exit stays open so its message can be read.
  *
+ * Each pane records what it was opened with (`S`, such as an SSH target), so
+ * splitting a pane opens the same thing again.
+ *
  * Cost: tab operations are O(t) for t tabs; pane operations are O(n) in the
  * tab's layout (n <= 31); finding a pane's tab is O(P) for P <= 64 panes in
  * total; terminal lookup is O(1).
  */
-export class Workspace<T extends PaneTerminal = PaneTerminal> {
-  readonly #create: (paneId: PaneId) => T;
-  readonly #terminals = new Map<PaneId, { terminal: T; unsubscribe: () => void }>();
+export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
+  readonly #create: (paneId: PaneId, spec: S | undefined) => T;
+  readonly #terminals = new Map<
+    PaneId,
+    { terminal: T; spec: S | undefined; unsubscribe: () => void }
+  >();
   readonly #listeners = new Set<() => void>();
   #snapshot: WorkspaceSnapshot = { tabs: [], activeTabId: undefined };
   #nextId = 1;
   #disposed = false;
 
-  constructor(create: (paneId: PaneId) => T) {
+  constructor(create: (paneId: PaneId, spec: S | undefined) => T) {
     this.#create = create;
   }
 
@@ -88,11 +94,11 @@ export class Workspace<T extends PaneTerminal = PaneTerminal> {
   }
 
   /** Opens a tab with one pane and makes it active. Returns false at the pane limit. */
-  newTab(): boolean {
+  newTab(spec?: S): boolean {
     if (this.#disposed || this.#terminals.size >= MAX_PANES) {
       return false;
     }
-    const paneId = this.#newPane();
+    const paneId = this.#newPane(spec);
     const tab: Tab = { id: this.#id("tab"), root: pane(paneId), focused: paneId };
     this.#update({ tabs: [...this.#snapshot.tabs, tab], activeTabId: tab.id });
     return true;
@@ -151,15 +157,16 @@ export class Workspace<T extends PaneTerminal = PaneTerminal> {
   }
 
   /**
-   * Splits the active tab's focused pane. The new pane gets focus. Returns
-   * false at the per-tab or total pane limit.
+   * Splits the active tab's focused pane, opening what that pane was opened
+   * with. The new pane gets focus. Returns false at the per-tab or total pane
+   * limit.
    */
   split(direction: Direction): boolean {
     const tab = this.activeTab;
     if (!tab || countPanes(tab.root) >= MAX_PANES_PER_TAB || this.#terminals.size >= MAX_PANES) {
       return false;
     }
-    const paneId = this.#newPane();
+    const paneId = this.#newPane(this.#terminals.get(tab.focused)?.spec);
     const root = splitPane(tab.root, tab.focused, direction, paneId, this.#id("split"));
     this.#replaceTab({ ...tab, root, focused: paneId });
     return true;
@@ -226,9 +233,9 @@ export class Workspace<T extends PaneTerminal = PaneTerminal> {
     this.#listeners.clear();
   }
 
-  #newPane(): PaneId {
+  #newPane(spec: S | undefined): PaneId {
     const paneId = this.#id("pane");
-    const terminal = this.#create(paneId);
+    const terminal = this.#create(paneId, spec);
     const unsubscribe = terminal.subscribe(() => {
       const status = terminal.getStatus();
       if (status.kind === "exited" && status.code === 0) {
@@ -236,7 +243,7 @@ export class Workspace<T extends PaneTerminal = PaneTerminal> {
         queueMicrotask(() => this.closePane(paneId));
       }
     });
-    this.#terminals.set(paneId, { terminal, unsubscribe });
+    this.#terminals.set(paneId, { terminal, spec, unsubscribe });
     return paneId;
   }
 

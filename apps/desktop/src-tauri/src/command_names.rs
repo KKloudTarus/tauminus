@@ -13,4 +13,6 @@ const COMMANDS: &[&str] = &[
     "session_resize",
     "session_acknowledge",
     "session_close",
+    "ssh_open",
+    "ssh_prompt_reply",
 ];

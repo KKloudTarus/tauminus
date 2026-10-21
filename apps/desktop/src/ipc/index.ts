@@ -6,11 +6,18 @@
 import type { SessionClient } from "./sessions.ts";
 
 export {
+  type AnswerSpec,
+  type EndpointSpec,
   type ErrorCode,
   type GridSize,
+  type PromptHandler,
+  type PromptKind,
+  type RouteSpec,
   type SessionClient,
   SessionCommandError,
   type SessionEvents,
+  type SessionSpec,
+  type SshTargetSpec,
   type TerminalSession,
   tauriSessions,
 } from "./sessions.ts";

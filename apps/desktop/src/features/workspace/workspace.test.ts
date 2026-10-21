@@ -120,6 +120,20 @@ describe("Workspace tabs", () => {
   });
 });
 
+describe("Workspace specs", () => {
+  it("opens each pane with its spec and splits with the focused pane's", () => {
+    const opened: [string, string | undefined][] = [];
+    const workspace = new Workspace<FakeTerminal, string>((paneId, spec) => {
+      opened.push([paneId, spec]);
+      return new FakeTerminal();
+    });
+    workspace.newTab();
+    workspace.newTab("ssh:db");
+    workspace.split("row");
+    expect(opened.map(([, spec]) => spec)).toEqual([undefined, "ssh:db", "ssh:db"]);
+  });
+});
+
 describe("Workspace panes", () => {
   it("splits the focused pane and focuses the new one", () => {
     const { workspace } = setup();

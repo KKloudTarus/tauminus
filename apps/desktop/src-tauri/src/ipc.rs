@@ -84,6 +84,15 @@ pub(crate) enum ErrorCode {
     NotFound,
     LimitReached,
     LaunchFailed,
+    /// Could not reach the host: DNS, refused, timeout, proxy, or network.
+    ConnectFailed,
+    /// The host key differs from the one on record. Never offered for trust.
+    HostKeyChanged,
+    HostKeyRevoked,
+    AuthFailed,
+    /// The user declined a prompt or closed it.
+    Cancelled,
+    ProtocolError,
     Internal,
 }
 

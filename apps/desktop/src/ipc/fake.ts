@@ -4,7 +4,15 @@
 // An in-memory shell for end-to-end tests of the UI in a plain browser. Only
 // the `e2e` build mode loads this module; production bundles do not contain it.
 
-import type { GridSize, SessionClient, SessionEvents, TerminalSession } from "./sessions.ts";
+import type { CommandError } from "./bindings.ts";
+import {
+  type GridSize,
+  type SessionClient,
+  SessionCommandError,
+  type SessionEvents,
+  type SessionSpec,
+  type TerminalSession,
+} from "./sessions.ts";
 
 const encoder = new TextEncoder();
 const PROMPT = "$ ";
@@ -17,11 +25,11 @@ class FakeShell implements TerminalSession {
   #size: GridSize;
   #ended = false;
 
-  constructor(id: number, size: GridSize, events: SessionEvents) {
+  constructor(id: number, size: GridSize, events: SessionEvents, banner = "") {
     this.id = id;
     this.#size = size;
     this.#events = events;
-    queueMicrotask(() => this.#print(PROMPT));
+    queueMicrotask(() => this.#print(banner + PROMPT));
   }
 
   async write(data: string): Promise<void> {
@@ -92,10 +100,75 @@ class FakeShell implements TerminalSession {
 
 let nextId = 1;
 
+/** The password every fake SSH host accepts. */
+export const FAKE_PASSWORD = "secret";
+const FAKE_FINGERPRINT = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU";
+
+function fail(code: CommandError["code"], message: string): SessionCommandError {
+  return new SessionCommandError({ code, message });
+}
+
+/**
+ * Hosts by name: `prompt.test` asks to trust its key and for a password;
+ * `kbd.test` asks a keyboard-interactive code (`123456`); `changed.test`
+ * has a changed host key; anything else cannot be reached.
+ */
+async function fakeSsh(
+  spec: Extract<SessionSpec, { kind: "ssh" }>,
+  events: SessionEvents,
+): Promise<string> {
+  const ask = events.onPrompt ?? (async () => ({ kind: "cancel" }) as const);
+  const { host, port } = spec.target.destination;
+  const endpoint = `${spec.target.destination.user || "me"}@${host}`;
+  if (host === "changed.test") {
+    throw fail(
+      "host_key_changed",
+      `the host key for ${host}:${port} has changed (recorded at ~/.ssh/known_hosts:3)`,
+    );
+  }
+  if (host !== "prompt.test" && host !== "kbd.test") {
+    throw fail("connect_failed", `could not resolve ${host}`);
+  }
+  const trust = await ask({
+    kind: "unknownHostKey",
+    host,
+    port,
+    algorithm: "ssh-ed25519",
+    fingerprint: FAKE_FINGERPRINT,
+    certificateExpected: false,
+  });
+  if (trust.kind !== "trustHostKey")
+    throw fail("cancelled", `the host key for ${host}:${port} was not trusted`);
+  if (host === "kbd.test") {
+    const answer = await ask({
+      kind: "keyboardInteractive",
+      endpoint,
+      name: "Two-factor",
+      instructions: "Enter the code from your app",
+      fields: [{ text: "Code: ", echo: true }],
+    });
+    if (answer.kind !== "responses" || answer.values[0] !== "123456") {
+      throw fail(
+        "auth_failed",
+        `authentication to ${endpoint} failed after trying keyboard-interactive`,
+      );
+    }
+    return `Welcome to ${host}\r\n`;
+  }
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- each attempt waits for the user's answer
+    const answer = await ask({ kind: "password", endpoint });
+    if (answer.kind !== "secret") throw fail("cancelled", "cancelled");
+    if (answer.value === FAKE_PASSWORD) return `Welcome to ${host}\r\n`;
+  }
+  throw fail("auth_failed", `authentication to ${endpoint} failed after trying password`);
+}
+
 export const fakeSessions: SessionClient = {
-  async open(size, events) {
+  async open(spec, size, events) {
+    const banner = spec.kind === "ssh" ? await fakeSsh(spec, events) : "";
     const id = nextId;
     nextId += 1;
-    return new FakeShell(id, size, events);
+    return new FakeShell(id, size, events, banner);
   },
 };

@@ -1,0 +1,262 @@
+// SPDX-FileCopyrightText: 2026 Tauminus contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import {
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
+
+import type { AnswerSpec, PromptKind } from "@/ipc/index.ts";
+
+import { serverText } from "./server-text.ts";
+
+interface PromptDialogProps {
+  prompt: PromptKind;
+  onAnswer: (answer: AnswerSpec) => void;
+}
+
+const CANCEL: AnswerSpec = { kind: "cancel" };
+
+/**
+ * A question from an SSH connect, shown over its pane. Not a page-wide modal:
+ * other panes stay usable while one connect waits. Escape cancels.
+ */
+export function PromptDialog({ prompt, onAnswer }: PromptDialogProps) {
+  const titleId = useId();
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 p-4">
+      <dialog
+        open
+        aria-labelledby={titleId}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onAnswer(CANCEL);
+          }
+        }}
+        className="static m-0 w-[min(520px,100%)] rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl"
+      >
+        <PromptBody prompt={prompt} titleId={titleId} onAnswer={onAnswer} />
+      </dialog>
+    </div>
+  );
+}
+
+/** Moves focus to `ref` once, when the prompt appears. */
+function useInitialFocus(ref: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    ref.current?.focus();
+  }, [ref]);
+}
+
+function PromptBody({ prompt, titleId, onAnswer }: PromptDialogProps & { titleId: string }) {
+  switch (prompt.kind) {
+    case "unknownHostKey":
+      return <HostKeyPrompt prompt={prompt} titleId={titleId} onAnswer={onAnswer} />;
+    case "password":
+      return (
+        <SecretsForm
+          key={`password-${prompt.endpoint}`}
+          title={`Password for ${prompt.endpoint}`}
+          titleId={titleId}
+          fields={[{ text: "Password", echo: false }]}
+          onAnswer={(values) => onAnswer({ kind: "secret", value: values[0] ?? "" })}
+          onCancel={() => onAnswer(CANCEL)}
+        />
+      );
+    case "passphrase":
+      return (
+        <SecretsForm
+          key={`passphrase-${prompt.keyPath}`}
+          title="Passphrase for key"
+          titleId={titleId}
+          detail={<code className="break-all">{prompt.keyPath}</code>}
+          fields={[{ text: "Passphrase", echo: false }]}
+          onAnswer={(values) => onAnswer({ kind: "secret", value: values[0] ?? "" })}
+          onCancel={() => onAnswer(CANCEL)}
+        />
+      );
+    case "keyboardInteractive": {
+      const name = serverText(prompt.name);
+      const instructions = serverText(prompt.instructions);
+      return (
+        <SecretsForm
+          title={name || `Sign in to ${prompt.endpoint}`}
+          titleId={titleId}
+          detail={
+            <>
+              <span className="block text-xs opacity-60">
+                Asked by the server {prompt.endpoint}
+              </span>
+              {instructions && (
+                <span className="mt-1 block whitespace-pre-wrap">{instructions}</span>
+              )}
+            </>
+          }
+          fields={prompt.fields.map((field) => ({
+            text: serverText(field.text) || "Response",
+            echo: field.echo,
+          }))}
+          onAnswer={(values) => onAnswer({ kind: "responses", values })}
+          onCancel={() => onAnswer(CANCEL)}
+        />
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+function HostKeyPrompt({
+  prompt,
+  titleId,
+  onAnswer,
+}: {
+  prompt: Extract<PromptKind, { kind: "unknownHostKey" }>;
+  titleId: string;
+  onAnswer: (answer: AnswerSpec) => void;
+}) {
+  const host = prompt.port === 22 ? prompt.host : `[${prompt.host}]:${prompt.port}`;
+  // Cancel takes focus, so a stray Enter never trusts a key.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useInitialFocus(cancelRef);
+  return (
+    <>
+      <h2 id={titleId} className="mb-2 font-semibold">
+        New host: {host}
+      </h2>
+      <p className="mb-2 opacity-80">
+        Tauminus has not connected to this host before. Check that the fingerprint matches the one
+        your administrator or provider published before you trust it.
+      </p>
+      {prompt.certificateExpected && (
+        <p role="alert" className="mb-2 rounded border border-red-500/60 bg-red-500/10 p-2">
+          A certificate authority is configured for this host, but the host did not present a
+          certificate it signed. Someone may be intercepting the connection. Cancel unless you know
+          why.
+        </p>
+      )}
+      <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dt className="opacity-60">Key type</dt>
+        <dd>{prompt.algorithm}</dd>
+        <dt className="opacity-60">Fingerprint</dt>
+        <dd>
+          <code className="break-all select-all" data-testid="host-key-fingerprint">
+            {prompt.fingerprint}
+          </code>
+        </dd>
+      </dl>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button buttonRef={cancelRef} onClick={() => onAnswer(CANCEL)}>
+          Cancel
+        </Button>
+        <Button onClick={() => onAnswer({ kind: "trustHostKey", remember: false })}>
+          Trust once
+        </Button>
+        <Button primary onClick={() => onAnswer({ kind: "trustHostKey", remember: true })}>
+          Trust and remember
+        </Button>
+      </div>
+    </>
+  );
+}
+
+interface Field {
+  text: string;
+  echo: boolean;
+}
+
+function SecretsForm({
+  title,
+  titleId,
+  detail,
+  fields,
+  onAnswer,
+  onCancel,
+}: {
+  title: string;
+  titleId: string;
+  detail?: ReactNode;
+  fields: readonly Field[];
+  onAnswer: (values: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [values, setValues] = useState(() => fields.map(() => ""));
+  const baseId = useId();
+  const firstRef = useRef<HTMLInputElement>(null);
+  useInitialFocus(firstRef);
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const answer = values;
+    // Drop the secrets from component state as soon as they are sent.
+    setValues(fields.map(() => ""));
+    onAnswer(answer);
+  };
+  return (
+    <form onSubmit={submit}>
+      <h2 id={titleId} className="mb-2 font-semibold">
+        {title}
+      </h2>
+      {detail && <div className="mb-3 opacity-80">{detail}</div>}
+      {fields.map((field, index) => (
+        // oxlint-disable-next-line react/no-array-index-key -- one prompt's fields never reorder
+        <label key={`${baseId}-${index}`} className="mb-3 block">
+          <span className="mb-1 block whitespace-pre-wrap opacity-80">{field.text}</span>
+          <input
+            ref={index === 0 ? firstRef : undefined}
+            type={field.echo ? "text" : "password"}
+            autoComplete="off"
+            spellCheck={false}
+            value={values[index] ?? ""}
+            onChange={(event) => {
+              const next = [...values];
+              next[index] = event.target.value;
+              setValues(next);
+            }}
+            className="w-full rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50"
+          />
+        </label>
+      ))}
+      <div className="flex justify-end gap-2">
+        <Button onClick={onCancel}>Cancel</Button>
+        <Button primary type="submit">
+          Continue
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+function Button({
+  primary = false,
+  type = "button",
+  buttonRef,
+  onClick,
+  children,
+}: {
+  primary?: boolean;
+  type?: "button" | "submit";
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+  onClick?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type={type}
+      onClick={onClick}
+      className={
+        primary
+          ? "rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
+          : "rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+      }
+    >
+      {children}
+    </button>
+  );
+}

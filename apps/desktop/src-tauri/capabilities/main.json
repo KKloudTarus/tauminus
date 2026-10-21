@@ -10,6 +10,8 @@
     "allow-session-write-bytes",
     "allow-session-resize",
     "allow-session-acknowledge",
-    "allow-session-close"
+    "allow-session-close",
+    "allow-ssh-open",
+    "allow-ssh-prompt-reply"
   ]
 }

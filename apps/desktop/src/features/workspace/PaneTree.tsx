@@ -3,6 +3,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { Group, type Layout, Panel, Separator } from "react-resizable-panels";
+import type { SessionSpec } from "@/ipc/index.ts";
 
 import type { TerminalController } from "@/features/terminal/controller.ts";
 import { TerminalView } from "@/features/terminal/TerminalView.tsx";
@@ -11,7 +12,7 @@ import type { LayoutNode, PaneId } from "./layout.ts";
 import type { Tab, Workspace } from "./workspace.ts";
 
 interface PaneTreeProps {
-  workspace: Workspace<TerminalController>;
+  workspace: Workspace<TerminalController, SessionSpec>;
   tab: Tab;
 }
 
@@ -67,7 +68,7 @@ function TerminalPane({
   paneId,
   focused,
 }: {
-  workspace: Workspace<TerminalController>;
+  workspace: Workspace<TerminalController, SessionSpec>;
   paneId: PaneId;
   focused: boolean;
 }) {
