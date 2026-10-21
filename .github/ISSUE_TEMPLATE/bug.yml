@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Bug report
+description: Something does not work as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a local terminal
+        2. Run `...`
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tauminus version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version and shell
+      placeholder: Ubuntu 24.04, zsh 5.9
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `TAUMINUS_LOG=debug` and paste the relevant lines. Remove hostnames and secrets.
+      render: text

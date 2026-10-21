@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Default owner for everything.
+*                                       @nghiadaulau
+
+# Security-sensitive paths: capability grants, CSP, CI, dependency policy.
+/apps/desktop/src-tauri/capabilities/   @nghiadaulau
+/apps/desktop/src-tauri/tauri.conf.json @nghiadaulau
+/.github/                               @nghiadaulau
+/deny.toml                              @nghiadaulau
