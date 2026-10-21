@@ -101,6 +101,43 @@ describe("TerminalController with TerminalView", () => {
     expect(line).toBe("kept-on-screen");
   });
 
+  it("tells the session the new size when the view remounts into a smaller host", async () => {
+    // Inline sizes: these tests run without the app's CSS.
+    const sized = (width: number) => (
+      <div style={{ width, height: 300 }}>
+        <TerminalView controller={controller} />
+      </div>
+    );
+    const { sessions, controller } = setup();
+    const first = await render(sized(600));
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const before = sessions.opened[0]!.size;
+    await first.unmount();
+    // A split halves the pane: the view remounts at half the width.
+    await render(sized(300));
+    await expect
+      .poll(() => sessions.session.resize.mock.calls.at(-1)?.[0].cols ?? before.cols)
+      .toBeLessThan(before.cols);
+    // The same size again is not sent twice.
+    const calls = sessions.session.resize.mock.calls.length;
+    controller.attach(controller.terminal.element!.parentElement!);
+    expect(sessions.session.resize.mock.calls.length).toBe(calls);
+  });
+
+  it("does not start a new session when the view remounts after the session ended", async () => {
+    const { sessions, controller } = setup();
+    const first = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    sessions.events.onExit(3);
+    await first.unmount();
+    // Closing a neighbouring pane remounts this one.
+    await mount(controller);
+    expect(sessions.opened).toHaveLength(1);
+    expect(controller.status).toEqual({ kind: "exited", code: 3 });
+  });
+
   it("sends typed input to the session in order", async () => {
     const { sessions, controller } = setup();
     const screen = await mount(controller);

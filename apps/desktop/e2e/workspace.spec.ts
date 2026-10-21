@@ -76,6 +76,20 @@ test("closes a pane whose shell exits cleanly, and keeps one that fails", async 
   await expect(page.getByRole("status")).toContainText("Process exited with code 3");
 });
 
+test("an ended pane stays ended when a neighbour closes", async ({ page }) => {
+  await typeIn(page, "exit 3");
+  await expect(page.getByRole("status")).toContainText("Process exited with code 3");
+  const ended = await focusedPane(page).getAttribute("data-pane-id");
+  await page.keyboard.press("Control+Shift+D");
+  await expect(panes(page)).toHaveCount(2);
+  await page.keyboard.press("Control+Shift+X");
+  await expect(panes(page)).toHaveCount(1);
+  // The remount must not start a new shell under the old screen.
+  const screen = page.locator(`section[data-pane-id="${ended}"] .xterm-rows`);
+  await expect(page.getByRole("status")).toContainText("Process exited with code 3");
+  await expect(screen).toHaveText(/^\$ exit 3\s*$/);
+});
+
 test("shows the title a program sets", async ({ page }) => {
   await typeIn(page, "title deploy@prod-db-2");
   await expect(tabs(page).first()).toContainText("deploy@prod-db-2");
