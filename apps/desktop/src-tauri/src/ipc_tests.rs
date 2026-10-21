@@ -125,6 +125,28 @@ fn the_webview_cannot_add_a_proxy_command() {
 }
 
 #[test]
+fn ssh_open_refuses_a_proxy_command_before_connecting() {
+    let (app, _dir) = app("open");
+    // The channels are not reached: the route is checked first.
+    let refused = call(
+        &app,
+        "ssh_open",
+        json!({
+            "target": {
+                "destination": {"user": "me", "host": "db", "port": 22},
+                "route": {"kind": "proxyCommand", "command": "id"}
+            },
+            "size": {"cols": 80, "rows": 24},
+            "onOutput": "__CHANNEL__:1",
+            "onExit": "__CHANNEL__:2",
+            "onPrompt": "__CHANNEL__:3"
+        }),
+    );
+    let error = refused.unwrap_err();
+    assert_eq!(error["code"], "invalid_argument", "{error}");
+}
+
+#[test]
 fn an_unreadable_host_file_is_reported_and_left_alone() {
     let dir = std::env::temp_dir().join(format!("tauminus-ipc-broken-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
