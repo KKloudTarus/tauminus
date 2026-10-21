@@ -25,6 +25,11 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tracing.workspace = true
 zeroize.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# killpg for `ssh -G` children that outlive their timeout. Same version as
+# the PTY adapter.
+nix = { version = "0.28", default-features = false, features = ["signal"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
