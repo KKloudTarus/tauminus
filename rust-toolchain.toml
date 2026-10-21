@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# CI and local builds use the same compiler. Bump together with rust-version in
+# Cargo.toml, which stays two minor releases behind.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

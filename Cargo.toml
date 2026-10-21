@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/desktop/src-tauri", "xtask"]
+default-members = ["crates/*", "apps/desktop/src-tauri"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/KKloudTarus/tauminus"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+tauminus-app = { path = "crates/tauminus-app" }
+tauminus-domain = { path = "crates/tauminus-domain" }
+tauminus-pty = { path = "crates/tauminus-pty" }
+
+# External crates. Each one is allowed only in the crates listed in deny.toml [bans].
+anyhow = "1.0.104"
+portable-pty = "0.9.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "=0.0.12"
+tauri = "2.12.5"
+tauri-build = "2.7.4"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", default-features = false }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+dbg_macro = "deny"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+print_stderr = "warn"
+print_stdout = "warn"
+todo = "deny"
+undocumented_unsafe_blocks = "deny"
+unimplemented = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "debuginfo"

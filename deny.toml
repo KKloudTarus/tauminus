@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+# Unmaintained, not vulnerable. Both are proc macros that run only at compile
+# time and arrive through dependencies we cannot drop yet. Review when the
+# parent crates upgrade.
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste: pulled in by specta 2.0.0-rc.25" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: pulled in by gtk-rs 0.18 via Tauri on Linux" },
+]
+
+[licenses]
+# Licenses that can be combined into a GPL-3.0-or-later work, limited to the
+# ones the dependency tree uses today. The original OpenSSL license is left
+# out on purpose: it is incompatible with the GPL.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "GPL-3.0-or-later",
+  "LGPL-2.1-or-later",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# Layer boundaries. A crate listed here may be used only by the crates in its
+# `wrappers` list, so a domain or application crate cannot pull in a driver.
+deny = [
+  { crate = "portable-pty", wrappers = ["tauminus-pty"], reason = "only the PTY adapter talks to the OS pseudo-terminal" },
+  { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
+  { crate = "specta", wrappers = ["tauminus-desktop", "tauri", "tauri-specta", "specta-typescript", "specta-serde", "specta-util"], reason = "IPC types live in the desktop shell" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,22 @@
+{
+  "name": "tauminus",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @tauminus/desktop tauri dev",
+    "build": "pnpm --filter @tauminus/desktop tauri build",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format",
+    "format:check": "pnpm -r format:check",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "hooks:install": "lefthook install"
+  },
+  "devDependencies": {
+    "lefthook": "2.2.2"
+  }
+}

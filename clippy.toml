@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Blocking calls stall tokio worker threads. Use the tokio equivalents, or move
+# the work to a dedicated thread.
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "blocks the async runtime; use tokio::time::sleep" },
+  { path = "std::process::Command::output", reason = "blocks; use tokio::process::Command" },
+]

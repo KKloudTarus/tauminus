@@ -1,0 +1,351 @@
+// SPDX-FileCopyrightText: 2026 Tauminus contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { type ITheme, Terminal } from "@xterm/xterm";
+
+import { type SessionClient, SessionCommandError, type TerminalSession } from "@/ipc/index.ts";
+
+import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
+import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
+import { type RendererPreference, chooseRenderer } from "./renderer.ts";
+import { webglBudget } from "./webgl-budget.ts";
+
+/** Delay before retrying an acknowledgement whose IPC call failed. */
+const ACK_RETRY_MS = 100;
+
+const FONT_FAMILY =
+  '"JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+
+export type TerminalStatus =
+  | { kind: "starting" }
+  | { kind: "running" }
+  | { kind: "exited"; code: number | null }
+  | { kind: "failed"; message: string };
+
+type Listener = () => void;
+
+/**
+ * One terminal and the session behind it, independent of React.
+ *
+ * Views attach and detach; they never open or close the session. A pane can
+ * move between tabs or splits, which remounts its view, without killing the
+ * shell or losing the screen. The session opens on the first attach, once the
+ * grid size is known, and closes only on `dispose`.
+ *
+ * Output bytes go from the session channel straight into xterm.js. Only the
+ * coarse status is observable state.
+ */
+export class TerminalController {
+  readonly terminal: Terminal;
+  readonly #sessions: SessionClient;
+  readonly #fit = new FitAddon();
+  readonly #search = new SearchAddon();
+  readonly #acks = new AckBatcher(ACK_THRESHOLD_BYTES);
+  readonly #input: InputQueue;
+  readonly #listeners = new Set<Listener>();
+  #status: TerminalStatus = { kind: "starting" };
+  #session: TerminalSession | undefined;
+  #opening = false;
+  #disposed = false;
+  /**
+   * Parsed bytes not yet acknowledged to the backend: waiting for `open` to
+   * resolve, for the ack in flight to finish, or for a retry after a failure.
+   * Never dropped, because a lost acknowledgement can leave the session
+   * paused for good.
+   */
+  #unacknowledged = 0;
+  #ackInFlight = false;
+  #ackRetry: ReturnType<typeof setTimeout> | undefined;
+  #host: HTMLElement | undefined;
+  #webgl: WebglAddon | undefined;
+  /**
+   * Set once this terminal gives up WebGL, after a context loss or an
+   * eviction from the budget. It stays on the DOM renderer from then on:
+   * loading a second WebGL addon into the same terminal renders nothing on
+   * WebKitGTK.
+   */
+  #webglRetired = false;
+  #observer: ResizeObserver | undefined;
+  #frame = 0;
+
+  constructor(sessions: SessionClient, options: { renderer?: RendererPreference } = {}) {
+    this.#sessions = sessions;
+    this.#webglRetired =
+      chooseRenderer(options.renderer ?? "auto", globalThis.navigator?.userAgent ?? "") === "dom";
+    this.terminal = new Terminal({
+      allowProposedApi: true,
+      cursorBlink: true,
+      fontFamily: FONT_FAMILY,
+      fontSize: 13,
+      scrollback: 10_000,
+    });
+    this.terminal.loadAddon(this.#fit);
+    this.terminal.loadAddon(this.#search);
+    this.terminal.loadAddon(new Unicode11Addon());
+    this.terminal.unicode.activeVersion = "11";
+
+    this.#input = new InputQueue(
+      {
+        writeText: (data) => this.#session?.write(data) ?? Promise.resolve(),
+        writeBytes: (data) => this.#session?.writeBytes(data) ?? Promise.resolve(),
+      },
+      ignoreEndedSession,
+    );
+    this.terminal.onData((data) => this.#input.push({ kind: "text", data }));
+    this.terminal.onBinary((data) =>
+      this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
+    );
+  }
+
+  get status(): TerminalStatus {
+    return this.#status;
+  }
+
+  get search(): SearchAddon {
+    return this.#search;
+  }
+
+  get rendererKind(): "webgl" | "dom" {
+    return this.#webgl ? "webgl" : "dom";
+  }
+
+  /** For `useSyncExternalStore`. */
+  subscribe = (listener: Listener): (() => void) => {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  };
+
+  getStatus = (): TerminalStatus => this.#status;
+
+  /** Shows the terminal in `host`. Opens the session on the first call. */
+  attach(host: HTMLElement): void {
+    if (this.#disposed) {
+      return;
+    }
+    if (this.#host && this.#host !== host) {
+      this.detach();
+    }
+    this.#host = host;
+    this.terminal.options.theme = themeFrom(host);
+    if (this.terminal.element) {
+      host.append(this.terminal.element);
+    } else {
+      this.terminal.open(host);
+    }
+    this.#acquireWebgl();
+    this.#fit.fit();
+    this.#observer = new ResizeObserver(() => this.#scheduleFit());
+    this.#observer.observe(host);
+    if (!this.#session && !this.#opening) {
+      this.#open();
+    }
+  }
+
+  /** Removes the terminal from its host. The session keeps running. */
+  detach(): void {
+    this.#observer?.disconnect();
+    this.#observer = undefined;
+    cancelAnimationFrame(this.#frame);
+    this.terminal.element?.remove();
+    this.#host = undefined;
+  }
+
+  focus(): void {
+    this.terminal.focus();
+  }
+
+  /** Closes the session and frees the terminal. The controller is unusable after. */
+  dispose(): void {
+    if (this.#disposed) {
+      return;
+    }
+    this.#disposed = true;
+    this.detach();
+    clearTimeout(this.#ackRetry);
+    this.#retireWebgl();
+    this.#input.close();
+    this.#session?.close().catch(ignoreEndedSession);
+    this.#session = undefined;
+    this.terminal.dispose();
+    this.#listeners.clear();
+  }
+
+  #open(): void {
+    this.#opening = true;
+    this.#sessions
+      .open(
+        { cols: this.terminal.cols, rows: this.terminal.rows },
+        {
+          onOutput: (data) => this.#write(data),
+          onExit: (code) => {
+            this.#session = undefined;
+            this.#setStatus({ kind: "exited", code });
+          },
+        },
+      )
+      .then((opened) => {
+        this.#opening = false;
+        if (this.#disposed) {
+          opened.close().catch(ignoreEndedSession);
+          return;
+        }
+        this.#session = opened;
+        if (this.#status.kind === "starting") {
+          this.#setStatus({ kind: "running" });
+        }
+        this.#flushAcknowledgements();
+        // The grid may have changed while the session was opening.
+        this.#resizeSession();
+      })
+      .catch((error: unknown) => {
+        this.#opening = false;
+        if (!this.#disposed) {
+          this.#setStatus({ kind: "failed", message: errorMessage(error) });
+        }
+      });
+  }
+
+  #write(data: Uint8Array): void {
+    if (this.#disposed) {
+      return;
+    }
+    this.terminal.write(data, () => {
+      const ready = this.#acks.add(data.byteLength);
+      if (ready > 0) {
+        this.#acknowledge(ready);
+      }
+    });
+  }
+
+  #acknowledge(bytes: number): void {
+    this.#unacknowledged += bytes;
+    this.#flushAcknowledgements();
+  }
+
+  /** Sends everything unacknowledged, with at most one ack call in flight. */
+  #flushAcknowledgements(): void {
+    const session = this.#session;
+    if (!session || this.#ackInFlight || this.#unacknowledged === 0 || this.#disposed) {
+      return;
+    }
+    const bytes = this.#unacknowledged;
+    this.#unacknowledged = 0;
+    this.#ackInFlight = true;
+    session.acknowledge(bytes).then(
+      () => {
+        this.#ackInFlight = false;
+        this.#flushAcknowledgements();
+      },
+      (error: unknown) => {
+        this.#ackInFlight = false;
+        if (isEndedSession(error)) {
+          return;
+        }
+        console.error("acknowledgement failed; retrying", error);
+        this.#unacknowledged += bytes;
+        clearTimeout(this.#ackRetry);
+        this.#ackRetry = setTimeout(() => this.#flushAcknowledgements(), ACK_RETRY_MS);
+      },
+    );
+  }
+
+  /** Takes a WebGL slot from the shared budget, loading the addon on first use. */
+  #acquireWebgl(): void {
+    if (this.#webglRetired) {
+      return;
+    }
+    this.#webgl ??= this.#loadWebgl();
+    if (this.#webgl) {
+      webglBudget.acquire(this, () => this.#retireWebgl());
+    }
+  }
+
+  #loadWebgl(): WebglAddon | undefined {
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => this.#retireWebgl());
+      this.terminal.loadAddon(webgl);
+      return webgl;
+    } catch {
+      // No WebGL2 context: xterm.js keeps the DOM renderer.
+      this.#webglRetired = true;
+      return undefined;
+    }
+  }
+
+  /** Moves this terminal to the DOM renderer for good. Idempotent. */
+  #retireWebgl(): void {
+    webglBudget.release(this);
+    this.#webglRetired = true;
+    const webgl = this.#webgl;
+    this.#webgl = undefined;
+    webgl?.dispose();
+  }
+
+  /** Resize events arrive in bursts while a window is dragged; apply one per frame. */
+  #scheduleFit(): void {
+    cancelAnimationFrame(this.#frame);
+    this.#frame = requestAnimationFrame(() => {
+      const proposed = this.#fit.proposeDimensions();
+      if (
+        !proposed ||
+        (proposed.cols === this.terminal.cols && proposed.rows === this.terminal.rows)
+      ) {
+        return;
+      }
+      this.#fit.fit();
+      this.#resizeSession();
+    });
+  }
+
+  #resizeSession(): void {
+    this.#session
+      ?.resize({ cols: this.terminal.cols, rows: this.terminal.rows })
+      .catch(ignoreEndedSession);
+  }
+
+  #setStatus(status: TerminalStatus): void {
+    this.#status = status;
+    for (const listener of this.#listeners) {
+      listener();
+    }
+  }
+}
+
+function themeFrom(element: HTMLElement): ITheme {
+  const style = getComputedStyle(element);
+  const read = (name: string) => style.getPropertyValue(name).trim() || undefined;
+  const theme: ITheme = {};
+  const background = read("--terminal-background");
+  const foreground = read("--terminal-foreground");
+  const cursor = read("--terminal-cursor");
+  const selection = read("--terminal-selection");
+  if (background) theme.background = background;
+  if (foreground) theme.foreground = foreground;
+  if (cursor) theme.cursor = cursor;
+  if (selection) theme.selectionBackground = selection;
+  return theme;
+}
+
+/**
+ * Writes and acknowledgements race with session exit, so `not_found` is
+ * expected and ignored. Anything else is a bug worth seeing in the console.
+ */
+function ignoreEndedSession(error: unknown): void {
+  if (isEndedSession(error)) {
+    return;
+  }
+  console.error("terminal session command failed", error);
+}
+
+function isEndedSession(error: unknown): boolean {
+  return error instanceof SessionCommandError && error.code === "not_found";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

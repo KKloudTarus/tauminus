@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-pty"
+description = "Local pseudo-terminal adapter for Tauminus, built on portable-pty"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+portable-pty.workspace = true
+tauminus-app.workspace = true
+tauminus-domain.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Already in the tree through portable-pty; used for its safe killpg wrapper.
+nix = { version = "0.28", default-features = false, features = ["signal"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+
+[lints]
+workspace = true
