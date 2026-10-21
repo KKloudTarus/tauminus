@@ -176,6 +176,22 @@ describe("TerminalController with TerminalView", () => {
       .toEqual([[ACK_THRESHOLD_BYTES + 5]]);
   });
 
+  it("drops a repeat count that would hang the terminal and keeps parsing", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const payload = `${"x".repeat(5000)}\r\nA\u001b[2147483647b\r\nafter\u001b[3b`;
+    sessions.events.onOutput(new TextEncoder().encode(payload));
+    await expect
+      .poll(() => {
+        const { buffer } = controller.terminal;
+        const last = buffer.active.getLine(buffer.active.baseY + buffer.active.cursorY);
+        return last?.translateToString(true);
+      })
+      .toBe("afterrrr");
+  });
+
   it("shows the exit code when the shell ends", async () => {
     const { sessions, controller } = setup();
     const screen = await mount(controller);
