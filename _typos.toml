@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [files]
-extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/"]
+extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/", "crates/tauminus-ssh/tests/fixtures/"]
 
 [default.extend-words]
 # Proper names and protocol terms

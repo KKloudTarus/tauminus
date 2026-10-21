@@ -15,6 +15,7 @@ path = [
   ".gitignore",
   "LICENSE",
   ".github/**/*.md",
+  "crates/tauminus-ssh/tests/fixtures/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Tauminus contributors"
