@@ -15,7 +15,10 @@ apps/desktop/
   src-tauri/               Tauri shell: composition root, IPC commands, wire types
   src/
     app/                   React root, global styles, design tokens
-    features/terminal/     TerminalController, TerminalView, input queue, ack batching
+    features/terminal/     TerminalController, TerminalView, input queue, ack batching, renderer choice
+    features/workspace/    tabs, split-pane layout tree, PaneTree and TabBar views
+    features/keymap/       shortcut parsing, defaults per platform, user overrides
+    app/                   AppShell (actions, theme, palette state), App, CommandPalette
     ipc/                   the only code that imports @tauri-apps; bindings.ts is generated
 xtask/                     `cargo xtask ci`, `deps`, `bindings`
 docs/                      roadmap, ADRs, benchmarks
@@ -136,6 +139,26 @@ every session.
 | Shell reaped or alive (`ProcessGuard`) | `Mutex<bool>`, held while signalling and while reaping |
 | PTY master | `Mutex`, shared by the writer (resize) and the terminator (foreground group) |
 
+### Workspace
+
+`Workspace` holds the tabs and, per tab, an immutable split-pane tree
+(`layout.ts`) with these invariants: a split has at least two children; its
+sizes are positive and sum to 100; no split repeats its parent's direction
+(such children are flattened); ids are unique. A seeded property test applies
+2,000 random sequences of splits, closes, and resizes and checks every
+invariant after each step. Spatial focus (`neighbor`) maps the tree to unit
+rectangles and picks the pane beyond the current edge with the smallest gap,
+then the largest overlap.
+
+Limits: 16 panes per tab, 64 panes in total to match the backend's session
+limit. A pane whose shell exits with code 0 closes itself; any other exit
+stays open so its message can be read.
+
+App shortcuts avoid keys the shell needs: Ctrl+Shift on Linux and Windows,
+Cmd on macOS. Plain Ctrl+K stays with the shell (kill to end of line), so the
+palette is Ctrl+Shift+P, or Cmd+K on macOS. Chords match on
+`KeyboardEvent.code`, so an input method such as Telex cannot move them.
+
 ### Complexity
 
 | Operation | Time | Space |
@@ -145,6 +168,8 @@ every session.
 | Flow control update | O(1) | O(1) |
 | Input queue, n bytes in m chunks | O(n + m) | O(n) until sent |
 | WebGL budget, acquire or release | O(1) | O(12) |
+| Split, close, resize, or spatial focus in a tab | O(n), n ≤ 31 nodes | O(n) for the rebuilt path |
+| Shortcut lookup per keystroke | O(1) | O(b) for b bindings |
 
 ### The view side
 

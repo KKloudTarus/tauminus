@@ -36,10 +36,10 @@ Terminal
 - [ ] Clickable links through a vetted opener (http and https only)
 - [x] Output path: Rust coalesces output (immediate after a quiet period, otherwise every 8 ms or at 64 KiB) and sends raw bytes through `tauri::ipc::Channel`
 - [x] Backpressure: pause reading above 256 KiB unacknowledged, resume below 96 KiB
-- [ ] Tabs, split panes, close and reorder
-- [ ] Command palette (`Ctrl+K` / `Cmd+K`)
-- [ ] Themes shared by UI and terminal through CSS variables, light and dark
-- [ ] Keymap layer with defaults and user overrides
+- [x] Tabs, split panes, close and reorder (drag and drop, shortcuts)
+- [x] Command palette (`Ctrl+Shift+P`; `Cmd+K` on macOS, since plain `Ctrl+K` belongs to the shell)
+- [x] Themes shared by UI and terminal through CSS variables: system, light, dark
+- [x] Keymap layer with defaults per platform and validated user overrides
 - [ ] Vietnamese Telex and VNI input through the OS IME
 
 SSH
