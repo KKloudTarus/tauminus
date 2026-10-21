@@ -10,9 +10,12 @@ saveExact: true
 # pnpm 12 refuses versions published within its default minimum release age;
 # pins that were installed inside that window are listed below. Upgrades
 # arrive through Dependabot after a 7-day cooldown.
-# No dependency may run install scripts. pnpm blocks them by default; this
-# includes lefthook, whose postinstall would install git hooks without asking.
-# Hooks are opt-in through `pnpm hooks:install`.
+# No dependency may run install scripts. lefthook is denied explicitly: its
+# postinstall would install git hooks without asking, and CI fails on build
+# scripts that are blocked without a decision. Hooks are opt-in through
+# `pnpm hooks:install`.
+allowBuilds:
+  lefthook: false
 minimumReleaseAgeExclude:
   - '@tauri-apps/cli-darwin-arm64@2.12.4'
   - '@tauri-apps/cli-darwin-x64@2.12.4'
