@@ -89,7 +89,9 @@ impl PtyLauncher for NativePtyLauncher {
         let terminator = PtyTerminator {
             guard: Arc::clone(&guard),
             killer: Mutex::new(child.clone_killer()),
+            #[cfg(unix)]
             shell_pid: child.process_id().and_then(|pid| i32::try_from(pid).ok()),
+            #[cfg(unix)]
             master: Arc::clone(&master),
         };
 
@@ -135,7 +137,10 @@ impl PtyLauncher for NativePtyLauncher {
 struct PtyTerminator {
     guard: Arc<process::ProcessGuard>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    #[cfg(unix)]
     shell_pid: Option<i32>,
+    /// Read for the terminal's foreground process group, which only Unix has.
+    #[cfg(unix)]
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
 }
 

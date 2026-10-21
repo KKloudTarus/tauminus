@@ -35,6 +35,7 @@ async fn collect_until_exit(events: &mut mpsc::Receiver<TerminalEvent>) -> (Vec<
 }
 
 /// Reads events until `needle` appears in the output.
+#[cfg(unix)]
 async fn read_until(events: &mut mpsc::Receiver<TerminalEvent>, needle: &str) -> String {
     let mut output = Vec::new();
     tokio::time::timeout(TIMEOUT, async {
