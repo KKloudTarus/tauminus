@@ -200,9 +200,8 @@ describe("TerminalController with TerminalView", () => {
       const { sessions, controller } = setup();
       const screen = await mount(controller);
       sessions.resolveOpen();
-      expect(controller.rendererKind, "headless Chromium provides WebGL2 via SwiftShader").toBe(
-        "webgl",
-      );
+      // The addon loads on demand; headless Chromium provides WebGL2 via SwiftShader.
+      await expect.poll(() => controller.rendererKind).toBe("webgl");
       const loseContext = [...screen.container.querySelectorAll("canvas")]
         .map((canvas) => canvas.getContext("webgl2")?.getExtension("WEBGL_lose_context"))
         .find((extension) => extension);

@@ -19,5 +19,8 @@ export default defineConfig({
   },
   build: {
     sourcemap: true,
+    // A size budget rather than a silenced warning: the app loads from disk,
+    // so the cost is parse time, and growth past 800 kB should be noticed.
+    chunkSizeWarningLimit: 800,
   },
 });
