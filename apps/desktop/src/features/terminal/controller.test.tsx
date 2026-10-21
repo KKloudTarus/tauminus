@@ -16,6 +16,7 @@ import {
 
 import { ACK_THRESHOLD_BYTES } from "./ack-batcher.ts";
 import { TerminalController } from "./controller.ts";
+import { OutputScheduler } from "./output-scheduler.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
 /** A session client the test drives by hand. */
@@ -58,9 +59,9 @@ class FakeSessions implements SessionClient {
 const bytes = (length: number) => new Uint8Array(length).fill(0x61);
 const controllers: TerminalController[] = [];
 
-function setup() {
+function setup(options: ConstructorParameters<typeof TerminalController>[1] = {}) {
   const sessions = new FakeSessions();
-  const controller = new TerminalController(sessions);
+  const controller = new TerminalController(sessions, options);
   controllers.push(controller);
   return { sessions, controller };
 }
@@ -171,9 +172,31 @@ describe("TerminalController with TerminalView", () => {
     expect(sessions.session.acknowledge).not.toHaveBeenCalled();
 
     sessions.resolveOpen();
+    // Output reaches xterm.js in slices, so the ack covers the first
+    // threshold's worth; the 5 bytes left over stay below the threshold.
     await expect
       .poll(() => sessions.session.acknowledge.mock.calls)
-      .toEqual([[ACK_THRESHOLD_BYTES + 5]]);
+      .toEqual([[ACK_THRESHOLD_BYTES]]);
+  });
+
+  it("keeps other panes' output flowing when a pane closes in the middle of its turn", async () => {
+    // A watchdog too slow to matter: only closing can hand the turn on.
+    const output = new OutputScheduler({ slice: 4096, direct: 4096, turnMs: 6, stallMs: 60_000 });
+    const first = setup({ output });
+    const second = setup({ output });
+    await mount(first.controller);
+    await mount(second.controller);
+    first.sessions.resolveOpen();
+    second.sessions.resolveOpen();
+    first.sessions.events.onOutput(bytes(4 * ACK_THRESHOLD_BYTES));
+    second.sessions.events.onOutput(bytes(ACK_THRESHOLD_BYTES));
+    const writes = vi.spyOn(first.controller.terminal, "write");
+    first.controller.dispose();
+    await expect
+      .poll(() => second.sessions.session.acknowledge.mock.calls)
+      .toEqual([[ACK_THRESHOLD_BYTES]]);
+    // What the closed pane still had queued never reaches its terminal.
+    expect(writes).not.toHaveBeenCalled();
   });
 
   it("drops a repeat count that would hang the terminal and keeps parsing", async () => {
@@ -181,6 +204,7 @@ describe("TerminalController with TerminalView", () => {
     await mount(controller);
     sessions.resolveOpen();
     await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    // Padded past the direct-write size so it takes a scheduled turn.
     const payload = `${"x".repeat(5000)}\r\nA\u001b[2147483647b\r\nafter\u001b[3b`;
     sessions.events.onOutput(new TextEncoder().encode(payload));
     await expect
