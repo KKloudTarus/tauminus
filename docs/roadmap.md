@@ -40,7 +40,7 @@ Terminal
 - [x] Command palette (`Ctrl+Shift+P`; `Cmd+K` on macOS, since plain `Ctrl+K` belongs to the shell)
 - [x] Themes shared by UI and terminal through CSS variables: system, light, dark
 - [x] Keymap layer with defaults per platform and validated user overrides
-- [ ] Vietnamese Telex and VNI input through the OS IME
+- [x] Vietnamese Telex and VNI input through the OS IME (Telex tested live with ibus-unikey on WebKitGTK; macOS and Windows input methods not yet tried by hand)
 
 SSH
 
