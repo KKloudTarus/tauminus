@@ -18,8 +18,9 @@ leave open:
 
 Pre-alpha, working toward v0.1. Local shells, SSH (keys, certificates,
 agent, passwords, ProxyJump, ProxyCommand, SOCKS5 and HTTP proxies, OpenSSH
-`known_hosts` rules), tabs, split panes, the command palette, and saved hosts
-with `~/.ssh/config` import work today. The prod guard comes in v0.2.
+`known_hosts` rules), tabs, split panes, the command palette, saved hosts
+with `~/.ssh/config` import, Ctrl+click links, and input methods such as
+Vietnamese Telex work today. The prod guard comes in v0.2.
 
 ## Installing an unsigned build
 
