@@ -7,7 +7,12 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
-import { type SessionClient, SessionCommandError, type TerminalSession } from "@/ipc/index.ts";
+import {
+  type GridSize,
+  type SessionClient,
+  SessionCommandError,
+  type TerminalSession,
+} from "@/ipc/index.ts";
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
@@ -50,7 +55,12 @@ export class TerminalController {
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
-  #opening = false;
+  /**
+   * Set by the first attach. A view that remounts after the session ended
+   * must show the ended session, not quietly start a new one; only `retry`
+   * opens again.
+   */
+  #started = false;
   #disposed = false;
   /**
    * Parsed bytes not yet acknowledged to the backend: waiting for `open` to
@@ -73,6 +83,12 @@ export class TerminalController {
   #webglLoading = false;
   #observer: ResizeObserver | undefined;
   #frame = 0;
+  /**
+   * The grid size the session last heard. Compared with the terminal's own
+   * size, not with the host's: a remount refits the terminal before any
+   * observer runs, and the session must still be told.
+   */
+  #sentSize: GridSize | undefined;
 
   constructor(sessions: SessionClient, options: { renderer?: RendererPreference } = {}) {
     this.#sessions = sessions;
@@ -167,9 +183,11 @@ export class TerminalController {
     }
     this.#acquireWebgl();
     this.#fit.fit();
+    this.#resizeSession();
     this.#observer = new ResizeObserver(() => this.#scheduleFit());
     this.#observer.observe(host);
-    if (!this.#session && !this.#opening) {
+    if (!this.#started) {
+      this.#started = true;
       this.#open();
     }
   }
@@ -204,10 +222,10 @@ export class TerminalController {
   }
 
   #open(): void {
-    this.#opening = true;
+    this.#sentSize = { cols: this.terminal.cols, rows: this.terminal.rows };
     this.#sessions
       .open(
-        { cols: this.terminal.cols, rows: this.terminal.rows },
+        this.#sentSize,
         {
           onOutput: (data) => this.#write(data),
           onExit: (code) => {
@@ -217,7 +235,6 @@ export class TerminalController {
         },
       )
       .then((opened) => {
-        this.#opening = false;
         if (this.#disposed) {
           opened.close().catch(ignoreEndedSession);
           return;
@@ -231,7 +248,6 @@ export class TerminalController {
         this.#resizeSession();
       })
       .catch((error: unknown) => {
-        this.#opening = false;
         if (!this.#disposed) {
           this.#setStatus({ kind: "failed", message: errorMessage(error) });
         }
@@ -342,21 +358,21 @@ export class TerminalController {
     cancelAnimationFrame(this.#frame);
     this.#frame = requestAnimationFrame(() => {
       const proposed = this.#fit.proposeDimensions();
-      if (
-        !proposed ||
-        (proposed.cols === this.terminal.cols && proposed.rows === this.terminal.rows)
-      ) {
-        return;
+      if (!proposed) return;
+      if (proposed.cols !== this.terminal.cols || proposed.rows !== this.terminal.rows) {
+        this.#fit.fit();
       }
-      this.#fit.fit();
       this.#resizeSession();
     });
   }
 
+  /** Tells the session the grid size, once per change. */
   #resizeSession(): void {
-    this.#session
-      ?.resize({ cols: this.terminal.cols, rows: this.terminal.rows })
-      .catch(ignoreEndedSession);
+    const session = this.#session;
+    const { cols, rows } = this.terminal;
+    if (!session || (this.#sentSize?.cols === cols && this.#sentSize.rows === rows)) return;
+    this.#sentSize = { cols, rows };
+    session.resize({ cols, rows }).catch(ignoreEndedSession);
   }
 
   #setStatus(status: TerminalStatus): void {
