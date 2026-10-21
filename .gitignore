@@ -1,0 +1,19 @@
+# Local assistant tooling, never committed
+.claude/
+CLAUDE.md
+AGENTS.md
+.mcp.json
+
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
