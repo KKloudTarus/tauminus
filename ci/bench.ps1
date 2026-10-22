@@ -52,6 +52,11 @@ function Get-Tree([int] $Root) {
 # Absolute: the app's shells start in the home directory, not here.
 $Tools = (Resolve-Path $Tools).Path
 $env:PATH = "$Tools;$env:PATH"
+# On Windows the shells take PATH from the registry, as a fresh login would
+# (portable-pty's get_base_env), so the tools go on the user's Path there.
+# The runner is thrown away after the job.
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$Tools;$userPath", 'User')
 $env:TAUMINUS_BENCH_OUT = $report
 Set-Content -Path (Join-Path $Out 'launched_ms') -Value (Now-Ms)
 $process = Start-Process -FilePath $App -PassThru -RedirectStandardError (Join-Path $Out 'app.log')
