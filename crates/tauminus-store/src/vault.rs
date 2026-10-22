@@ -559,6 +559,9 @@ impl OpenVault {
     }
 }
 
+/// How long a save waits for another process's save.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// An exclusive lock on `<vault>.lock`, held until the handle drops. The
 /// lock file holds nothing; it only orders writers.
 fn lock_file(path: &Path) -> Result<std::fs::File, VaultError> {
@@ -578,7 +581,8 @@ fn lock_file(path: &Path) -> Result<std::fs::File, VaultError> {
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     let lock = options.open(PathBuf::from(name))?;
     // Bounded: a writer stuck elsewhere must not hang every vault call here.
-    for _ in 0..50 {
+    let deadline = std::time::Instant::now() + LOCK_WAIT;
+    while std::time::Instant::now() < deadline {
         match lock.try_lock() {
             Ok(()) => return Ok(lock),
             Err(std::fs::TryLockError::WouldBlock) => {
