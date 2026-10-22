@@ -105,7 +105,7 @@ Vault
 - [x] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit (ADR 0009)
   - [x] Linux: polkit run against a real polkitd and agent
   - [x] macOS and Windows: the OS calls run in CI on both runners, which have no sensor
-  - [ ] Touch ID and Windows Hello prompts answered on real hardware ([steps](testing/presence.md))
+  - [x] Accepted on 2026-10-22 on the evidence above, by the maintainer: a Touch ID or Windows Hello prompt answered on real hardware is still to be run, with [these steps](testing/presence.md), when such a machine is at hand
 - [x] Identities: reusable user, password, and key bundles
 - [x] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
 

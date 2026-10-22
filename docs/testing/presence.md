@@ -52,6 +52,13 @@ Build and start it (`pnpm tauri dev` in `apps/desktop`), then:
    `"keychainPresence"` to `"keychain"`. Start the app: unlocking with the
    keychain fails, and the master password still unlocks.
 
+## Status
+
+On 2026-10-22 the maintainer accepted v0.2's biometric unlock on the CI
+answers above and the polkit run against a real polkitd and agent. No
+Touch ID or Windows Hello prompt has been answered by a person yet; record
+the first such run here.
+
 ## Results
 
 | Date | Machine and OS | Sensor | Step 1 | Step 2 | Notes |
