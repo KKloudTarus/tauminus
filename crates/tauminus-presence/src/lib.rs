@@ -121,6 +121,29 @@ fn ask_available() -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Runs the OS's own calls (`LocalAuthentication`, `UserConsentVerifier`,
+    /// polkit over D-Bus) on whatever machine runs the tests. CI runners
+    /// have no sensor and no agent: the check must say so, and must not let
+    /// an unlock through.
+    #[test]
+    fn the_os_check_runs_and_refuses_where_it_cannot_ask() {
+        let presence = OsPresence::new();
+        assert_ne!(presence.name(), "");
+        let available = presence.available();
+        // Which way this machine went, for the CI log.
+        #[expect(clippy::print_stdout, reason = "the test reports what the OS answered")]
+        {
+            println!("{}: available {available:?}", presence.name());
+        }
+        if let Err(reason) = available {
+            assert_ne!(reason, "");
+            assert!(
+                presence.confirm(Purpose::Unlock).is_err(),
+                "an unavailable check confirmed presence"
+            );
+        }
+    }
+
     #[test]
     fn availability_is_kept_for_a_while_then_asked_again() {
         let presence = OsPresence::new();
