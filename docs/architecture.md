@@ -231,6 +231,16 @@ password are tried on the last hop only, before any prompt. Secrets go into
 the backend and never come back to the view. Details in
 [ADR 0007](adr/0007-vault.md).
 
+An identity's key can be pasted (import) or generated in the backend:
+Ed25519 by default, ECDSA P-256/384/521, or RSA 3072/4096. A generated key
+is stored without a passphrase, since the vault encrypts it. "Install on
+host" adds the public key to `~/.ssh/authorized_keys` on a saved host, as
+`ssh-copy-id` does: the client signs in with that host's own settings and
+prompts, opens an exec channel running `sh -s`, and sends a script on
+stdin, so nothing is quoted twice. The key line is checked to hold nothing
+a shell reads inside single quotes. The script creates `~/.ssh` (0700) and
+the file (0600) when missing and adds the line once.
+
 Costs: unlocking runs Argon2id once (64 MiB, about 0.3 s) off the async
 workers. Listing, saving, and connecting decrypt the identity records, O(n)
 for n ≤ 1000 identities, and a save rewrites the file.
