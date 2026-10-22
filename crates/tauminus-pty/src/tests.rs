@@ -362,6 +362,35 @@ mod windows {
         assert_eq!(code, Some(7));
     }
 
+    /// An interactive cmd.exe prints its prompt only once the cursor query is
+    /// answered; the app's input path must not drop that answer.
+    #[tokio::test]
+    async fn an_interactive_shell_prompts_after_the_cursor_query_is_answered() {
+        let mut handle = NativePtyLauncher
+            .launch(&shell("cmd.exe", &[]), TerminalSize::default())
+            .unwrap();
+        let mut output = Vec::new();
+        let prompted = tokio::time::timeout(TIMEOUT, async {
+            while let Some(TerminalEvent::Output(chunk)) = handle.events.recv().await {
+                if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                    handle
+                        .input
+                        .send(TerminalInput::Data(b"\x1b[1;1R".to_vec()))
+                        .await
+                        .expect("pty accepts input");
+                }
+                output.extend(chunk);
+                if output.contains(&b'>') {
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+        assert_eq!(prompted, Ok(true), "{}", String::from_utf8_lossy(&output));
+        handle.terminator.terminate();
+    }
+
     #[tokio::test]
     async fn terminate_ends_a_running_shell() {
         let mut handle = NativePtyLauncher

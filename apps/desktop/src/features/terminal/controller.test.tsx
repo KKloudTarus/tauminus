@@ -179,6 +179,29 @@ describe("TerminalController with TerminalView", () => {
       .toEqual([[ACK_THRESHOLD_BYTES]]);
   });
 
+  it("answers a cursor query that arrives before the session finishes opening", async () => {
+    // Windows' ConPTY asks for the cursor position at startup and holds the
+    // shell until the answer comes; it can come before `open` resolves.
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.events.onOutput(new TextEncoder().encode("\u001b[6n"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sessions.session.write).not.toHaveBeenCalled();
+    sessions.resolveOpen();
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data.replace("\u001b", "ESC")))
+      .toEqual([expect.stringMatching(/^ESC\[\d+;\d+R$/)]);
+  });
+
+  it("drops input typed before a session that fails to open", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    controller.terminal.input("ls\r");
+    sessions.rejectOpen(new SessionCommandError({ code: "launch_failed", message: "no shell" }));
+    await vi.waitFor(() => expect(controller.status.kind).toBe("failed"));
+    expect(sessions.session.write).not.toHaveBeenCalled();
+  });
+
   it("keeps other panes' output flowing when a pane closes in the middle of its turn", async () => {
     // A watchdog too slow to matter: only closing can hand the turn on.
     const output = new OutputScheduler({ slice: 4096, direct: 4096, turnMs: 6, stallMs: 60_000 });
