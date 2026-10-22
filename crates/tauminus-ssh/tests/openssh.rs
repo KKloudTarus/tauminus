@@ -1032,3 +1032,133 @@ async fn a_jump_host_never_gets_the_identity() {
         "{error:?}"
     );
 }
+
+#[tokio::test]
+async fn a_generated_key_installed_by_script_then_logs_in() {
+    use tauminus_domain::{KeyKind, PublicKeyLine, install_script};
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let pub_key = client.scratch.path("id.pub");
+    // The server's authorized_keys starts with only `id`.
+    let sshd = Sshd::start(&sshd_bin, &[&pub_key], None, SshdOptions::default());
+    // The script edits $HOME/.ssh/authorized_keys of the user it runs as,
+    // which here is the person running the tests. Point HOME at the
+    // scratch server, whose authorized_keys is that path through a link.
+    let home = sshd.dir.path("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::os::unix::fs::symlink(
+        sshd.dir.path("authorized_keys"),
+        home.join(".ssh/authorized_keys"),
+    )
+    .unwrap();
+    let scratch_home = format!("HOME='{}'\nexport HOME\n", home.display());
+    // RSA 4096 is left out: it signs in as RSA 3072 does, and generating it
+    // in a debug build takes seconds.
+    for kind in [
+        KeyKind::Ed25519,
+        KeyKind::EcdsaP256,
+        KeyKind::EcdsaP384,
+        KeyKind::EcdsaP521,
+        KeyKind::Rsa3072,
+    ] {
+        let generated = tauminus_ssh::generate_key(kind, "tauminus-test").unwrap();
+        let line = PublicKeyLine::parse(&generated.public_key).unwrap();
+        let installer = target(
+            sshd.endpoint(),
+            vec![],
+            Route::Direct,
+            key_auth(std::slice::from_ref(&key)),
+        );
+        let outcome = client
+            .connector
+            .run_script(
+                &installer,
+                prompter(&ScriptedPrompter::trust()),
+                Arc::default(),
+                &format!("{scratch_home}{}", install_script(&line)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, Some(0), "{kind:?}: {}", outcome.output);
+        let options = AuthOptions {
+            methods: vec![AuthMethod::PublicKey],
+            identity_files: vec![client.scratch.path("absent")],
+            identities_only: true,
+        };
+        let only_new = target(sshd.endpoint(), vec![], Route::Direct, options);
+        let mut stream = client
+            .connector
+            .connect_with(
+                &only_new,
+                SIZE(),
+                prompter(&ScriptedPrompter::trust()),
+                identity_credentials(generated.private_key.to_string()),
+            )
+            .await
+            .unwrap();
+        let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+        assert_eq!(code, Some(0), "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_failing_script_reports_its_status_and_output() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    let outcome = client
+        .connector
+        .run_script(
+            &target,
+            prompter(&ScriptedPrompter::trust()),
+            Arc::default(),
+            "echo refused >&2\nexit 7\n",
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome.status, Some(7));
+    assert!(outcome.output.contains("refused"), "{}", outcome.output);
+}
+
+#[tokio::test]
+async fn a_script_that_floods_output_is_cut_at_the_cap() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        client.connector.run_script(
+            &target,
+            prompter(&ScriptedPrompter::trust()),
+            Arc::default(),
+            "yes flood | head -c 4000000\n",
+        ),
+    )
+    .await
+    .expect("returns once the script ends")
+    .unwrap();
+    assert_eq!(outcome.output.len(), 64 * 1024);
+    // The rest is dropped, and the exit status still arrives.
+    assert_eq!(outcome.status, Some(0));
+}

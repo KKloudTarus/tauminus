@@ -86,6 +86,11 @@ export const commands = {
 	/**  Adds or edits an identity. Returns its id. */
 	identitySave: (identity: IdentityEdit) => typedError<string, CommandError>(__TAURI_INVOKE("identity_save", { identity })),
 	identityDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("identity_delete", { id })),
+	/**
+	 *  Adds an identity's public key to `~/.ssh/authorized_keys` on a saved
+	 *  host, signing in as a connect to that host would, prompts included.
+	 */
+	identityInstall: (identity: string, host: string, onPrompt: Channel<PromptRequest>) => typedError<null, CommandError>(__TAURI_INVOKE("identity_install", { identity, host, onPrompt })),
 };
 
 /* Types */
@@ -220,7 +225,7 @@ export type HostsView = {
 
 /**
  *  An edit. Secrets are write-only: leave one out to keep it, send "" to
- *  remove it.
+ *  remove it. `generate` makes a new key in place of `private_key`.
  */
 export type IdentityEdit = {
 	id?: string | null,
@@ -229,6 +234,7 @@ export type IdentityEdit = {
 	password?: string | null,
 	privateKey?: string | null,
 	passphrase?: string | null,
+	generate?: KeyKindSpec | null,
 };
 
 /**  An identity as the view sees it: no secret, only whether one is stored. */
@@ -246,6 +252,9 @@ export type ImportResult = {
 	skipped: SkippedHost[],
 	view: HostsView,
 };
+
+/**  A key Tauminus generates for an identity. */
+export type KeyKindSpec = "ed25519" | "ecdsa-p256" | "ecdsa-p384" | "ecdsa-p521" | "rsa3072" | "rsa4096";
 
 export type KeychainSpec = { kind: "unavailable"; reason: string } | { kind: "off" } | { kind: "on" };
 

@@ -39,4 +39,5 @@ const COMMANDS: &[&str] = &[
     "identities_list",
     "identity_save",
     "identity_delete",
+    "identity_install",
 ];

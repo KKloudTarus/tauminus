@@ -36,6 +36,7 @@
     "allow-vault-set-keychain",
     "allow-identities-list",
     "allow-identity-save",
-    "allow-identity-delete"
+    "allow-identity-delete",
+    "allow-identity-install"
   ]
 }

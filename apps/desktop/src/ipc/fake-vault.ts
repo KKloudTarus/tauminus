@@ -22,20 +22,23 @@ function fail(code: SessionCommandError["code"], message: string): never {
 }
 
 /** The one vault the e2e build shares between the vault and SSH fakes. */
-let shared: (VaultClient & { unlocked(): boolean }) | undefined;
+type FakeVault = VaultClient & { unlocked(): boolean; installed(): string[] };
 
-export function sharedFakeVault(): VaultClient & { unlocked(): boolean } {
+let shared: FakeVault | undefined;
+
+export function sharedFakeVault(): FakeVault {
   shared ??= fakeVault();
   return shared;
 }
 
-export function fakeVault(): VaultClient & { unlocked(): boolean } {
+export function fakeVault(): FakeVault {
   let password: string | undefined;
   let unlocked = false;
   let keychain = false;
   let idleMinutes = 15;
   let next = 1;
   let identities: Stored[] = [];
+  const installed: string[] = [];
   const open = () => {
     if (!unlocked) fail("vault_locked", "the vault is locked");
   };
@@ -93,15 +96,20 @@ export function fakeVault(): VaultClient & { unlocked(): boolean } {
     async saveIdentity(edit) {
       open();
       const old = identities.find((i) => i.id === edit.id);
+      const generated = edit.generate ? `${edit.generate}-${next}` : undefined;
       const stored: Stored = {
         id: edit.id ?? `identity${next++}`,
         name: edit.name.trim(),
         user: edit.user || null,
         password: keep(edit.password, old?.password),
-        privateKey: keep(edit.privateKey, old?.privateKey),
+        privateKey: generated ?? keep(edit.privateKey, old?.privateKey),
         hasPassword: false,
         hasKey: false,
-        publicKey: edit.privateKey ? "ssh-ed25519 AAAAfake" : (old?.publicKey ?? null),
+        publicKey: generated
+          ? `ssh-${edit.generate} AAAAgenerated tauminus-${edit.name.trim()}`
+          : edit.privateKey
+            ? "ssh-ed25519 AAAAfake"
+            : (old?.publicKey ?? null),
       };
       if (!stored.name) fail("invalid_argument", "a name must be 1 to 128 characters");
       stored.hasPassword = stored.password !== undefined;
@@ -109,6 +117,26 @@ export function fakeVault(): VaultClient & { unlocked(): boolean } {
       identities = [...identities.filter((i) => i.id !== stored.id), stored];
       return stored.id;
     },
+    async installKey(identity, host, onPrompt) {
+      open();
+      const found = identities.find((i) => i.id === identity);
+      if (!found?.publicKey) fail("invalid_argument", "this identity has no key to install");
+      // As a connect would: the host's key first.
+      const answer = await onPrompt({
+        kind: "unknownHostKey",
+        host,
+        port: 22,
+        algorithm: "ssh-ed25519",
+        fingerprint: "SHA256:fake",
+        certificateExpected: false,
+      });
+      if (answer.kind !== "trustHostKey") fail("cancelled", "the host key was not trusted");
+      // Then the host's own sign-in, as for a host with no identity.
+      const signIn = await onPrompt({ kind: "password", endpoint: `me@${host}` });
+      if (signIn.kind !== "secret" || !signIn.value) fail("auth_failed", "no password");
+      installed.push(`${host} ${found.publicKey}`);
+    },
+    installed: () => installed,
     async deleteIdentity(id) {
       open();
       identities = identities.filter((i) => i.id !== id);

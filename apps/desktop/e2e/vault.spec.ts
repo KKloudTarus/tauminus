@@ -139,3 +139,45 @@ test("a password change clears the error of a failed one", async ({ page }) => {
   await expect(vault(page).getByText("The master password changed.")).toBeVisible();
   await expect(vault(page).getByRole("alert")).toHaveCount(0);
 });
+
+test("generates a key, shows its public half, and installs it on a host", async ({ page }) => {
+  await sidebar(page).getByRole("button", { name: "New host" }).click();
+  const editor = page.getByRole("dialog", { name: "New host" });
+  await editor.getByLabel("Name").fill("web");
+  await editor.getByLabel("Address").fill("web.test");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Deploy");
+  await form.getByRole("combobox", { name: /^Key/ }).selectOption("ed25519");
+  await expect(form.getByLabel("Private key (OpenSSH)")).toHaveCount(0);
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await expect(list).toContainText("key");
+  await list.getByRole("button", { name: "Edit Deploy" }).click();
+  await expect(vault(page).getByText("ssh-ed25519 AAAAgenerated tauminus-Deploy")).toBeVisible();
+  await vault(page).getByLabel("Host to install the key on").selectOption({ label: "web" });
+  await vault(page).getByRole("button", { name: "Install on host" }).click();
+  await vault(page).getByRole("button", { name: "Trust once" }).click();
+  // Enter in the prompt answers it; it must not submit the identity form.
+  await vault(page).getByLabel("Password", { exact: true }).last().fill("hunter2");
+  await page.keyboard.press("Enter");
+  await expect(vault(page).getByText("The key is in authorized_keys on web.")).toBeVisible();
+});
+
+test("removing the key wins over a generate choice", async ({ page }) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Deploy");
+  await form.getByRole("combobox", { name: /^Key/ }).selectOption("ed25519");
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await list.getByRole("button", { name: "Edit Deploy" }).click();
+  const edit = vault(page).getByRole("form", { name: "Edit Deploy" });
+  await edit.getByRole("combobox", { name: /^Key/ }).selectOption("rsa3072");
+  await edit.getByLabel("Remove the stored key and its passphrase").check();
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(list).toContainText("nothing stored");
+});

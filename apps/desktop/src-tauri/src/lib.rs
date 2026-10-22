@@ -61,6 +61,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         vault::identities_list,
         vault::identity_save,
         vault::identity_delete,
+        ssh::identity_install,
     ])
 }
 

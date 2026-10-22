@@ -3,6 +3,7 @@
 
 import {
   type FormEvent,
+  memo,
   type ReactNode,
   useEffect,
   useId,
@@ -11,7 +12,8 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { IdentityView } from "@/ipc/index.ts";
+import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
+import type { AnswerSpec, HostView, IdentityView, KeyKindSpec, PromptKind } from "@/ipc/index.ts";
 import { messageOf } from "@/features/hosts/hosts-store.ts";
 
 import type { VaultStore } from "./vault-store.ts";
@@ -29,15 +31,23 @@ const FIELD =
 /** Auto-lock choices, in minutes. */
 const IDLE_CHOICES = [1, 5, 15, 30, 60, 240, 1440];
 
+/** What the identity editor offers for a public key: copying it, and
+ * installing it on a saved host. */
+export interface KeyTools {
+  hosts: readonly HostView[];
+  copy: (text: string) => void;
+}
+
 interface VaultDialogProps {
   store: VaultStore;
+  tools: KeyTools;
   onClose: () => void;
   /** Called once the vault is unlocked, for a connect waiting on it. */
   onUnlocked?: () => void;
 }
 
 /** Sets up, unlocks, and manages the vault. A modal dialog: Escape closes it. */
-export function VaultDialog({ store, onClose, onUnlocked }: VaultDialogProps) {
+export function VaultDialog({ store, tools, onClose, onUnlocked }: VaultDialogProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -64,7 +74,7 @@ export function VaultDialog({ store, onClose, onUnlocked }: VaultDialogProps) {
       ) : !status.unlocked ? (
         <Unlock store={store} keychain={status.keychain.kind === "on"} onDone={onUnlocked} />
       ) : (
-        <Unlocked store={store} identities={state.identities} />
+        <Unlocked store={store} identities={state.identities} tools={tools} />
       )}
       <div className="mt-4 flex justify-end">
         <button
@@ -192,9 +202,11 @@ function Unlock({
 function Unlocked({
   store,
   identities,
+  tools,
 }: {
   store: VaultStore;
   identities: readonly IdentityView[];
+  tools: KeyTools;
 }) {
   const [editing, setEditing] = useState<IdentityView | "new" | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -225,6 +237,7 @@ function Unlocked({
         <IdentityForm
           store={store}
           identity={editing === "new" ? undefined : editing}
+          tools={tools}
           onDone={() => setEditing(undefined)}
         />
       ) : identities.length === 0 ? (
@@ -269,15 +282,30 @@ function Unlocked({
   );
 }
 
+/** Where the identity's key comes from on save. */
+const KEY_SOURCES: readonly { value: "paste" | KeyKindSpec; label: string }[] = [
+  { value: "paste", label: "Paste an OpenSSH private key" },
+  { value: "ed25519", label: "Generate Ed25519 (recommended)" },
+  { value: "ecdsa-p256", label: "Generate ECDSA P-256" },
+  { value: "ecdsa-p384", label: "Generate ECDSA P-384" },
+  { value: "ecdsa-p521", label: "Generate ECDSA P-521" },
+  { value: "rsa3072", label: "Generate RSA 3072" },
+  { value: "rsa4096", label: "Generate RSA 4096 (slow)" },
+];
+
 function IdentityForm({
   store,
   identity,
+  tools,
   onDone,
 }: {
   store: VaultStore;
   identity: IdentityView | undefined;
+  tools: KeyTools;
   onDone: () => void;
 }) {
+  const [source, setSource] = useState<"paste" | KeyKindSpec>("paste");
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState(identity?.name ?? "");
   const [user, setUser] = useState(identity?.user ?? "");
   const [password, setPassword] = useState("");
@@ -289,10 +317,15 @@ function IdentityForm({
   const [confirming, setConfirming] = useState(false);
   const first = useRef<HTMLInputElement>(null);
   useInitialFocus(first);
+  // Removing the key wins over a generate choice left in the select.
+  const generate = removeKey || source === "paste" ? null : source;
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setError(undefined);
+    setSaving(true);
     store
       .saveIdentity({
+        generate,
         id: identity?.id ?? null,
         name,
         user: user || null,
@@ -303,114 +336,246 @@ function IdentityForm({
         passphrase: removeKey ? "" : passphrase || null,
       })
       .then(onDone)
-      .catch((failure: unknown) => setError(messageOf(failure)));
+      .catch((failure: unknown) => setError(messageOf(failure)))
+      .finally(() => setSaving(false));
   };
   return (
-    <form
-      onSubmit={submit}
-      aria-label={identity ? `Edit ${identity.name}` : "New identity"}
-      className="mb-3 rounded border border-current/15 p-3"
-    >
-      <Field label="Name">
-        <input
-          required
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className={FIELD}
-          ref={first}
-        />
-      </Field>
-      <Field label="User">
-        <input
-          value={user}
-          onChange={(e) => setUser(e.target.value)}
-          spellCheck={false}
-          className={FIELD}
-        />
-      </Field>
-      <Field label={identity?.hasPassword ? "Password (stored; type to replace)" : "Password"}>
-        <input
-          type="password"
-          autoComplete="off"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          disabled={removePassword}
-          className={FIELD}
-        />
-      </Field>
-      {identity?.hasPassword && (
-        <Remove checked={removePassword} onChange={setRemovePassword}>
-          Remove the stored password
-        </Remove>
-      )}
-      <Field
-        label={
-          identity?.hasKey ? "Private key (stored; paste to replace)" : "Private key (OpenSSH)"
-        }
+    <>
+      <form
+        onSubmit={submit}
+        aria-label={identity ? `Edit ${identity.name}` : "New identity"}
+        className="mb-3 rounded border border-current/15 p-3"
       >
-        <textarea
-          value={privateKey}
-          onChange={(e) => setPrivateKey(e.target.value)}
-          disabled={removeKey}
-          rows={3}
-          spellCheck={false}
-          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-          className={`${FIELD} font-mono text-xs`}
-        />
-      </Field>
-      {identity?.hasKey && (
-        <Remove checked={removeKey} onChange={setRemoveKey}>
-          Remove the stored key and its passphrase
-        </Remove>
-      )}
-      <Field label="Key passphrase">
-        <input
-          type="password"
-          autoComplete="off"
-          value={passphrase}
-          onChange={(e) => setPassphrase(e.target.value)}
-          className={FIELD}
-        />
-      </Field>
-      {identity?.publicKey && (
-        <p className="mb-3 text-xs">
-          <span className="opacity-70">Public key: </span>
-          <code className="break-all select-all">{identity.publicKey}</code>
-        </p>
-      )}
-      <Problem text={error} />
-      <div className="flex gap-2">
-        {identity && (
+        <Field label="Name">
+          <input
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={FIELD}
+            ref={first}
+          />
+        </Field>
+        <Field label="User">
+          <input
+            value={user}
+            onChange={(e) => setUser(e.target.value)}
+            spellCheck={false}
+            className={FIELD}
+          />
+        </Field>
+        <Field label={identity?.hasPassword ? "Password (stored; type to replace)" : "Password"}>
+          <input
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={removePassword}
+            className={FIELD}
+          />
+        </Field>
+        {identity?.hasPassword && (
+          <Remove checked={removePassword} onChange={setRemovePassword}>
+            Remove the stored password
+          </Remove>
+        )}
+        <Field label={identity?.hasKey ? "Key (one is stored)" : "Key"}>
+          <select
+            value={source}
+            onChange={(e) => {
+              const chosen = KEY_SOURCES.find((k) => k.value === e.target.value);
+              if (chosen) setSource(chosen.value);
+            }}
+            disabled={removeKey}
+            className={FIELD}
+          >
+            {KEY_SOURCES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {identity?.hasKey && value !== "paste"
+                  ? `${label}, replacing the stored one`
+                  : label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {source === "paste" && (
+          <Field
+            label={
+              identity?.hasKey ? "Private key (stored; paste to replace)" : "Private key (OpenSSH)"
+            }
+          >
+            <textarea
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+              disabled={removeKey}
+              rows={3}
+              spellCheck={false}
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+              className={`${FIELD} font-mono text-xs`}
+            />
+          </Field>
+        )}
+        {identity?.hasKey && (
+          <Remove checked={removeKey} onChange={setRemoveKey}>
+            Remove the stored key and its passphrase
+          </Remove>
+        )}
+        {source === "paste" && (
+          <Field label="Key passphrase">
+            <input
+              type="password"
+              autoComplete="off"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              className={FIELD}
+            />
+          </Field>
+        )}
+        <Problem text={error} />
+        <div className="flex gap-2">
+          {identity && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!confirming) {
+                  setConfirming(true);
+                  return;
+                }
+                store
+                  .deleteIdentity(identity.id)
+                  .then(onDone)
+                  .catch((failure: unknown) => setError(messageOf(failure)));
+              }}
+              className="rounded border border-red-500/50 px-3 py-1.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+            >
+              {confirming ? "Confirm delete" : "Delete"}
+            </button>
+          )}
+          <span className="flex-1" />
           <button
             type="button"
-            onClick={() => {
-              if (!confirming) {
-                setConfirming(true);
-                return;
-              }
-              store
-                .deleteIdentity(identity.id)
-                .then(onDone)
-                .catch((failure: unknown) => setError(messageOf(failure)));
-            }}
-            className="rounded border border-red-500/50 px-3 py-1.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+            onClick={onDone}
+            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
           >
-            {confirming ? "Confirm delete" : "Delete"}
+            Cancel
           </button>
-        )}
-        <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onDone}
-          className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-        >
-          Cancel
-        </button>
-        <Submit>Save</Submit>
-      </div>
-    </form>
+          <Submit disabled={saving}>{saving && generate ? "Generating…" : "Save"}</Submit>
+        </div>
+      </form>
+      {identity?.publicKey && (
+        // Outside the form: the prompts it shows have forms of their own.
+        <PublicKey store={store} identity={identity} publicKey={identity.publicKey} tools={tools} />
+      )}
+    </>
   );
 }
+
+type InstallState =
+  | { kind: "idle" }
+  | { kind: "busy" }
+  | { kind: "done"; label: string }
+  | { kind: "failed"; text: string };
+
+/**
+ * A stored key's public half: copy it, or add it to a saved host. Memoized:
+ * its host list can hold thousands of options, and typing in the editor
+ * above it should not rebuild them.
+ */
+const PublicKey = memo(function PublicKey({
+  store,
+  identity,
+  publicKey,
+  tools,
+}: {
+  store: VaultStore;
+  identity: IdentityView;
+  publicKey: string;
+  tools: KeyTools;
+}) {
+  const [host, setHost] = useState("");
+  const [state, setState] = useState<InstallState>({ kind: "idle" });
+  const [prompt, setPrompt] = useState<
+    { prompt: PromptKind; answer: (answer: AnswerSpec) => void } | undefined
+  >();
+  // A prompt left open when this closes is declined, so the connect ends
+  // instead of waiting for its timeout.
+  const pending = useRef<((answer: AnswerSpec) => void) | undefined>(undefined);
+  useEffect(() => () => pending.current?.({ kind: "cancel" }), []);
+  const install = () => {
+    const target = tools.hosts.find((h) => h.id === host);
+    if (!target) return;
+    setState({ kind: "busy" });
+    store
+      .installKey(
+        identity.id,
+        target.id,
+        (asked) =>
+          new Promise<AnswerSpec>((resolve) => {
+            pending.current = resolve;
+            setPrompt({
+              prompt: asked,
+              answer: (answer) => {
+                pending.current = undefined;
+                setPrompt(undefined);
+                resolve(answer);
+              },
+            });
+          }),
+      )
+      .then(() => setState({ kind: "done", label: target.label }))
+      .catch((failure: unknown) => setState({ kind: "failed", text: messageOf(failure) }))
+      // A prompt still shown when the install ends answers nothing now.
+      .finally(() => {
+        pending.current = undefined;
+        setPrompt(undefined);
+      });
+  };
+  return (
+    <div className="relative mb-3 rounded border border-current/15 p-2 text-xs">
+      <div className="mb-2 flex items-start gap-2">
+        <code className="min-w-0 flex-1 break-all select-all">{publicKey}</code>
+        <button
+          type="button"
+          onClick={() => tools.copy(publicKey)}
+          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10"
+        >
+          Copy public key
+        </button>
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          aria-label="Host to install the key on"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          className={`${FIELD} flex-1`}
+        >
+          <option value="">Choose a saved host…</option>
+          {tools.hosts.map((h) => (
+            <option key={h.id} value={h.id}>
+              {h.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={!host || state.kind === "busy"}
+          onClick={install}
+          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10 disabled:opacity-50"
+        >
+          {state.kind === "busy" ? "Installing…" : "Install on host"}
+        </button>
+      </div>
+      {state.kind === "done" && (
+        <output className="mt-2 block">The key is in authorized_keys on {state.label}.</output>
+      )}
+      {state.kind === "failed" && (
+        <p role="alert" className="mt-2 text-red-600 dark:text-red-400">
+          {state.text}
+        </p>
+      )}
+      {prompt && <PromptDialog prompt={prompt.prompt} onAnswer={prompt.answer} />}
+    </div>
+  );
+});
 
 function Settings({
   store,
@@ -593,10 +758,11 @@ function Problem({ text }: { text: string | undefined }) {
   ) : null;
 }
 
-function Submit({ children }: { children: ReactNode }) {
+function Submit({ children, disabled }: { children: ReactNode; disabled?: boolean }) {
   return (
     <button
       type="submit"
+      disabled={disabled}
       className="rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
     >
       {children}

@@ -208,6 +208,15 @@ pub enum ConnectError {
     Io(#[from] std::io::Error),
 }
 
+/// How a script run with [`SshConnector::run_script`] ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptOutcome {
+    /// `None` when the server sent no exit status.
+    pub status: Option<u32>,
+    /// Standard output and error, at most 64 KiB.
+    pub output: String,
+}
+
 /// Opens SSH shell sessions.
 pub trait SshConnector: Send + Sync + 'static {
     /// Connects with `credentials` from a vault identity, used on the last
@@ -219,6 +228,16 @@ pub trait SshConnector: Send + Sync + 'static {
         prompter: Arc<dyn Prompter>,
         credentials: Arc<Credentials>,
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+
+    /// Runs `script` with `sh -s` on the target, without a PTY or agent
+    /// forwarding, signing in as a connect would.
+    fn run_script<'a>(
+        &'a self,
+        target: &'a SshTarget,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+        script: &'a str,
+    ) -> BoxFuture<'a, Result<ScriptOutcome, ConnectError>>;
 
     /// Connects with no identity.
     fn connect<'a>(

@@ -322,6 +322,11 @@ export class AppShell {
     requestAnimationFrame(() => this.#activeController()?.focus());
   }
 
+  /** Puts `text` on the system clipboard. */
+  copyText(text: string): void {
+    this.#clipboard?.writeText(text).catch((error: unknown) => console.warn("copy failed", error));
+  }
+
   #copy(): void {
     const selection = this.#activeController()?.terminal.getSelection();
     if (selection) {

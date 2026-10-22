@@ -1,16 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { Channel } from "@tauri-apps/api/core";
+
 import {
+  type AnswerSpec,
   type IdentityEdit,
   type IdentityView,
   type KeychainSpec,
+  type KeyKindSpec,
+  type PromptRequest,
   type VaultStatusSpec,
   commands,
 } from "./bindings.ts";
-import { SessionCommandError } from "./sessions.ts";
+import { type PromptHandler, SessionCommandError } from "./sessions.ts";
 
-export type { IdentityEdit, IdentityView, KeychainSpec, VaultStatusSpec };
+export type { IdentityEdit, IdentityView, KeychainSpec, KeyKindSpec, VaultStatusSpec };
 
 /** The vault. Secrets go in; only whether one is stored comes back. */
 export interface VaultClient {
@@ -29,7 +34,12 @@ export interface VaultClient {
   identities(): Promise<IdentityView[]>;
   saveIdentity(identity: IdentityEdit): Promise<string>;
   deleteIdentity(id: string): Promise<void>;
+  /** Adds an identity's public key to `authorized_keys` on a saved host,
+   * asking `onPrompt` what a connect to it would ask. */
+  installKey(identity: string, host: string, onPrompt: PromptHandler): Promise<void>;
 }
+
+const CANCEL: AnswerSpec = { kind: "cancel" };
 
 type Result<T> = Promise<
   | { status: "ok"; data: T }
@@ -59,4 +69,14 @@ export const tauriVault: VaultClient = {
   identities: () => unwrap(commands.identitiesList()),
   saveIdentity: (identity) => unwrap(commands.identitySave(identity)),
   deleteIdentity: (id) => done(commands.identityDelete(id)),
+  installKey: (identity, host, onPrompt) => {
+    const prompts = new Channel<PromptRequest>();
+    prompts.onmessage = ({ id, prompt }) => {
+      onPrompt(prompt)
+        .catch(() => CANCEL)
+        .then((answer) => commands.sshPromptReply(id, answer))
+        .catch((error: unknown) => console.warn("prompt reply failed", error));
+    };
+    return done(commands.identityInstall(identity, host, prompts));
+  },
 };

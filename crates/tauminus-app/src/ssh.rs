@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauminus_domain::{SessionId, SessionKind, SessionMeta, SshTarget, TerminalSize};
 use thiserror::Error;
 
-use crate::ports::{ConnectError, Credentials, OutputSink, Prompter, SshConnector};
+use crate::ports::{ConnectError, Credentials, OutputSink, Prompter, ScriptOutcome, SshConnector};
 use crate::session::{SessionError, SessionManager};
 
 #[derive(Debug, Error)]
@@ -49,6 +49,20 @@ impl SshSessions {
         prompter: Arc<dyn Prompter>,
     ) -> Result<SessionId, SshOpenError> {
         self.open_with(target, size, sink, prompter, Arc::default())
+            .await
+    }
+
+    /// Runs a one-off script on `target`, such as adding a key to
+    /// `authorized_keys`. No session is kept.
+    pub async fn run_script(
+        &self,
+        target: &SshTarget,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+        script: &str,
+    ) -> Result<ScriptOutcome, ConnectError> {
+        self.connector
+            .run_script(target, prompter, credentials, script)
             .await
     }
 

@@ -400,6 +400,18 @@ impl Vault {
         .await
     }
 
+    /// An identity's public key line, if it has a key. O(log n).
+    pub async fn public_key(&self, id: &str) -> Result<Option<String>, VaultError> {
+        let id = id.to_owned();
+        self.with_open(move |vault| {
+            Ok(vault
+                .identity(&id)?
+                .ok_or(VaultError::NoSuchIdentity(id))?
+                .public_key)
+        })
+        .await
+    }
+
     /// The secrets an identity holds, for one connect.
     pub async fn credentials(&self, id: &str) -> Result<Credentials, VaultError> {
         let id = id.to_owned();

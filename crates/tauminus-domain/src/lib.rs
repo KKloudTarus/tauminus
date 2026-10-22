@@ -10,6 +10,7 @@
 mod flow;
 mod guard;
 mod hosts;
+mod keys;
 mod output;
 mod session;
 mod ssh;
@@ -24,6 +25,7 @@ pub use hosts::{
     Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label, MAX_GROUP_DEPTH,
     MAX_GROUPS, MAX_HOSTS, MAX_TAGS, PROD_TAG, Settings, Tag,
 };
+pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};
 pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
 pub use ssh::{
