@@ -4,7 +4,7 @@
 import { useDeferredValue, useMemo, useState, useSyncExternalStore } from "react";
 
 import { formatEndpoint } from "@/features/ssh/destination.ts";
-import type { GroupView, HostView } from "@/ipc/index.ts";
+import type { GroupView, HostView, IdentityView } from "@/ipc/index.ts";
 
 import { type Editing, EditorDialog } from "./HostEditor.tsx";
 import type { HostsStore } from "./hosts-store.ts";
@@ -13,6 +13,9 @@ import { searchHosts } from "./search.ts";
 interface SidebarProps {
   store: HostsStore;
   onConnect: (host: HostView) => void;
+  onOpenVault?: () => void;
+  /** Identities to pick from in the editors; empty while the vault is locked. */
+  identities?: readonly IdentityView[];
 }
 
 interface Tree {
@@ -21,6 +24,7 @@ interface Tree {
 }
 
 const ROOT = "";
+const NO_IDENTITIES: readonly IdentityView[] = [];
 /** Rows rendered for a search; more would only slow typing down. */
 const MAX_RESULTS = 200;
 
@@ -46,7 +50,12 @@ function buildTree(groups: readonly GroupView[], hosts: readonly HostView[]): Tr
 }
 
 /** Saved hosts: search, the group tree, and the editors. */
-export function Sidebar({ store, onConnect }: SidebarProps) {
+export function Sidebar({
+  store,
+  onConnect,
+  onOpenVault,
+  identities = NO_IDENTITIES,
+}: SidebarProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Editing | undefined>();
@@ -115,17 +124,26 @@ export function Sidebar({ store, onConnect }: SidebarProps) {
     >
       <div className="flex items-center gap-1 px-2 pt-2">
         <h2 className="flex-1 px-1 font-semibold">Hosts</h2>
+        {onOpenVault && (
+          <button
+            type="button"
+            onClick={onOpenVault}
+            className="rounded px-1.5 py-1 text-xs whitespace-nowrap hover:bg-current/10"
+          >
+            Vault
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setEditing({ kind: "group", group: undefined })}
-          className="rounded px-2 py-1 text-xs hover:bg-current/10"
+          className="rounded px-1.5 py-1 text-xs whitespace-nowrap hover:bg-current/10"
         >
           New group
         </button>
         <button
           type="button"
           onClick={() => setEditing({ kind: "host", host: undefined })}
-          className="rounded px-2 py-1 text-xs hover:bg-current/10"
+          className="rounded px-1.5 py-1 text-xs whitespace-nowrap hover:bg-current/10"
         >
           New host
         </button>
@@ -197,7 +215,12 @@ export function Sidebar({ store, onConnect }: SidebarProps) {
         )}
       </div>
       {editing && (
-        <EditorDialog store={store} editing={editing} onClose={() => setEditing(undefined)} />
+        <EditorDialog
+          store={store}
+          editing={editing}
+          identities={identities}
+          onClose={() => setEditing(undefined)}
+        />
       )}
     </aside>
   );

@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App.tsx";
 import { AppShell } from "@/app/shell.ts";
-import { hostsClient, linkOpener, sessionClient, textClipboard } from "@/ipc/index.ts";
+import { hostsClient, linkOpener, sessionClient, textClipboard, vaultClient } from "@/ipc/index.ts";
 import "@/app/styles.css";
 
 const root = document.getElementById("root");
@@ -18,6 +18,7 @@ if (!root) {
 const shell = new AppShell({
   sessions: await sessionClient(),
   hosts: await hostsClient(),
+  vault: await vaultClient(),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),

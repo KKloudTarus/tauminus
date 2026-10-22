@@ -18,6 +18,8 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
+pub use crate::vault::Credentials;
+
 /// Messages from the use case to a terminal stream, applied in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalInput {
@@ -208,12 +210,25 @@ pub enum ConnectError {
 
 /// Opens SSH shell sessions.
 pub trait SshConnector: Send + Sync + 'static {
+    /// Connects with `credentials` from a vault identity, used on the last
+    /// hop before any key file or prompt.
+    fn connect_with<'a>(
+        &'a self,
+        target: &'a SshTarget,
+        size: TerminalSize,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+
+    /// Connects with no identity.
     fn connect<'a>(
         &'a self,
         target: &'a SshTarget,
         size: TerminalSize,
         prompter: Arc<dyn Prompter>,
-    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
+        self.connect_with(target, size, prompter, Arc::default())
+    }
 }
 
 /// Why the saved hosts could not be read or written.

@@ -13,6 +13,7 @@ import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
+import { VaultStore } from "@/features/vault/vault-store.ts";
 import type {
   HostView,
   HostsClient,
@@ -20,6 +21,7 @@ import type {
   SessionClient,
   SessionSpec,
   TextClipboard,
+  VaultClient,
 } from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
@@ -49,11 +51,14 @@ export const ACTION_LABELS: Record<Action, string> = {
   "ssh.connect": "Connect to SSH host",
   "hosts.toggle": "Show or hide saved hosts",
   "hosts.import": "Import hosts from ~/.ssh/config",
+  "vault.open": "Open the vault",
+  "vault.lock": "Lock the vault",
 };
 
 interface ShellState {
   paletteOpen: boolean;
   connectOpen: boolean;
+  vaultOpen: boolean;
   sidebarOpen: boolean;
   theme: ThemePreference;
 }
@@ -66,6 +71,9 @@ interface ShellState {
 export class AppShell {
   readonly workspace: Workspace<TerminalController, SessionSpec>;
   readonly hosts: HostsStore;
+  readonly vault: VaultStore;
+  /** A connect waiting for the vault to unlock. */
+  #afterUnlock: (() => void) | undefined;
   readonly keymap: Keymap;
   readonly platform: Platform;
   readonly #listeners = new Set<() => void>();
@@ -74,6 +82,7 @@ export class AppShell {
   constructor(options: {
     sessions: SessionClient;
     hosts: HostsClient;
+    vault: VaultClient;
     links?: LinkOpener;
     userAgent: string;
     storage: Storage | undefined;
@@ -96,9 +105,11 @@ export class AppShell {
     }
     this.keymap = keymap;
     this.hosts = new HostsStore(options.hosts);
+    this.vault = new VaultStore(options.vault, undefined, options.storage);
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
+      vaultOpen: false,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
     };
@@ -162,6 +173,30 @@ export class AppShell {
     }
   }
 
+  setVaultOpen(open: boolean): void {
+    if (this.#state.vaultOpen === open) return;
+    if (!open) this.#afterUnlock = undefined;
+    this.#set({ ...this.#state, vaultOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Opens the vault, then runs `retry` once it is unlocked. Retries at
+   * once when the vault is already open, for example from another pane. */
+  unlockVaultThen(retry: () => void): void {
+    void this.vault.retryOrAsk(retry, () => {
+      this.#afterUnlock = retry;
+      this.setVaultOpen(true);
+    });
+  }
+
+  /** The vault dialog unlocked the vault: run what waited for it. */
+  vaultUnlocked(): void {
+    const retry = this.#afterUnlock;
+    if (!retry) return;
+    this.setVaultOpen(false);
+    retry();
+  }
+
   /** Connects to a saved host in a new tab, or says why it cannot. */
   connectHost(host: HostView): void {
     if (!host.target) {
@@ -195,6 +230,12 @@ export class AppShell {
         return;
       case "hosts.toggle":
         this.setSidebarOpen(!this.#state.sidebarOpen);
+        return;
+      case "vault.open":
+        this.setVaultOpen(true);
+        return;
+      case "vault.lock":
+        this.vault.lock().catch((error: unknown) => console.warn("lock failed", error));
         return;
       case "hosts.import":
         this.setSidebarOpen(true);

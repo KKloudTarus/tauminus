@@ -25,8 +25,12 @@ use russh::keys::agent::client::{AgentClient, AgentStream};
 use russh::keys::signature::Signer as _;
 use russh::keys::ssh_encoding::Encode;
 use russh::keys::ssh_key::private::KeypairData;
-use russh::keys::{Certificate, HashAlg, PrivateKey, PublicKey, decode_secret_key};
-use tauminus_app::ports::{Answer, ChallengeField, ConnectError, Prompt, Prompter};
+use russh::keys::{
+    Certificate, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, decode_secret_key,
+};
+use tauminus_app::ports::{
+    Answer, ChallengeField, ConnectError, Credentials, Prompt, Prompter, Secret,
+};
 use tauminus_domain::{AuthMethod, AuthOptions, Endpoint};
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -51,6 +55,8 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) prompter: &'a Arc<dyn Prompter>,
     pub(crate) home: Option<&'a Path>,
     pub(crate) agent: &'a AgentSource,
+    /// From a vault identity: tried before key files and prompts.
+    pub(crate) credentials: &'a Credentials,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +128,16 @@ impl Authenticator<'_> {
             return Ok(());
         }
         let mut tried: Vec<String> = Vec::new();
+        // The identity's key goes before any agent key: servers stop after
+        // MaxAuthTries (6) keys, and an agent may hold more than that.
+        match self.identity_key(&user, &mut server).await? {
+            Outcome::Done => return Ok(()),
+            Outcome::Tried => tried.push(method_name(AuthMethod::PublicKey).to_owned()),
+            Outcome::Skipped => {}
+        }
+        // The identity's password answers the first password prompt, from
+        // either method, once.
+        let mut stored = self.credentials.password.clone();
         for _ in 0..MAX_PASSES {
             server.partial = false;
             for method in self.options.methods.clone() {
@@ -132,9 +148,10 @@ impl Authenticator<'_> {
                     AuthMethod::Agent => self.agent(&user, &mut server).await?,
                     AuthMethod::PublicKey => self.key_files(&user, &mut server).await?,
                     AuthMethod::KeyboardInteractive => {
-                        self.keyboard_interactive(&user, &mut server).await?
+                        self.keyboard_interactive(&user, &mut server, &mut stored)
+                            .await?
                     }
-                    AuthMethod::Password => self.password(&user, &mut server).await?,
+                    AuthMethod::Password => self.password(&user, &mut server, &mut stored).await?,
                 };
                 match outcome {
                     Outcome::Done => return Ok(()),
@@ -270,10 +287,32 @@ impl Authenticator<'_> {
         Ok(outcome)
     }
 
+    /// A wrong stored password ends one exchange; the user then gets the
+    /// prompt, as with the password method.
     async fn keyboard_interactive(
         &mut self,
         user: &str,
         server: &mut Server,
+        stored: &mut Option<Secret>,
+    ) -> Result<Outcome, ConnectError> {
+        let had = stored.is_some();
+        let outcome = self.keyboard_exchange(user, server, stored).await?;
+        let spent = had && stored.is_none();
+        if outcome == Outcome::Tried
+            && spent
+            && !server.partial
+            && server.permits(MethodKind::KeyboardInteractive)
+        {
+            return self.keyboard_exchange(user, server, &mut None).await;
+        }
+        Ok(outcome)
+    }
+
+    async fn keyboard_exchange(
+        &mut self,
+        user: &str,
+        server: &mut Server,
+        stored: &mut Option<Secret>,
     ) -> Result<Outcome, ConnectError> {
         let mut response = self
             .handle
@@ -305,6 +344,11 @@ impl Authenticator<'_> {
                     }
                     let answers = if prompts.is_empty() {
                         Vec::new()
+                    } else if let [only] = prompts.as_slice()
+                        && Self::asks_for_password(only)
+                        && let Some(password) = stored.take()
+                    {
+                        vec![password]
                     } else {
                         let answer = self
                             .prompter
@@ -342,20 +386,67 @@ impl Authenticator<'_> {
         Ok(Outcome::Tried)
     }
 
-    async fn password(&mut self, user: &str, server: &mut Server) -> Result<Outcome, ConnectError> {
+    /// The vault identity's key, decoded with its stored passphrase.
+    async fn identity_key(
+        &mut self,
+        user: &str,
+        server: &mut Server,
+    ) -> Result<Outcome, ConnectError> {
+        let Some(pem) = &self.credentials.private_key else {
+            return Ok(Outcome::Skipped);
+        };
+        // Keys follow the host's method list, as key files and the agent do.
+        let keys_allowed = self
+            .options
+            .methods
+            .iter()
+            .any(|m| matches!(m, AuthMethod::PublicKey | AuthMethod::Agent));
+        if !keys_allowed || !server.permits(MethodKind::PublicKey) || server.partial {
+            return Ok(Outcome::Skipped);
+        }
+        let key = match decode_off_thread(pem, self.credentials.passphrase.clone()).await {
+            Ok(key) => Arc::new(key),
+            Err(error) => {
+                debug!(%error, "the identity's key does not decode");
+                return Ok(Outcome::Skipped);
+            }
+        };
+        let hash = self.rsa_hash(key.public_key()).await?;
+        let result = self
+            .handle
+            .authenticate_publickey(user, PrivateKeyWithHashAlg::new(key, hash))
+            .await
+            .map_err(protocol)?;
+        if server.settle(result) {
+            return Ok(Outcome::Done);
+        }
+        Ok(Outcome::Tried)
+    }
+
+    async fn password(
+        &mut self,
+        user: &str,
+        server: &mut Server,
+        stored: &mut Option<Secret>,
+    ) -> Result<Outcome, ConnectError> {
         let mut outcome = Outcome::Skipped;
         for _ in 0..ATTEMPTS {
             if !server.permits(MethodKind::Password) || server.partial {
                 break;
             }
-            let answer = self
-                .prompter
-                .ask(Prompt::Password {
-                    endpoint: self.endpoint.to_string(),
-                })
-                .await;
-            let Answer::Secret(password) = answer else {
-                return Err(ConnectError::Cancelled);
+            let password = if let Some(password) = stored.take() {
+                password
+            } else {
+                let answer = self
+                    .prompter
+                    .ask(Prompt::Password {
+                        endpoint: self.endpoint.to_string(),
+                    })
+                    .await;
+                let Answer::Secret(password) = answer else {
+                    return Err(ConnectError::Cancelled);
+                };
+                password
             };
             let result = self
                 .handle
@@ -368,6 +459,10 @@ impl Authenticator<'_> {
             }
         }
         Ok(outcome)
+    }
+
+    fn asks_for_password(prompt: &russh::client::Prompt) -> bool {
+        asks_for_password(&prompt.prompt, prompt.echo)
     }
 
     /// RSA keys need the server's preferred SHA-2 hash; others need none.
@@ -711,9 +806,47 @@ async fn connect_agent(
     None
 }
 
+/// One hidden field that names a password is how PAM asks for one. A
+/// one-time code or a token also comes as one hidden field, sometimes called
+/// a "one-time password", and must not get the stored password.
+fn asks_for_password(text: &str, echo: bool) -> bool {
+    let text = text.to_ascii_lowercase();
+    !echo
+        && text.contains("password")
+        && ![
+            "one-time",
+            "one time",
+            "otp",
+            "oath",
+            "token",
+            "code",
+            "verification",
+            "pin",
+        ]
+        .iter()
+        .any(|word| text.contains(word))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_password_prompt_gets_the_stored_password() {
+        assert!(asks_for_password("Password: ", false));
+        assert!(asks_for_password("alice@host's password:", false));
+        assert!(!asks_for_password("Password: ", true));
+        assert!(!asks_for_password("Verification code: ", false));
+        assert!(!asks_for_password(
+            "One-time password (OATH) for `alice':",
+            false
+        ));
+        assert!(!asks_for_password(
+            "Enter PASSCODE / token password:",
+            false
+        ));
+        assert!(!asks_for_password("Passwort:", false));
+    }
 
     #[tokio::test]
     async fn only_small_regular_files_are_read_as_keys() {

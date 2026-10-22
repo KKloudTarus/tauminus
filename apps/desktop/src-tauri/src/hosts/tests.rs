@@ -180,6 +180,7 @@ async fn settings_survive_a_round_trip_through_the_view() {
             deny: vec!["systemctl stop *".into()],
         }),
         forward_agent: Some(true),
+        identity: Some("work-1".into()),
         env: Some(vec![
             EnvSpec {
                 name: "LANG".into(),

@@ -8,10 +8,18 @@ interface ConnectFailureProps {
   code: ErrorCode | undefined;
   message: string;
   onRetry: () => void;
+  /** Opens the vault, then retries; for a host whose identity is in it. */
+  onUnlockVault?: (retry: () => void) => void;
 }
 
 /** Why an SSH connect failed, and what to do next. */
-export function ConnectFailure({ target, code, message, onRetry }: ConnectFailureProps) {
+export function ConnectFailure({
+  target,
+  code,
+  message,
+  onRetry,
+  onUnlockVault,
+}: ConnectFailureProps) {
   const danger = code === "host_key_changed" || code === "host_key_revoked";
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-background p-4">
@@ -24,6 +32,15 @@ export function ConnectFailure({ target, code, message, onRetry }: ConnectFailur
         <h2 className="mb-2 font-semibold">{heading(code, target)}</h2>
         <p className="mb-2 opacity-80">{advice(code)}</p>
         <p className="mb-4 font-mono text-xs break-words opacity-70">{message}</p>
+        {code === "vault_locked" && onUnlockVault && (
+          <button
+            type="button"
+            onClick={() => onUnlockVault(onRetry)}
+            className="mr-2 rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
+          >
+            Unlock the vault
+          </button>
+        )}
         {!danger && (
           <button
             type="button"
@@ -50,6 +67,8 @@ function heading(code: ErrorCode | undefined, target: string): string {
       return `Connection to ${target} cancelled`;
     case "connect_failed":
       return `Could not reach ${target}`;
+    case "vault_locked":
+      return `Unlock the vault to sign in to ${target}`;
     default:
       return `Could not connect to ${target}`;
   }
@@ -71,6 +90,8 @@ function advice(code: ErrorCode | undefined): string {
       return "Nothing was sent to the server.";
     case "connect_failed":
       return "Check the host name and port, your network, and any proxy or jump host.";
+    case "vault_locked":
+      return "This host signs in with an identity kept in the vault.";
     default:
       return "The server or a proxy ended the connection unexpectedly.";
   }

@@ -155,3 +155,53 @@ async fn wrong_passwords_are_refused_by_openssh() {
         "{error:?}"
     );
 }
+
+fn stored(password: &str) -> Arc<tauminus_app::ports::Credentials> {
+    Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(password)),
+        ..tauminus_app::ports::Credentials::default()
+    })
+}
+
+#[tokio::test]
+async fn a_stored_password_signs_in_without_a_prompt() {
+    let Some(server) = server() else { return };
+    for method in [AuthMethod::Password, AuthMethod::KeyboardInteractive] {
+        let scratch = Scratch::new("pam-stored");
+        let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+        let mut stream = connector(&scratch)
+            .connect_with(
+                &target(&server, vec![method]),
+                size(),
+                dyn_prompter(&prompter),
+                stored(&server.password),
+            )
+            .await
+            .unwrap();
+        let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+        assert_eq!(code, Some(0));
+        assert_eq!(prompter.asked().len(), 1, "{method:?}: only the host key");
+    }
+}
+
+#[tokio::test]
+async fn a_wrong_stored_password_is_tried_once_then_asked() {
+    let Some(server) = server() else { return };
+    let scratch = Scratch::new("pam-stored-wrong");
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Secret(secret(&server.password)),
+    ]);
+    let mut stream = connector(&scratch)
+        .connect_with(
+            &target(&server, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            stored("not-it"),
+        )
+        .await
+        .unwrap();
+    let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+    assert_eq!(code, Some(0));
+    assert_eq!(prompter.asked().len(), 2);
+}

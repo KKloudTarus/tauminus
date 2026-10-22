@@ -12,6 +12,12 @@
 //! or a newer version cannot destroy a user's list by saving over it.
 
 mod format;
+mod keychain;
+pub mod vault;
+mod vault_backend;
+
+pub use keychain::OsKeychain;
+pub use vault_backend::{FileVaultBackend, KeyStore};
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read as _, Write as _};
@@ -26,7 +32,7 @@ const HEX: &[u8; 16] = b"0123456789abcdef";
 
 /// Largest file read or written. 10 000 typical hosts take 2.5 MB; every
 /// field at its limit takes about 2 KB per host.
-const MAX_FILE: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_FILE: u64 = 16 * 1024 * 1024;
 
 /// What the file held when this store last read or wrote it: a hash of its
 /// bytes, or `None` when it did not exist.
@@ -126,7 +132,7 @@ fn lock(seen: &Mutex<Option<Seen>>) -> std::sync::MutexGuard<'_, Option<Seen>> {
     seen.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn fingerprint(bytes: &[u8]) -> u64 {
+pub(crate) fn fingerprint(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()

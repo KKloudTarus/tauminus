@@ -62,6 +62,30 @@ export const commands = {
 	/**  The clipboard's text, or "" when it holds none. */
 	clipboardReadText: () => typedError<string, CommandError>(__TAURI_INVOKE("clipboard_read_text")),
 	clipboardWriteText: (text: string) => typedError<null, CommandError>(__TAURI_INVOKE("clipboard_write_text", { text })),
+	vaultStatus: () => typedError<VaultStatusSpec, CommandError>(__TAURI_INVOKE("vault_status")),
+	/**  Creates the vault with a master password of at least 8 characters. */
+	vaultCreate: (password: string) => typedError<null, CommandError>(__TAURI_INVOKE("vault_create", { password })),
+	vaultUnlock: (password: string) => typedError<null, CommandError>(__TAURI_INVOKE("vault_unlock", { password })),
+	vaultUnlockKeychain: () => typedError<null, CommandError>(__TAURI_INVOKE("vault_unlock_keychain")),
+	vaultLock: () => typedError<null, CommandError>(__TAURI_INVOKE("vault_lock")),
+	/**  Counts as activity for the idle timer. */
+	vaultTouch: () => typedError<null, CommandError>(__TAURI_INVOKE("vault_touch")),
+	vaultSetIdle: (minutes: number) => typedError<null, CommandError>(__TAURI_INVOKE("vault_set_idle", { minutes })),
+	/**
+	 *  Replaces the master password; the current one is asked again. Returns
+	 *  why the keychain was turned off, if it refused its new key: the password
+	 *  changed all the same.
+	 */
+	vaultChangePassword: (current: string, next: string) => typedError<string | null, CommandError>(__TAURI_INVOKE("vault_change_password", { current, next })),
+	/**
+	 *  Lets the OS keychain unlock the vault, or stops it. Turning it on takes
+	 *  the master password again.
+	 */
+	vaultSetKeychain: (on: boolean, password: string | null) => typedError<null, CommandError>(__TAURI_INVOKE("vault_set_keychain", { on, password })),
+	identitiesList: () => typedError<IdentityView[], CommandError>(__TAURI_INVOKE("identities_list")),
+	/**  Adds or edits an identity. Returns its id. */
+	identitySave: (identity: IdentityEdit) => typedError<string, CommandError>(__TAURI_INVOKE("identity_save", { identity })),
+	identityDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("identity_delete", { id })),
 };
 
 /* Types */
@@ -106,7 +130,11 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 /**  The user declined a prompt or closed it. */
 "cancelled" | "protocol_error" | 
 /**  The saved hosts could not be read or written. */
-"store_failed" | "internal";
+"store_failed" | 
+/**  The vault must be unlocked first. */
+"vault_locked" | "wrong_password" | 
+/**  A system service, such as the OS keychain, is missing. */
+"unavailable" | "internal";
 
 /**  Grid size from the webview, validated before it reaches the use case. */
 export type GridSize = {
@@ -190,11 +218,36 @@ export type HostsView = {
 	hosts: HostView[],
 };
 
+/**
+ *  An edit. Secrets are write-only: leave one out to keep it, send "" to
+ *  remove it.
+ */
+export type IdentityEdit = {
+	id?: string | null,
+	name: string,
+	user?: string | null,
+	password?: string | null,
+	privateKey?: string | null,
+	passphrase?: string | null,
+};
+
+/**  An identity as the view sees it: no secret, only whether one is stored. */
+export type IdentityView = {
+	id: string,
+	name: string,
+	user: string | null,
+	hasPassword: boolean,
+	hasKey: boolean,
+	publicKey: string | null,
+};
+
 export type ImportResult = {
 	added: number,
 	skipped: SkippedHost[],
 	view: HostsView,
 };
+
+export type KeychainSpec = { kind: "unavailable"; reason: string } | { kind: "off" } | { kind: "on" };
 
 export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
 
@@ -239,6 +292,8 @@ export type SettingsSpec = {
 	 *  wins over its groups'.
 	 */
 	env?: EnvSpec[] | null,
+	/**  The vault identity to log in with; `null` inherits. */
+	identity?: string | null,
 };
 
 export type SkippedHost = {
@@ -257,6 +312,14 @@ export type SshTargetSpec = {
 	methods?: AuthMethodSpec[] | null,
 	identityFiles?: string[],
 	identitiesOnly?: boolean,
+};
+
+export type VaultStatusSpec = {
+	exists: boolean,
+	unlocked: boolean,
+	keychain: KeychainSpec,
+	/**  Minutes unused before the vault locks itself. */
+	idleMinutes: number,
 };
 
 /* Tauri Specta runtime */

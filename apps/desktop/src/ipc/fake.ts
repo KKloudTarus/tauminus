@@ -111,7 +111,8 @@ function fail(code: CommandError["code"], message: string): SessionCommandError 
 /**
  * Hosts by name: `prompt.test` asks to trust its key and for a password;
  * `kbd.test` asks a keyboard-interactive code (`123456`); `changed.test`
- * has a changed host key; anything else cannot be reached.
+ * has a changed host key; `vault.test` signs in with an identity, so it
+ * needs the vault unlocked; anything else cannot be reached.
  */
 async function fakeSsh(
   spec: Exclude<SessionSpec, { kind: "local" }>,
@@ -125,6 +126,11 @@ async function fakeSsh(
       "host_key_changed",
       `the host key for ${host}:${port} has changed (recorded at ~/.ssh/known_hosts:3)`,
     );
+  }
+  if (host === "vault.test") {
+    const { sharedFakeVault } = await import("./fake-vault.ts");
+    if (!sharedFakeVault().unlocked()) throw fail("vault_locked", "the vault is locked");
+    return `Welcome to ${host}, signed in from the vault\r\n`;
   }
   if (host !== "prompt.test" && host !== "kbd.test") {
     throw fail("connect_failed", `could not resolve ${host}`);

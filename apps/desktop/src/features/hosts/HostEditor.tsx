@@ -3,7 +3,14 @@
 
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import type { EnvSpec, GroupView, GuardSpec, HostView, SettingsSpec } from "@/ipc/index.ts";
+import type {
+  EnvSpec,
+  GroupView,
+  GuardSpec,
+  HostView,
+  IdentityView,
+  SettingsSpec,
+} from "@/ipc/index.ts";
 
 import { type HostsStore, messageOf } from "./hosts-store.ts";
 
@@ -169,13 +176,17 @@ function descendants(groups: readonly GroupView[], id: string): Set<string> {
   return found;
 }
 
+const NO_IDENTITIES: readonly IdentityView[] = [];
+
 export function EditorDialog({
   store,
   editing,
+  identities = NO_IDENTITIES,
   onClose,
 }: {
   store: HostsStore;
   editing: Editing;
+  identities?: readonly IdentityView[];
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -192,9 +203,21 @@ export function EditorDialog({
       className="top-[10%] m-0 mx-auto w-[min(520px,90vw)] rounded-lg border border-current/15 bg-background p-0 text-sm text-foreground shadow-xl backdrop:bg-black/30"
     >
       {editing.kind === "host" ? (
-        <HostForm store={store} host={editing.host} titleId={titleId} onDone={onClose} />
+        <HostForm
+          store={store}
+          host={editing.host}
+          identities={identities}
+          titleId={titleId}
+          onDone={onClose}
+        />
       ) : (
-        <GroupForm store={store} group={editing.group} titleId={titleId} onDone={onClose} />
+        <GroupForm
+          store={store}
+          group={editing.group}
+          identities={identities}
+          titleId={titleId}
+          onDone={onClose}
+        />
       )}
     </dialog>
   );
@@ -203,14 +226,17 @@ export function EditorDialog({
 function HostForm({
   store,
   host,
+  identities,
   titleId,
   onDone,
 }: {
   store: HostsStore;
   host: HostView | undefined;
+  identities: readonly IdentityView[];
   titleId: string;
   onDone: () => void;
 }) {
+  const [identity, setIdentity] = useState(host?.settings.identity ?? "");
   const { view } = store.getSnapshot();
   const [label, setLabel] = useState(host?.label ?? "");
   const [address, setAddress] = useState(host?.address ?? "");
@@ -234,7 +260,7 @@ function HostForm({
       setError("Port must be a whole number");
       return;
     }
-    const withOptions = withSession(host?.settings ?? {}, session);
+    const withOptions = withSession({ ...host?.settings, identity: identity || null }, session);
     if (typeof withOptions === "string") {
       setError(withOptions);
       return;
@@ -361,6 +387,7 @@ function HostForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <IdentityField value={identity} onChange={setIdentity} identities={identities} />
       <SessionFields
         value={session}
         onChange={setSession}
@@ -374,14 +401,17 @@ function HostForm({
 function GroupForm({
   store,
   group,
+  identities,
   titleId,
   onDone,
 }: {
   store: HostsStore;
   group: GroupView | undefined;
+  identities: readonly IdentityView[];
   titleId: string;
   onDone: () => void;
 }) {
+  const [identity, setIdentity] = useState(group?.settings.identity ?? "");
   const { view } = store.getSnapshot();
   const [name, setName] = useState(group?.name ?? "");
   const [parent, setParent] = useState(group?.parent ?? "");
@@ -400,7 +430,7 @@ function GroupForm({
       setError("Port must be a whole number");
       return;
     }
-    const withOptions = withSession(group?.settings ?? {}, session);
+    const withOptions = withSession({ ...group?.settings, identity: identity || null }, session);
     if (typeof withOptions === "string") {
       setError(withOptions);
       return;
@@ -477,6 +507,7 @@ function GroupForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <IdentityField value={identity} onChange={setIdentity} identities={identities} />
       <SessionFields value={session} onChange={setSession} />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit from the parent group" />
     </Form>
@@ -484,6 +515,35 @@ function GroupForm({
 }
 
 /** Agent forwarding and environment variables. */
+/**
+ * The vault identity to sign in with. While the vault is locked the list is
+ * empty, and a chosen identity shows by its id so saving keeps it.
+ */
+function IdentityField({
+  value,
+  onChange,
+  identities,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  identities: readonly IdentityView[];
+}) {
+  const known = identities.some((i) => i.id === value);
+  return (
+    <Field label="Identity from the vault">
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={FIELD}>
+        <option value="">None (inherit)</option>
+        {value && !known && <option value={value}>{`${value} (vault locked)`}</option>}
+        {identities.map((identity) => (
+          <option key={identity.id} value={identity.id}>
+            {identity.user ? `${identity.name} (${identity.user})` : identity.name}
+          </option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
 function SessionFields({
   value,
   onChange,

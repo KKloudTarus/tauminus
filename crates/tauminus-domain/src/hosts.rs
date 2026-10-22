@@ -99,6 +99,10 @@ macro_rules! id_type {
 
 id_type!(HostId, "saved host");
 id_type!(GroupId, "group of hosts");
+id_type!(
+    IdentityId,
+    "vault identity: a reusable user, password, and key"
+);
 
 /// A name shown to the user: 1 to 128 characters, no control characters.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -243,6 +247,8 @@ pub struct Settings {
     /// Variables sent before the shell starts, sorted by name, one per name.
     /// A host's value for a name wins over its groups'.
     pub env: Vec<EnvVar>,
+    /// The vault identity to log in with; `None` inherits.
+    pub identity: Option<IdentityId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,6 +521,12 @@ impl Inventory {
         })
     }
 
+    /// The vault identity a host logs in with: its own, or the nearest
+    /// group's. O(d).
+    pub fn identity(&self, id: &HostId) -> Result<Option<IdentityId>, HostsError> {
+        Ok(self.chain(id)?.iter().find_map(|s| s.identity.clone()))
+    }
+
     /// Whether a host forwards the agent, by its own setting or the nearest
     /// group's. O(d).
     pub fn forwards_agent(&self, id: &HostId) -> Result<bool, HostsError> {
@@ -674,7 +686,8 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         methods,
         identity_files,
         identities_only,
-        forward_agent
+        forward_agent,
+        identity
     );
     let mut env = child.env.clone();
     env.extend(parent.env.iter().cloned());

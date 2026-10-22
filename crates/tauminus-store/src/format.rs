@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    AuthMethod, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Inventory,
-    Label, Pattern, Route, Settings, Tag, UserName,
+    AuthMethod, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId,
+    Inventory, Label, Pattern, Route, Settings, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
@@ -75,6 +75,8 @@ struct SettingsRecord {
     forward_agent: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     env: Vec<EnvRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,6 +108,7 @@ impl SettingsRecord {
     fn is_empty(&self) -> bool {
         self.guard.is_empty()
             && self.forward_agent.is_none()
+            && self.identity.is_none()
             && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
@@ -268,6 +271,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
                 .collect(),
         },
         forward_agent: s.forward_agent,
+        identity: s.identity.as_ref().map(ToString::to_string),
         env: s
             .env
             .iter()
@@ -358,6 +362,11 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         identities_only: r.identities_only,
         guard: guard(r.guard)?,
         forward_agent: r.forward_agent,
+        identity: r
+            .identity
+            .map(|i| IdentityId::parse(&i))
+            .transpose()
+            .map_err(|e| format!("identity: {e}"))?,
         env: env(&r.env)?,
     })
 }

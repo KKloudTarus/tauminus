@@ -10,13 +10,16 @@ mod hosts;
 mod ipc;
 mod links;
 mod ssh;
+mod vault;
 
 use std::sync::Arc;
 
+use tauminus_app::vault::Vault;
 use tauminus_app::{HostBook, LocalShells, SessionConfig, SessionManager, SshSessions};
 use tauminus_pty::NativePtyLauncher;
 use tauminus_ssh::{AgentSource, HostKeyStore, OpenSshConfig, RusshConnector};
-use tauminus_store::JsonHostStore;
+use tauminus_store::vault::VaultFile;
+use tauminus_store::{FileVaultBackend, JsonHostStore, OsKeychain};
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
 use tracing::info;
@@ -46,6 +49,18 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         links::open_link,
         clipboard::clipboard_read_text,
         clipboard::clipboard_write_text,
+        vault::vault_status,
+        vault::vault_create,
+        vault::vault_unlock,
+        vault::vault_unlock_keychain,
+        vault::vault_lock,
+        vault::vault_touch,
+        vault::vault_set_idle,
+        vault::vault_change_password,
+        vault::vault_set_keychain,
+        vault::identities_list,
+        vault::identity_save,
+        vault::identity_delete,
     ])
 }
 
@@ -86,6 +101,14 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
             hosts::Hosts::Unavailable(e.to_string())
         }
     });
+    let backend = FileVaultBackend::new(
+        VaultFile::new(config_dir.join("vault.json")),
+        Arc::new(OsKeychain::new()),
+    );
+    let vault = tauri::async_runtime::block_on(async {
+        Vault::new(Arc::new(backend), tauminus_app::vault::DEFAULT_IDLE)
+    });
+    app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(
         home.map(|home| OpenSshConfig::user(home, local)),

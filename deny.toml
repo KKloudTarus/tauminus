@@ -21,6 +21,11 @@ ignore = [
   { id = "RUSTSEC-2023-0071", reason = "rsa: one signature per user-initiated connect; see comment above" },
   { id = "RUSTSEC-2024-0436", reason = "paste: pulled in by specta 2.0.0-rc.25" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: pulled in by gtk-rs 0.18 via Tauri on Linux" },
+  # Merged into zbus 6, not abandoned; secret-service still builds on zbus 5.
+  # Revisit when the Secret Service keyring store moves to zbus 6.
+  { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6; pulled in by the Secret Service keychain on Linux" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6; pulled in by the Secret Service keychain on Linux" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6; pulled in by the Secret Service keychain on Linux" },
 ]
 
 [licenses]
@@ -58,6 +63,7 @@ deny = [
   { crate = "portable-pty", wrappers = ["tauminus-pty"], reason = "only the PTY adapter talks to the OS pseudo-terminal" },
   { crate = "russh", wrappers = ["tauminus-ssh"], reason = "only the SSH adapter speaks the SSH protocol" },
   { crate = "arboard", wrappers = ["tauminus-desktop"], reason = "the OS clipboard belongs to the desktop shell" },
+  { crate = "keyring-core", wrappers = ["tauminus-store", "zbus-secret-service-keyring-store", "apple-native-keyring-store", "windows-native-keyring-store"], reason = "only the store adapter talks to the OS keychain" },
   { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
   { crate = "specta", wrappers = ["tauminus-desktop", "tauri", "tauri-specta", "specta-typescript", "specta-serde", "specta-util"], reason = "IPC types live in the desktop shell" },
 ]

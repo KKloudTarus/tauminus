@@ -36,7 +36,9 @@ export type Action =
   | "theme.cycle"
   | "ssh.connect"
   | "hosts.toggle"
-  | "hosts.import";
+  | "hosts.import"
+  | "vault.open"
+  | "vault.lock";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -60,6 +62,8 @@ export const ACTIONS: readonly Action[] = [
   "ssh.connect",
   "hosts.toggle",
   "hosts.import",
+  "vault.open",
+  "vault.lock",
 ];
 
 export type Platform = "mac" | "other";
@@ -89,6 +93,8 @@ const OTHER: Bindings = {
   "ssh.connect": ["ctrl+shift+o"],
   "hosts.toggle": ["ctrl+shift+h"],
   "hosts.import": [],
+  "vault.open": [],
+  "vault.lock": [],
 };
 
 const MAC: Bindings = {
@@ -114,6 +120,8 @@ const MAC: Bindings = {
   "ssh.connect": ["meta+shift+o"],
   "hosts.toggle": ["meta+shift+h"],
   "hosts.import": [],
+  "vault.open": [],
+  "vault.lock": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

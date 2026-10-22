@@ -12,10 +12,11 @@ import { GuardDialog } from "./GuardDialog.tsx";
 interface TerminalViewProps {
   controller: TerminalController;
   className?: string;
+  onUnlockVault?: (retry: () => void) => void;
 }
 
 /** Shows a terminal. Mounting attaches it; unmounting detaches it and keeps the session. */
-export function TerminalView({ controller, className }: TerminalViewProps) {
+export function TerminalView({ controller, className, onUnlockVault }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const status = useSyncExternalStore(controller.subscribe, controller.getStatus);
   const prompt = useSyncExternalStore(controller.subscribe, controller.getPrompt);
@@ -64,6 +65,7 @@ export function TerminalView({ controller, className }: TerminalViewProps) {
             code={status.code}
             message={status.message}
             onRetry={() => controller.retry()}
+            {...(onUnlockVault ? { onUnlockVault } : {})}
           />
         ) : (
           <output className="block border-t border-current/10 px-3 py-1 text-xs opacity-80">
