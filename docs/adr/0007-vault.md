@@ -99,6 +99,15 @@ an identity's host elsewhere. That writer can already set a `ProxyCommand`,
 which runs code, so binding identities to host keys would not lower the
 risk; it is left out.
 
+### Generated keys and installing them
+
+Keys are generated with ssh-key (already in the tree through russh) from
+the OS random source, on a blocking thread. Installing a public key runs a
+POSIX `sh` script over an exec channel, signing in with the host's own
+settings, not the identity being installed. The script is sent on stdin to
+`exec sh -s`, which works whatever the login shell is; a server without a
+POSIX `sh` (Windows OpenSSH) reports the failure.
+
 ## Consequences
 
 - One vault per machine. Team vaults (v0.5) will add a slot type that wraps

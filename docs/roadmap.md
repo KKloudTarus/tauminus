@@ -104,7 +104,7 @@ Vault
 - [x] Master password unlock, OS keychain unlock, auto-lock after idle time
 - [ ] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit
 - [x] Identities: reusable user, password, and key bundles
-- [ ] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
+- [x] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
 
 Session
 
