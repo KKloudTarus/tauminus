@@ -9,5 +9,7 @@ extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg
 mke = "mke"
 # zsh's backward incremental search prompt, bck-i-search
 bck = "bck"
+# openssl's -passin flag
+passin = "passin"
 # Proper names and protocol terms
 tauminus = "tauminus"
