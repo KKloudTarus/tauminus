@@ -27,6 +27,7 @@ import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type Lane, type OutputScheduler, outputScheduler } from "./output-scheduler.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { dropsRepeat } from "./repeat-guard.ts";
+import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 
 /** Delay before retrying an acknowledgement whose IPC call failed. */
@@ -105,6 +106,8 @@ export class TerminalController {
   #observer: ResizeObserver | undefined;
   /** Removes the IME fix; set once the terminal has its textarea. */
   #stopImeFix: (() => void) | undefined;
+  /** Holds the textarea still during bulk output; set with the textarea. */
+  #pin: TextareaPin | undefined;
   #frame = 0;
   /**
    * The grid size the session last heard. Compared with the terminal's own
@@ -277,7 +280,10 @@ export class TerminalController {
     } else {
       this.terminal.open(host);
       const { textarea } = this.terminal;
-      if (textarea) this.#stopImeFix = startUnannouncedCompositions(textarea);
+      if (textarea) {
+        this.#stopImeFix = startUnannouncedCompositions(textarea);
+        if (this.terminal.element) this.#pin = new TextareaPin(this.terminal.element, textarea);
+      }
     }
     this.#acquireWebgl();
     this.#fit.fit();
@@ -316,6 +322,7 @@ export class TerminalController {
     this.#retireWebgl();
     this.#input.close();
     this.#stopImeFix?.();
+    this.#pin?.dispose();
     this.#output.close();
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
     this.#session?.close().catch(ignoreEndedSession);
@@ -378,6 +385,7 @@ export class TerminalController {
     if (this.#disposed) {
       return;
     }
+    this.#pin?.output(data.byteLength);
     this.#output.push(data);
   }
 

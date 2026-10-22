@@ -79,3 +79,12 @@ body,
 .xterm .xterm-helper-textarea {
   white-space: pre;
 }
+
+/*
+ * While a pane takes bulk output, TextareaPin adds this class so xterm.js's
+ * moves of its input textarea, one per cursor move, cost no layout.
+ */
+.xterm.tauminus-pinned-input .xterm-helper-textarea {
+  top: 0 !important;
+  left: 0 !important;
+}
