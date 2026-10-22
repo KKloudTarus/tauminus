@@ -24,4 +24,6 @@ const COMMANDS: &[&str] = &[
     "hosts_import_ssh_config",
     "host_connect",
     "open_link",
+    "clipboard_read_text",
+    "clipboard_write_text",
 ];

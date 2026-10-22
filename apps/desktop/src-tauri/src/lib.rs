@@ -4,6 +4,7 @@
 //! Composition root: builds the adapters, hands them to the use cases, and
 //! exposes the use cases to the webview as IPC commands.
 
+mod clipboard;
 mod commands;
 mod hosts;
 mod ipc;
@@ -42,6 +43,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
         links::open_link,
+        clipboard::clipboard_read_text,
+        clipboard::clipboard_write_text,
     ])
 }
 
@@ -62,6 +65,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         Arc::clone(&sessions),
     ));
     app.manage(Arc::new(ssh::PromptBroker::default()));
+    app.manage(clipboard::Clipboard::default());
 
     // Keys the user trusts here go to Tauminus's own file; the user's
     // OpenSSH files are read but never written.

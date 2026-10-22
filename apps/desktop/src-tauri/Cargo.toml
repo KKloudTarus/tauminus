@@ -37,6 +37,13 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 zeroize.workspace = true
 
+# Wayland sessions need the data-control protocol; X11 works without it.
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { workspace = true, features = ["wayland-data-control"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+arboard.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
 # The mock runtime, to call commands with the state the app really manages.

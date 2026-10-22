@@ -24,6 +24,8 @@ tauminus-store = { path = "crates/tauminus-store" }
 
 # External crates. Each one is allowed only in the crates listed in deny.toml [bans].
 anyhow = "1.0.104"
+# The OS clipboard, text only; WebKitGTK refuses navigator.clipboard reads.
+arboard = { version = "3.7.0", default-features = false }
 portable-pty = "0.9.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
