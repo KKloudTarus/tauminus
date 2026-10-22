@@ -25,6 +25,7 @@ import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type Lane, type OutputScheduler, outputScheduler } from "./output-scheduler.ts";
+import { defusePaste } from "./paste.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { dropsRepeat } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
@@ -194,7 +195,7 @@ export class TerminalController {
     this.terminal.parser.registerCsiHandler({ final: "b" }, (params) =>
       dropsRepeat(params, this.terminal.cols, this.terminal.rows),
     );
-    this.terminal.onData((data) => this.#input.push({ kind: "text", data }));
+    this.terminal.onData((data) => this.#input.push({ kind: "text", data: defusePaste(data) }));
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
     );
