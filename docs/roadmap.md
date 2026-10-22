@@ -103,6 +103,9 @@ Vault
 - [x] Vault file: Argon2id key derivation, ChaCha20-Poly1305 per record
 - [x] Master password unlock, OS keychain unlock, auto-lock after idle time
 - [x] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit (ADR 0009)
+  - [x] Linux: polkit run against a real polkitd and agent
+  - [x] macOS and Windows: the OS calls run in CI on both runners, which have no sensor
+  - [ ] Touch ID and Windows Hello prompts answered on real hardware ([steps](testing/presence.md))
 - [x] Identities: reusable user, password, and key bundles
 - [x] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
 
