@@ -241,7 +241,7 @@ stored ProxyCommand but not add or change it; saved hosts connect through
 | Flow control update | O(1) | O(1) |
 | Input queue, n bytes in m chunks | O(n + m) | O(n) until sent |
 | WebGL budget, acquire or release | O(1) | O(12) |
-| Output scheduler: push n bytes, send a chunk, grant or release a turn | O(n / 4 KiB) views, no copy; O(1) amortized per chunk; O(1) per turn | O(p) for p panes, plus what flow control lets each hold |
+| Output scheduler: push n bytes, send a chunk, grant or release a turn | O(n / 1 KiB) views, no copy; O(1) amortized per chunk; O(1) per turn | O(p) for p panes, plus what flow control lets each hold |
 | Split, close, resize, or spatial focus in a tab | O(n), n ≤ 31 nodes | O(n) for the rebuilt path |
 | Shortcut lookup per keystroke | O(1) | O(b) for b bindings |
 | Load `known_hosts`, n bytes over all files | O(n), off the async workers | O(n) |
@@ -264,7 +264,7 @@ Every pane parses its output on the one main thread. xterm.js parses for up
 to 12 ms before it yields, so three panes flooding at once ran back to back,
 dropped 41% of frames and delayed a keystroke echo by up to 91 ms.
 `OutputScheduler` gives one pane at a time a turn of about 6 ms. A turn keeps
-two 4 KiB chunks with xterm.js and sends the next from each chunk's parse
+two 1 KiB chunks with xterm.js and sends the next from each chunk's parse
 callback, so chunks within a turn cost no timer hop, and it ends on time,
 not on bytes: `yes` parses far slower per byte than long lines. Turns go
 round robin and pass on through a `MessageChannel` task, which the browser
