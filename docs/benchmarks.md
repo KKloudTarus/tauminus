@@ -127,3 +127,89 @@ PSS splits shared libraries between the processes that map them, so it is
 the fairer total. Termius is not installed on this machine, so the
 comparison the roadmap asks for is still to do, as are the macOS and
 Windows webviews.
+
+## 2026-10-22: all three webviews on GitHub runners (v0.1 exit criteria)
+
+`.github/workflows/bench.yml` builds a benchmark app
+(`VITE_TAUMINUS_BENCH=1`) and runs the workload in
+`apps/desktop/src/bench/run.ts` on Ubuntu 22.04 (WebKitGTK, Xvfb inside a
+D-Bus session), macOS 15 (WKWebView) and Windows Server 2025 (WebView2):
+
+1. 10 s idle, the display's own frame pace;
+2. 500 MiB of 120-column text in one of four panes (`cargo xtask flood text 500`);
+3. `yes` for 60 s in three of the four panes, three rounds 30 s apart.
+
+The fourth pane has focus. Every 250 ms it gets one key through
+`terminal.input` and the time to the painted echo is recorded; the OS
+keyboard path is not part of the number. Memory is sampled once a second
+from outside. The numbers are from run 39727177991 (commit b1a1586), the
+first with every fix below in place; earlier runs on the same commits
+agree on Linux and Windows within a few percent.
+
+| Platform | Scenario | Frames per s | Dropped | Latency p50 / p95 / p99 / max | Webview RSS before / after |
+|---|---|---|---|---|---|
+| Linux | idle 10 s | 70.0 | 0% | 6 / 7 / 10 / 10 ms | 247 / 248 MiB |
+| Linux | text 500 MiB (51 s) | 61.9 | 0.1% | 8 / 21 / 23 / 31 ms | 248 / 288 MiB |
+| Linux | `yes` ×3, rounds 1 to 3 | 61.5 | 0.9% to 1.0% | 15 / 24 / 30 / 32 ms worst | 288 / 358, 348, 354 MiB |
+| Windows | idle 10 s | 64.0 | 0% | 15 / 16 / 16 / 16 ms | 403 / 404 MiB |
+| Windows | text 500 MiB (130 s) | 64.0 | 0% | 12 / 14 / 28 / 59 ms | 399 / 427 MiB |
+| Windows | `yes` ×3, rounds 1 to 3 | 64.0 | 0% | 12 / 15 / 38 / 48 ms worst | 426 / 455, 364, 343 MiB |
+| macOS, WebGL | idle 10 s | 31.3 | 47.3% | 13 / 80 / 84 / 84 ms | 237 / 241 MiB |
+| macOS, WebGL | text 500 MiB (154 s) | 38.8 | 34.0% | 11 / 39 / 61 / 897 ms | 241 / 306 MiB |
+| macOS, WebGL | `yes` ×3, rounds 1 to 3 | 43.7 to 58.4 | 2.1% to 25.4% | 12 / 35 / 63 / 306 ms worst | 306 / 386 MiB, flat |
+| macOS, DOM | idle 10 s | 46.6 | 18.5% | 21 / 38 / 48 / 48 ms | 218 / 273 MiB |
+| macOS, DOM | text 500 MiB (139 s) | 44.7 | 21.3% | 5 / 33 / 39 / 109 ms | 273 / 392 MiB |
+| macOS, DOM | `yes` ×3, rounds 1 to 3 | 58.9 to 60.0 | 0.5% to 1.2% | 14 / 24 / 33 / 138 ms worst | 392 / 464 to 468 MiB, flat |
+
+Against the targets:
+
+- **Dropped frames under 5%.** Met on Linux (at most 1.0%) and Windows
+  (0%). The macOS runner's virtual display does not keep 60 Hz with
+  nothing to draw: 31 frames a second idle with WebGL, 47 with the DOM
+  renderer. Under load the frame rate never fell below that idle pace, and
+  with the DOM renderer the `yes` rounds held 59 to 60 frames a second, so
+  the runner, not the app, sets the drop rate there. A real Mac is needed
+  to measure it.
+- **Input latency under 50 ms.** p99 is under 50 ms on Linux (30 ms or
+  less), Windows (38 ms or less) and macOS with the DOM renderer (39 ms or
+  less). With WebGL on the macOS runner's emulated GPU, p99 reached 61 and
+  63 ms and single keystrokes up to 897 ms. The worst single keystroke
+  elsewhere was 59 ms on Windows and 138 ms on macOS with DOM.
+- **Webview RSS stable within 50 MB after the run.** After each run the
+  webview holds steady: within 1 to 2 MiB over the following 20 s on Linux
+  and macOS. WebView2 gives memory back after a flood, so on Windows the
+  samples fall by 83 to 145 MiB in that window. Run after run, RSS after a
+  round stays within 50 MiB of RSS after the round before on every
+  platform, and does not climb.
+
+### Idle next to Termius on the same runner
+
+`ci/idle.sh` starts each app the same way and reads the whole process tree
+30 s later, shells left out. Termius 10.2.1 from termius.com; its Windows
+download returned 404, so there is no Windows row. Five runs, four for
+the macOS DOM build:
+
+| Runner | Tauminus window | Termius window | Tauminus RSS | Termius RSS |
+|---|---|---|---|---|
+| Ubuntu 22.04 | 127 to 144 ms | 579 to 2277 ms | 369 to 372 MiB | 1407 to 1503 MiB |
+| macOS 15, WebGL | not readable on the runner | not readable | 256 to 265 MiB | 1073 to 1194 MiB |
+| macOS 15, DOM | not readable | not readable | 226 to 231 MiB | 1189 to 1211 MiB |
+
+Tauminus shows its window 4 to 16 times sooner on Linux and uses about a
+quarter of Termius's memory idle. Cold start to the first shell output was
+855 ms on Linux, 3.9 to 6.0 s on macOS and 4.1 s on Windows runners, all
+unsigned first launches.
+
+### What the benchmark found
+
+- On Windows every pane stayed empty: ConPTY asks for the cursor position
+  before cmd.exe starts and holds it until answered, and xterm.js's answer
+  went to a session still opening. Fixed by queuing input for an opening
+  session.
+- A focused pane that floods dropped 6% to 15% of frames on WebKitGTK,
+  because xterm.js moved its focused input textarea on every cursor move.
+  Fixed by holding the textarea still during bulk output.
+- 4 KiB chunks let a turn of the output scheduler run past a frame on a
+  slow CPU; chunks are 1 KiB now, for about 3% of throughput.
+- Without a D-Bus session bus, WebKitGTK waits out a 25 s timeout before
+  the first page; desktops have one, so the Linux job runs in one too.
