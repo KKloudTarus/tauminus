@@ -12,6 +12,8 @@
 //! - `flood report <hex>` decodes hex and writes it to the file named by
 //!   `TAUMINUS_BENCH_OUT`. The benchmark page types this to hand its
 //!   results out; hex needs no quoting in any shell.
+//! - `flood note <hex>` appends one decoded line to `TAUMINUS_BENCH_OUT`
+//!   with `.log` added, so a stuck run shows how far it got.
 //!
 //! Writes go through one 64 KiB buffer, so the program is never the
 //! bottleneck: the terminal's flow control is.
@@ -31,7 +33,10 @@ pub(crate) fn run(args: &[String]) -> Result<()> {
             seconds.parse().context("seconds must be a number")?,
         )),
         [mode, hex] if mode == "report" => report(hex),
-        _ => bail!("usage: cargo xtask flood text <MiB> | yes <seconds> | report <hex>"),
+        [mode, hex] if mode == "note" => note(hex),
+        _ => {
+            bail!("usage: cargo xtask flood text <MiB> | yes <seconds> | report <hex> | note <hex>")
+        }
     }
 }
 
@@ -79,6 +84,20 @@ fn yes(duration: Duration) -> Result<()> {
 fn report(hex: &str) -> Result<()> {
     let path = std::env::var_os("TAUMINUS_BENCH_OUT").context("TAUMINUS_BENCH_OUT is not set")?;
     std::fs::write(&path, decode_hex(hex)?).context("cannot write the report")?;
+    Ok(())
+}
+
+fn note(hex: &str) -> Result<()> {
+    let mut path =
+        std::env::var_os("TAUMINUS_BENCH_OUT").context("TAUMINUS_BENCH_OUT is not set")?;
+    path.push(".log");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .context("cannot open the note log")?;
+    file.write_all(&decode_hex(hex)?)?;
+    file.write_all(b"\n")?;
     Ok(())
 }
 
