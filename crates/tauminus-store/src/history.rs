@@ -23,10 +23,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use tauminus_domain::{
     EXCERPT_FROM, ExitFilter, HistoryEntry, HistoryHit, HistoryQuery, Retention,
 };
-use zeroize::Zeroizing;
 
 use crate::vault::SecretKey;
 
+mod key;
 mod pending;
 
 pub use pending::{HistoryKeyPair, Pending, PendingLog};
@@ -121,17 +121,11 @@ impl HistoryDb {
         if !mode.eq_ignore_ascii_case("delete") {
             return Err(busy());
         }
-        let statement = key_statement("rekey", new);
-        let rekeyed = conn.execute_batch(&statement);
+        let rekeyed = key::rekey(&conn, new);
         // Back to the log, under whichever key the file is now.
         let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0));
-        if rekeyed.is_err() {
-            // The error may quote the statement: say only what failed.
-            return Err(HistoryError::Corrupt(
-                "the history could not be re-encrypted".into(),
-            ));
-        }
-        Ok(())
+        drop(conn);
+        moved(path, new, rekeyed)
     }
 
     /// Adds `entries` in one transaction, stored at `now_ms`. O(k) rows
@@ -423,16 +417,18 @@ impl HistoryDb {
     }
 }
 
-/// `PRAGMA <pragma> = "x'<hex>'"` for a raw 256-bit key, in a buffer wiped
-/// when dropped.
-fn key_statement(pragma: &str, key: &SecretKey) -> Zeroizing<String> {
-    let mut statement = Zeroizing::new(String::with_capacity(84));
-    let _ = write!(statement, "PRAGMA {pragma} = \"x'");
-    for b in key.as_bytes() {
-        let _ = write!(statement, "{b:02x}");
+/// Whether a re-encryption moved the file to `new`. SQLCipher answers OK
+/// even for a rewrite it rolled back partway (a full disk): only the file
+/// says which key it is under. Still under the old one, it is reported, so
+/// it is kept and moved later, and never taken for another vault's.
+fn moved(path: &Path, new: &SecretKey, rekeyed: bool) -> Result<(), HistoryError> {
+    match connect(path, new) {
+        Ok(_) if rekeyed => Ok(()),
+        Err(HistoryError::WrongKey) | Ok(_) => Err(HistoryError::Corrupt(
+            "the history could not be re-encrypted; it stays under its old key".into(),
+        )),
+        Err(e) => Err(e),
     }
-    statement.push_str("'\";");
-    statement
 }
 
 /// A connection to the database at `path`, keyed and set up. Only "not a
@@ -440,11 +436,13 @@ fn key_statement(pragma: &str, key: &SecretKey) -> Zeroizing<String> {
 fn connect(path: &Path, key: &SecretKey) -> Result<Connection, HistoryError> {
     let conn = Connection::open(path)?;
     // The raw key, so SQLCipher runs no KDF of its own: the vault's
-    // Argon2id already guards it. No error from it is passed on, since
-    // SQLite quotes the statement in some errors.
-    let statement = key_statement("key", key);
-    if conn.execute_batch(&statement).is_err() {
-        return Err(HistoryError::WrongKey);
+    // Argon2id already guards it.
+    // The call fails only when SQLCipher cannot start (no memory, no
+    // crypto library): a wrong key shows at the first read, below.
+    if !key::key(&conn, key) {
+        return Err(HistoryError::Corrupt(
+            "the history could not be keyed".into(),
+        ));
     }
     // SQLCipher 4's page format and KDF settings, pinned: a later SQLCipher
     // with new defaults must still read the file, not set it aside.

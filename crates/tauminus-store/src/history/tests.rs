@@ -728,3 +728,57 @@ fn a_rekey_waits_for_the_file_to_be_free() {
         .unwrap();
     assert_eq!(mode, "wal");
 }
+
+#[test]
+fn a_file_keyed_by_the_pragma_opens_through_the_key_call() {
+    let dir = Dir::new("pragma-key");
+    let key = SecretKey::random().unwrap();
+    std::fs::create_dir_all(dir.db().parent().unwrap()).unwrap();
+    {
+        // As the history was keyed before: `PRAGMA key` with the raw key.
+        let conn = Connection::open(dir.db()).unwrap();
+        let hex = crate::vault::hex(key.as_bytes());
+        conn.execute_batch(&format!("PRAGMA key = \"x'{hex}'\";"))
+            .unwrap();
+        conn.execute_batch("CREATE TABLE probe (x INTEGER); INSERT INTO probe VALUES (7);")
+            .unwrap();
+    }
+    let conn = Connection::open(dir.db()).unwrap();
+    assert!(key::key(&conn, &key));
+    let x: i64 = conn
+        .query_row("SELECT x FROM probe", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(x, 7);
+    let wrong = Connection::open(dir.db()).unwrap();
+    assert!(key::key(&wrong, &SecretKey::random().unwrap()));
+    assert!(
+        wrong
+            .query_row("SELECT count(*) FROM sqlite_master", [], |r| r
+                .get::<_, i64>(0))
+            .is_err()
+    );
+}
+
+#[test]
+fn a_rewrite_sqlcipher_rolled_back_is_reported_not_taken_as_done() {
+    let dir = Dir::new("rolled-back");
+    let old = SecretKey::random().unwrap();
+    let new = SecretKey::random().unwrap();
+    drop(HistoryDb::open(&dir.db(), &old).unwrap());
+    // As after a rewrite that failed partway: SQLCipher said OK, and the
+    // file is still under the old key.
+    assert!(matches!(
+        moved(&dir.db(), &new, true),
+        Err(HistoryError::Corrupt(_))
+    ));
+    // The file is untouched, and opens under the old key.
+    assert!(HistoryDb::open(&dir.db(), &old).is_ok());
+    // A rewrite SQLCipher refused is reported too.
+    assert!(matches!(
+        moved(&dir.db(), &old, false),
+        Err(HistoryError::Corrupt(_))
+    ));
+    // One that took is done.
+    HistoryDb::rekey(&dir.db(), &old, &new).unwrap();
+    assert!(moved(&dir.db(), &new, true).is_ok());
+}
