@@ -245,6 +245,21 @@ Costs: unlocking runs Argon2id once (64 MiB, about 0.3 s) off the async
 workers. Listing, saving, and connecting decrypt the identity records, O(n)
 for n ≤ 1000 identities, and a save rewrites the file.
 
+### History
+
+The view records each command it sees run, with its output, through
+`history_record`; the backend drops it when the host records no history.
+With the vault open, entries go into `history.db` (SQLite with FTS5,
+encrypted by SQLCipher). With it locked, each is sealed to the history's
+X25519 public key and appended to `history.pending`; the next unlock
+imports them. Searching needs the vault open. Details in
+[ADR 0008](adr/0008-history.md).
+
+Costs: a search is an FTS5 match read newest first, so it stops at the
+result limit: 9 ms at the 95th percentile over a million lines. Recording
+one command is one insert, or one seal and fsync while locked. Pruning is
+O(n) and runs on unlock and every 500 commands.
+
 ### Saved hosts
 
 A host sets what it needs and inherits the rest from its group, then from
