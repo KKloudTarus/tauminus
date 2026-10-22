@@ -37,6 +37,10 @@
     "allow-identities-list",
     "allow-identity-save",
     "allow-identity-delete",
-    "allow-identity-install"
+    "allow-identity-install",
+    "allow-history-record",
+    "allow-history-search",
+    "allow-history-output",
+    "allow-history-clear"
   ]
 }

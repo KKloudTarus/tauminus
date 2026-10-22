@@ -9,6 +9,7 @@
 
 mod flow;
 mod guard;
+mod history;
 mod hosts;
 mod keys;
 mod output;
@@ -20,6 +21,10 @@ pub use flow::{FlowControl, FlowSignal, Watermarks};
 pub use guard::{
     Finding, GuardSettings, MAX_LINE, MAX_PATTERNS, MAX_POLICY_PATTERNS, Pattern, PatternError,
     Policy, Rule, Verdict,
+};
+pub use history::{
+    EXCERPT_FROM, ExitFilter, HistoryEntry, HistoryHit, HistoryQuery, HistoryQueryError,
+    MAX_COMMAND, MAX_OUTPUT, MAX_RESULTS, Retention,
 };
 pub use hosts::{
     Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label, MAX_GROUP_DEPTH,

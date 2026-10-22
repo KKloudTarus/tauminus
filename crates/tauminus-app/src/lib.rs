@@ -8,6 +8,7 @@
 //! commands. Nothing in this crate knows about Tauri or a specific transport
 //! library.
 
+pub mod history;
 mod hosts;
 mod local;
 pub mod ports;

@@ -22,6 +22,7 @@ import {
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
 import { CommandGuard, type GuardRequest, type GuardSource } from "./command-guard.ts";
+import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
@@ -94,6 +95,7 @@ export class TerminalController {
   #started = false;
   /** Checks commands before they run on a guarded host. */
   readonly #guard: CommandGuard | undefined;
+  readonly #recorder: CommandRecorder | undefined;
   readonly #guardSource: GuardSource | undefined;
   /** Output parses so far, and who waits for the next; for the guard's echo wait. */
   #parses = 0;
@@ -147,6 +149,8 @@ export class TerminalController {
       output?: OutputScheduler;
       /** The prod guard for the saved host behind this terminal. */
       guard?: GuardSource;
+      /** Where the commands this terminal runs are recorded. */
+      record?: (entry: RecordedCommand) => void;
     } = {},
   ) {
     this.#sessions = sessions;
@@ -209,7 +213,11 @@ export class TerminalController {
     this.#guardSource = options.guard;
     this.#guard = options.guard
       ? new CommandGuard(options.guard, {
-          send: (data) => this.#input.push({ kind: "text", data }),
+          // The history hears what the guard lets through, not what it holds back.
+          send: (data) => {
+            this.#recorder?.input(data);
+            this.#input.push({ kind: "text", data });
+          },
           screen: () => this.terminal.buffer.active,
           mark: () => this.terminal.registerMarker(0),
           ask: (request) => this.#askGuard(request),
@@ -233,11 +241,27 @@ export class TerminalController {
       for (const waiter of this.#parseWaiters) waiter();
       this.#parseWaiters.clear();
     });
+    const record = options.record;
+    this.#recorder = record
+      ? new CommandRecorder({
+          screen: () => this.terminal.buffer.active,
+          mark: () => this.terminal.registerMarker(0),
+          record,
+          now: () => Date.now(),
+        })
+      : undefined;
+    // Shell integration (OSC 133): where prompts, commands, and output start,
+    // and how each command ended. Other handlers still see the sequence.
+    this.terminal.parser.registerOscHandler(133, (data) => {
+      this.#recorder?.shellMark(data);
+      return false;
+    });
     this.terminal.onData((raw) => {
       const data = defusePaste(raw);
       if (this.#guard) {
         this.#guard.input(data);
       } else {
+        this.#recorder?.input(data);
         this.#input.push({ kind: "text", data });
       }
     });
@@ -398,6 +422,9 @@ export class TerminalController {
     clearTimeout(this.#ackRetry);
     this.#retireWebgl();
     this.#guard?.dispose();
+    // A tab closed with a command running keeps what it printed so far.
+    this.#recorder?.flush();
+    this.#recorder?.dispose();
     this.#guardRequest?.resolve(false);
     this.#guardRequest = undefined;
     this.#input.close();
@@ -429,6 +456,7 @@ export class TerminalController {
         onOutput: (data) => this.#write(data),
         onExit: (code) => {
           this.#session = undefined;
+          this.#recorder?.flush();
           this.#setStatus({ kind: "exited", code });
         },
       })

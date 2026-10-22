@@ -172,6 +172,11 @@ struct File {
     /// The record ids and nonces, sealed under the data key: deleting a
     /// record or putting back an older one fails the check on open.
     manifest: Sealed,
+    /// The command history's X25519 public key, readable while the vault
+    /// is locked so commands can be sealed to it. The manifest binds it, so
+    /// an edited key fails the next unlock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -218,6 +223,7 @@ pub struct OpenVault {
     /// The file as this vault last read or wrote it, so a save never
     /// replaces another window's change (such as a new password).
     seen: Option<u64>,
+    history: Option<[u8; KEY_LEN]>,
 }
 
 impl std::fmt::Debug for OpenVault {
@@ -268,6 +274,7 @@ impl VaultFile {
             slots: Vec::new(),
             records: BTreeMap::new(),
             seen: None,
+            history: None,
         };
         let wrapping = derive(password, &salt, kdf)?;
         vault.set_slot(SlotKind::Password, &wrapping)?;
@@ -293,6 +300,16 @@ impl VaultFile {
     /// The vault's id, without unlocking.
     pub fn vault_id(&self) -> Result<String, VaultError> {
         Ok(self.read()?.0.id)
+    }
+
+    /// The history's public key, without unlocking. Not authenticated until
+    /// the next unlock; only the user can write the file.
+    pub fn history_public(&self) -> Result<Option<[u8; KEY_LEN]>, VaultError> {
+        self.read()?
+            .0
+            .history
+            .map(|text| decode_exact::<KEY_LEN>(&text, "history key"))
+            .transpose()
     }
 
     /// Whether a keychain slot exists, without unlocking.
@@ -345,8 +362,12 @@ fn open(
         slots,
         records,
         manifest,
+        history,
         ..
     } = file;
+    let history = history
+        .map(|text| decode_exact::<KEY_LEN>(&text, "history key"))
+        .transpose()?;
     // Checked on every path, so a keychain unlock never carries costs the
     // password path would refuse into the next save.
     let costs = kdf.costs.check()?;
@@ -367,7 +388,7 @@ fn open(
         &data_key,
         &nonce,
         &decode(&manifest.data)?,
-        &manifest_aad(&id, costs, &salt),
+        &manifest_aad(&id, costs, &salt, history.as_ref()),
     )
     .map_err(|()| VaultError::Corrupt("the record list fails its check".into()))?;
     if *listed != manifest_of(&records) {
@@ -401,6 +422,7 @@ fn open(
         slots,
         records: opened,
         seen: Some(seen),
+        history,
     })
 }
 
@@ -446,6 +468,15 @@ impl OpenVault {
 
     pub fn remove_keychain_key(&mut self) {
         self.slots.retain(|s| s.kind != SlotKind::Keychain);
+    }
+
+    /// The history's public key, to save with the vault.
+    pub fn set_history_public(&mut self, key: [u8; KEY_LEN]) {
+        self.history = Some(key);
+    }
+
+    pub fn history_public(&self) -> Option<[u8; KEY_LEN]> {
+        self.history
     }
 
     pub fn has_keychain_key(&self) -> bool {
@@ -516,7 +547,7 @@ impl OpenVault {
             &self.data_key,
             &nonce,
             &manifest_of(&records),
-            &manifest_aad(&self.id, self.kdf, &self.salt),
+            &manifest_aad(&self.id, self.kdf, &self.salt, self.history.as_ref()),
         )?;
         let out = File {
             manifest: Sealed {
@@ -533,6 +564,7 @@ impl OpenVault {
             },
             slots: self.slots.clone(),
             records,
+            history: self.history.map(|key| encode(&key)),
         };
         let mut bytes = serde_json::to_vec_pretty(&out)
             .map_err(|e| VaultError::Io(std::io::Error::other(e)))?;
@@ -622,17 +654,22 @@ fn slot_aad(vault: &str, kind: SlotKind, kdf: Kdf, salt: &[u8]) -> Vec<u8> {
 
 /// Binds the KDF costs and salt too, so every unlock path, the keychain's
 /// included, refuses a file whose costs or salt were edited.
-fn manifest_aad(vault: &str, kdf: Kdf, salt: &[u8]) -> Vec<u8> {
+fn manifest_aad(vault: &str, kdf: Kdf, salt: &[u8], history: Option<&[u8; KEY_LEN]>) -> Vec<u8> {
     let Kdf {
         memory_kib,
         iterations,
         parallelism,
     } = kdf;
-    format!(
+    let mut aad = format!(
         "{FORMAT}/{VERSION}/manifest/{vault}/argon2id/{memory_kib}/{iterations}/{parallelism}/{}",
         hex(salt)
-    )
-    .into_bytes()
+    );
+    // Only a vault with a history key binds one, so vaults from before the
+    // history keep their additional data and still open.
+    if let Some(key) = history {
+        let _ = write!(aad, "/history/{}", hex(key));
+    }
+    aad.into_bytes()
 }
 
 /// The data key wrapped by `wrapping` for one slot.

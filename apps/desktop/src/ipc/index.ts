@@ -4,6 +4,7 @@
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
 import type { TextClipboard } from "./clipboard.ts";
+import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
@@ -25,6 +26,14 @@ export {
   tauriHosts,
 } from "./hosts.ts";
 export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
+export {
+  type ExitFilterSpec,
+  type HistoryClient,
+  type HistoryHitSpec,
+  type HistoryQuerySpec,
+  type HistoryRecordSpec,
+  tauriHistory,
+} from "./history.ts";
 export {
   type IdentityEdit,
   type IdentityView,
@@ -93,4 +102,12 @@ export async function vaultClient(): Promise<VaultClient> {
     return (await import("./fake-vault.ts")).sharedFakeVault();
   }
   return (await import("./vault.ts")).tauriVault;
+}
+
+/** The command history; the `e2e` build keeps one in memory. */
+export async function historyClient(): Promise<HistoryClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-history.ts")).fakeHistory();
+  }
+  return (await import("./history.ts")).tauriHistory;
 }

@@ -67,6 +67,9 @@ pub(crate) struct SettingsSpec {
     /// `ssh -A`; `null` inherits.
     #[serde(default)]
     pub(crate) forward_agent: Option<bool>,
+    /// Record commands in the history; `null` inherits (on at the root).
+    #[serde(default)]
+    pub(crate) history: Option<bool>,
     /// Variables sent before the shell starts. A host's value for a name
     /// wins over its groups'.
     #[serde(default)]
@@ -273,6 +276,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         }),
         identities_only: s.identities_only,
         forward_agent: s.forward_agent,
+        history: s.history,
         identity: s.identity.as_ref().map(ToString::to_string),
         env: (!s.env.is_empty()).then(|| {
             s.env
@@ -410,6 +414,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         identities_only: spec.identities_only,
         guard: guard_settings(spec.guard)?,
         forward_agent: spec.forward_agent,
+        history: spec.history,
         env: env_vars(spec.env)?,
         identity: spec
             .identity

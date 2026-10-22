@@ -67,7 +67,7 @@ interface Anchor {
  * Keys that make a shell run the line: Enter, keypad Enter, Ctrl+J,
  * Alt+Enter, and bash's Ctrl+O (operate-and-get-next).
  */
-const SUBMIT = new Set(["\r", "\u001bOM", "\n", "\u001b\r", "\u000f"]);
+export const SUBMIT = new Set(["\r", "\u001bOM", "\n", "\u001b\r", "\u000f"]);
 /** Ctrl+X Ctrl+E: bash and zsh open the line in an editor and run what it saves. */
 const EDIT_PREFIX = "\u0018";
 const EDIT_KEY = "\u0005";
@@ -79,8 +79,8 @@ const COMMENT_AND_RUN = "\u001b#";
  * A prompt for a secret: the keys typed after it never echo, and they are
  * not a command.
  */
-const SECRET_PROMPT =
-  /\b(password|passphrase|passcode|pin|token|secret|otp|verification code)\b[^:]{0,60}:\s*$/iu;
+export const SECRET_PROMPT =
+  /(?:\b(?:password|passphrase|pass phrase|passcode|passwort|pin|token|secret|otp|one-time code|verification code|authenticator code|api key|access key|secret key|private key|credential)s?\b|mot de passe|contraseña|senha|mật khẩu|パスワード|密码)[^:>?]{0,120}[:>?]\s*$/iu;
 /** Most rows read for one line; past `MAX_LINE` the backend refuses it anyway. */
 export const MAX_ROWS = 512;
 /** How long a check may take before the user is asked instead. */

@@ -91,6 +91,17 @@ export const commands = {
 	 *  host, signing in as a connect to that host would, prompts included.
 	 */
 	identityInstall: (identity: string, host: string, onPrompt: Channel<PromptRequest>) => typedError<null, CommandError>(__TAURI_INVOKE("identity_install", { identity, host, onPrompt })),
+	/**  Keeps a command, unless its host has history turned off. */
+	historyRecord: (entry: HistoryRecordSpec) => typedError<RecordedSpec, CommandError>(__TAURI_INVOKE("history_record", { entry })),
+	/**  Newest first. Needs the vault open. */
+	historySearch: (query: HistoryQuerySpec) => typedError<HistoryHitSpec[], CommandError>(__TAURI_INVOKE("history_search", { query })),
+	/**  One command's full output. */
+	historyOutput: (id: number) => typedError<string | null, CommandError>(__TAURI_INVOKE("history_output", { id })),
+	/**
+	 *  Forgets one saved host's commands (`""` for local sessions), or all.
+	 *  Returns how many went.
+	 */
+	historyClear: (host: string | null) => typedError<number, CommandError>(__TAURI_INVOKE("history_clear", { host })),
 };
 
 /* Types */
@@ -141,6 +152,8 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 /**  A system service, such as the OS keychain, is missing. */
 "unavailable" | "internal";
 
+export type ExitFilterSpec = "any" | "success" | "failure";
+
 /**  Grid size from the webview, validated before it reaches the use case. */
 export type GridSize = {
 	cols: number,
@@ -187,6 +200,45 @@ export type GuardVerdict = {
 	findings: GuardFinding[],
 	/**  The shell waits for another line before running this one. */
 	incomplete: boolean,
+};
+
+export type HistoryHitSpec = {
+	/**  Pass to `history_output` for the full output. */
+	id: number,
+	host: string | null,
+	label: string,
+	/**  Seconds since the Unix epoch. */
+	at: number,
+	exit: number | null,
+	command: string,
+	/**  Matched output, with matches between U+0001 and U+0002. */
+	snippet: string,
+};
+
+export type HistoryQuerySpec = {
+	text?: string,
+	/**  A saved host's id; `""` for local and ad hoc sessions; `null` for all. */
+	host?: string | null,
+	fromMs?: number | null,
+	toMs?: number | null,
+	exit?: ExitFilterSpec,
+	limit: number,
+};
+
+/**  A command the view saw run. */
+export type HistoryRecordSpec = {
+	/**  The saved host, or `null` for a local shell or an ad hoc connect. */
+	host?: string | null,
+	label: string,
+	command: string,
+	output?: string,
+	exit?: number | null,
+	/**
+	 *  When the command started, in seconds since the Unix epoch; the
+	 *  entry is recorded later, when its output ends. Within the last day,
+	 *  or now.
+	 */
+	started?: number | null,
 };
 
 export type HostInput = {
@@ -266,6 +318,8 @@ export type PromptRequest = {
 	prompt: PromptKind,
 };
 
+export type RecordedSpec = "stored" | "sealed" | "dropped";
+
 export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
 
 /**  Sent once when a session ends. */
@@ -296,6 +350,8 @@ export type SettingsSpec = {
 	guard?: GuardSpec | null,
 	/**  `ssh -A`; `null` inherits. */
 	forwardAgent?: boolean | null,
+	/**  Record commands in the history; `null` inherits (on at the root). */
+	history?: boolean | null,
 	/**
 	 *  Variables sent before the shell starts. A host's value for a name
 	 *  wins over its groups'.

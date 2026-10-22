@@ -10,11 +10,14 @@ import {
   detectPlatform,
 } from "@/features/keymap/keymap.ts";
 import { TerminalController } from "@/features/terminal/controller.ts";
+import type { RecordedCommand } from "@/features/terminal/recorder.ts";
+import { formatEndpoint } from "@/features/ssh/destination.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
 import type {
+  HistoryClient,
   HostView,
   HostsClient,
   LinkOpener,
@@ -53,12 +56,14 @@ export const ACTION_LABELS: Record<Action, string> = {
   "hosts.import": "Import hosts from ~/.ssh/config",
   "vault.open": "Open the vault",
   "vault.lock": "Lock the vault",
+  "history.open": "Search the command history",
 };
 
 interface ShellState {
   paletteOpen: boolean;
   connectOpen: boolean;
   vaultOpen: boolean;
+  historyOpen: boolean;
   sidebarOpen: boolean;
   theme: ThemePreference;
 }
@@ -88,12 +93,15 @@ export class AppShell {
     storage: Storage | undefined;
     root: HTMLElement;
     clipboard: TextClipboard | undefined;
+    /** Where commands are recorded; none keeps no history. */
+    history?: HistoryClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
     this.#storage = options.storage;
     this.#root = options.root;
     this.#clipboard = options.clipboard;
+    this.#history = options.history;
     const { keymap, problems } = buildKeymap(
       defaultBindings(this.platform),
       readOverrides(options.storage),
@@ -110,6 +118,7 @@ export class AppShell {
       paletteOpen: false,
       connectOpen: false,
       vaultOpen: false,
+      historyOpen: false,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
     };
@@ -121,6 +130,7 @@ export class AppShell {
         ...(options.renderer ? { renderer: options.renderer } : {}),
         ...(spec ? { spec } : {}),
         ...(spec?.kind === "host" ? { guard: this.hosts.guardFor(spec.hostId) } : {}),
+        ...(this.#history ? { record: this.#recorderFor(spec) } : {}),
         mac: this.platform === "mac",
         ...(links
           ? {
@@ -140,6 +150,7 @@ export class AppShell {
   readonly #storage: Storage | undefined;
   readonly #root: HTMLElement;
   readonly #clipboard: TextClipboard | undefined;
+  readonly #history: HistoryClient | undefined;
 
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
@@ -171,6 +182,24 @@ export class AppShell {
       this.#set({ ...this.#state, connectOpen: open });
       if (!open) this.#focusActivePane();
     }
+  }
+
+  setHistoryOpen(open: boolean): void {
+    if (this.#state.historyOpen === open) return;
+    this.#set({ ...this.#state, historyOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** The history client, when this window keeps one. */
+  get history(): HistoryClient | undefined {
+    return this.#history;
+  }
+
+  /** Types `text` into the focused terminal without running it. */
+  insertText(text: string): void {
+    // Bracketed paste: a shell takes it as text, not as keys to run.
+    this.#activeController()?.terminal.paste(text);
+    this.#focusActivePane();
   }
 
   setVaultOpen(open: boolean): void {
@@ -233,6 +262,9 @@ export class AppShell {
         return;
       case "vault.open":
         this.setVaultOpen(true);
+        return;
+      case "history.open":
+        this.setHistoryOpen(true);
         return;
       case "vault.lock":
         this.vault.lock().catch((error: unknown) => console.warn("lock failed", error));
@@ -320,6 +352,29 @@ export class AppShell {
   #focusActivePane(): void {
     // Wait a frame: a split or new tab mounts its view first.
     requestAnimationFrame(() => this.#activeController()?.focus());
+  }
+
+  /** Where one terminal's commands go: the saved host's id, or none. */
+  #recorderFor(spec: SessionSpec | undefined): (entry: RecordedCommand) => void {
+    const host = spec?.kind === "host" ? spec.hostId : null;
+    const label =
+      spec?.kind === "host"
+        ? spec.label
+        : spec?.kind === "ssh"
+          ? formatEndpoint(spec.target.destination)
+          : "Local";
+    return (entry) => {
+      this.#history
+        ?.record({
+          host,
+          label,
+          command: entry.command,
+          output: entry.output,
+          exit: entry.exit,
+          started: Math.floor(entry.startedMs / 1000),
+        })
+        .catch((error: unknown) => console.warn("history record failed", error));
+    };
   }
 
   /** Puts `text` on the system clipboard. */

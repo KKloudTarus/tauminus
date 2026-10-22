@@ -29,6 +29,20 @@ tauminus-app.workspace = true
 tauminus-domain.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 
+# The command history: SQLite with FTS5, encrypted page by page with
+# SQLCipher, built from source with a vendored OpenSSL so every platform
+# runs the same cipher code.
+rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Entries recorded while the vault is locked are sealed to an X25519 key
+# (ECIES: ephemeral key, HKDF-SHA256, XChaCha20-Poly1305). curve25519-dalek,
+# hkdf, and sha2 are already in the tree through russh.
+# A fair lock for the history's connection, so long deletions take turns
+# with recording; already in the tree through tauri.
+parking_lot = "0.12.5"
+curve25519-dalek = { version = "5.0.0", default-features = false, features = ["zeroize"] }
+hkdf = "0.13.0"
+sha2 = { version = "0.11.1", default-features = false }
+
 # The OS keychain, which holds the key that unlocks the vault without the
 # master password.
 keyring-core = "1.0.1"
@@ -46,6 +60,7 @@ zbus-secret-service-keyring-store = { version = "1.0.1", default-features = fals
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

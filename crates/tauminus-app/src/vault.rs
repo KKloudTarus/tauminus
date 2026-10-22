@@ -14,8 +14,9 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
+use zeroize::Zeroizing;
 
 use crate::ports::Secret;
 
@@ -158,6 +159,9 @@ pub trait VaultBackend: Send + Sync + 'static {
     fn unlock_with_keychain(&self) -> Result<Box<dyn OpenVault>, VaultError>;
     fn keychain(&self) -> KeychainState;
     fn new_id(&self) -> String;
+    /// The history's public key, read without unlocking; `None` before the
+    /// history's keys exist.
+    fn history_public(&self) -> Option<[u8; 32]>;
 }
 
 /// An unlocked vault. Changes are kept in memory until `save`.
@@ -171,9 +175,27 @@ pub trait OpenVault: Send {
     fn change_password(&mut self, password: &Secret) -> Result<(), VaultError>;
     /// Stores a fresh key in the keychain and a slot for it, or removes both.
     fn set_keychain(&mut self, on: bool) -> Result<(), VaultError>;
+    /// The history's keys, made on first use. `true` when they were just
+    /// made and the vault must be saved.
+    fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError>;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
+}
+
+/// The history's keys: one opens its database, the other opens commands
+/// sealed while the vault was locked. Wiped when dropped.
+#[derive(Clone)]
+pub struct HistoryKeys {
+    pub database: Zeroizing<[u8; 32]>,
+    pub sealing: Zeroizing<[u8; 32]>,
+    pub public: [u8; 32],
+}
+
+impl std::fmt::Debug for HistoryKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HistoryKeys").finish_non_exhaustive()
+    }
 }
 
 /// The vault's state for the view.
@@ -196,6 +218,8 @@ struct State {
     /// Counts locks, so an unlock that was still deriving its key when the
     /// user locked does not open the vault after all.
     locks: u64,
+    /// Whether the vault is open, for whoever follows it (the history).
+    unlocked: watch::Sender<bool>,
 }
 
 /// Locks and unlocks the vault and keeps it locked when unused. Operations
@@ -223,6 +247,7 @@ impl Vault {
             backend,
             state: Mutex::new(State {
                 open: None,
+                unlocked: watch::Sender::new(false),
                 idle: idle.clamp(MIN_IDLE, MAX_IDLE),
                 locks: 0,
             }),
@@ -230,6 +255,20 @@ impl Vault {
         });
         tokio::spawn(auto_lock(Arc::downgrade(&vault)));
         vault
+    }
+
+    /// Follows whether the vault is open: true after an unlock, false after
+    /// a lock, an idle lock, or a save that locked it.
+    pub async fn watch(&self) -> watch::Receiver<bool> {
+        self.state.lock().await.unlocked.subscribe()
+    }
+
+    /// Whether the vault is open now: past its idle time it locks first,
+    /// so a wake from suspend cannot read a vault that should be locked.
+    pub async fn is_open(&self) -> bool {
+        let mut state = self.state.lock().await;
+        state.expire();
+        state.open.is_some()
     }
 
     pub async fn status(&self) -> VaultStatus {
@@ -279,6 +318,7 @@ impl Vault {
         let mut state = self.state.lock().await;
         state.open = None;
         state.locks += 1;
+        state.publish();
     }
 
     /// Counts as use, for the idle timer; the view calls it on activity.
@@ -480,6 +520,28 @@ impl Vault {
     }
 
     /// Keeps an opened vault unless the user locked since `locks` was read.
+    /// The history's keys, made and saved on first use. Needs the vault
+    /// open.
+    pub async fn history_keys(&self) -> Result<HistoryKeys, VaultError> {
+        self.with_open(|vault| {
+            let (keys, made) = vault.history_keys()?;
+            if made {
+                saved(vault)?;
+            }
+            Ok(keys)
+        })
+        .await
+    }
+
+    /// The history's public key, while locked too.
+    pub async fn history_public(&self) -> Option<[u8; 32]> {
+        let backend = Arc::clone(&self.backend);
+        blocking(move || Ok(backend.history_public()))
+            .await
+            .ok()
+            .flatten()
+    }
+
     async fn keep(&self, vault: Box<dyn OpenVault>, locks: u64) {
         let mut state = self.state.lock().await;
         if state.locks == locks {
@@ -488,6 +550,7 @@ impl Vault {
                 used: Used::now(),
             });
         }
+        state.publish();
     }
 
     /// Runs `work` on the open vault, off the async workers, and counts it
@@ -499,12 +562,15 @@ impl Vault {
         let mut state = self.state.lock().await;
         state.expire();
         let mut open = state.open.take().ok_or(VaultError::Locked)?;
-        let (open, result) = tokio::task::spawn_blocking(move || {
+        let joined = tokio::task::spawn_blocking(move || {
             let result = work(open.vault.as_mut());
             (open, result)
         })
-        .await
-        .map_err(|e| VaultError::Io(e.to_string()))?;
+        .await;
+        let Ok((open, result)) = joined else {
+            state.publish();
+            return Err(VaultError::Io("the vault worker stopped".into()));
+        };
         // A save failed: memory holds a change the file does not, or the
         // file holds another window's change. Drop this copy, so what the
         // next unlock reads is what is on disk.
@@ -514,6 +580,7 @@ impl Vault {
                 ..open
             });
         }
+        state.publish();
         result.map_err(|failed| failed.error)
     }
 }
@@ -593,7 +660,15 @@ impl State {
         {
             self.open = None;
             tracing::info!("vault locked after {} s unused", self.idle.as_secs());
+            self.publish();
         }
+    }
+
+    /// Tells followers whether the vault is open, when that changed.
+    fn publish(&self) {
+        let open = self.open.is_some();
+        self.unlocked
+            .send_if_modified(|was| std::mem::replace(was, open) != open);
     }
 }
 
@@ -661,4 +736,4 @@ fn check_identity(input: &IdentityInput) -> Result<(), VaultError> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

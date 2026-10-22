@@ -54,17 +54,25 @@ describe("withSession", () => {
   it("round-trips agent forwarding and the environment", () => {
     const settings = {
       forwardAgent: true,
+      history: false,
       env: [
         { name: "LANG", value: "C.UTF-8" },
         { name: "MOTD", value: "a=b c" },
       ],
     };
     expect(withSession({ user: "u" }, sessionFields(settings))).toEqual({ user: "u", ...settings });
-    expect(withSession(settings, sessionFields({}))).toEqual({ forwardAgent: null, env: null });
+    expect(withSession(settings, sessionFields({}))).toEqual({
+      forwardAgent: null,
+      history: null,
+      env: null,
+    });
   });
 
   it("keeps spaces at the end of a value and takes CRLF lines", () => {
-    const result = withSession({}, { forwardAgent: "inherit", env: "X=a \r\nY=b=c\r\n" });
+    const result = withSession(
+      {},
+      { forwardAgent: "inherit", history: "inherit", env: "X=a \r\nY=b=c\r\n" },
+    );
     expect(result).toMatchObject({
       env: [
         { name: "X", value: "a " },
@@ -74,10 +82,12 @@ describe("withSession", () => {
   });
 
   it("reports a line that is not NAME=value", () => {
-    expect(withSession({}, { forwardAgent: "inherit", env: "LANG" })).toBe(
+    expect(withSession({}, { forwardAgent: "inherit", history: "inherit", env: "LANG" })).toBe(
       '"LANG" is not NAME=value',
     );
-    expect(withSession({}, { forwardAgent: "inherit", env: "=x" })).toMatch(/not NAME=value/);
+    expect(withSession({}, { forwardAgent: "inherit", history: "inherit", env: "=x" })).toMatch(
+      /not NAME=value/,
+    );
   });
 });
 

@@ -38,7 +38,8 @@ export type Action =
   | "hosts.toggle"
   | "hosts.import"
   | "vault.open"
-  | "vault.lock";
+  | "vault.lock"
+  | "history.open";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -64,6 +65,7 @@ export const ACTIONS: readonly Action[] = [
   "hosts.import",
   "vault.open",
   "vault.lock",
+  "history.open",
 ];
 
 export type Platform = "mac" | "other";
@@ -95,6 +97,7 @@ const OTHER: Bindings = {
   "hosts.import": [],
   "vault.open": [],
   "vault.lock": [],
+  "history.open": ["ctrl+shift+r"],
 };
 
 const MAC: Bindings = {
@@ -122,6 +125,7 @@ const MAC: Bindings = {
   "hosts.import": [],
   "vault.open": [],
   "vault.lock": [],
+  "history.open": ["meta+shift+r"],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

@@ -12,10 +12,13 @@
 //! or a newer version cannot destroy a user's list by saving over it.
 
 mod format;
+pub mod history;
+mod history_backend;
 mod keychain;
 pub mod vault;
 mod vault_backend;
 
+pub use history_backend::FileHistoryBackend;
 pub use keychain::OsKeychain;
 pub use vault_backend::{FileVaultBackend, KeyStore};
 

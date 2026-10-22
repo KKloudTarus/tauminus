@@ -267,3 +267,17 @@ fn a_new_password_the_keychain_refuses_is_saved_with_the_keychain_off() {
         Err(VaultError::WrongKey)
     ));
 }
+
+#[test]
+fn history_keys_are_made_once_and_never_silently_replaced() {
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    let (first, made) = open.history_keys().unwrap();
+    assert!(made);
+    open.save().unwrap();
+    let mut open = backend.unlock(&secret("correct horse")).unwrap();
+    let (again, made) = open.history_keys().unwrap();
+    assert!(!made);
+    assert_eq!(*first.database, *again.database);
+    assert_eq!(backend.history_public(), Some(first.public));
+}
