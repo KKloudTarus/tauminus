@@ -221,6 +221,9 @@ fn ssh_g_output_is_read() {
             ("TEAM".into(), "db ops".into())
         ]
     );
+    // OpenSSH 8.9 prints a repeated name twice; ssh sends the first.
+    let host = parse_ssh_g("r", "setenv A=1\nsetenv A=2\n");
+    assert_eq!(host.set_env, [("A".into(), "1".into())]);
     // `ssh -G` prints `no` when nothing sets it.
     assert_eq!(parse_ssh_g("x", "forwardagent no\n").forward_agent, None);
     // A restricted agent's socket is not the default agent.
