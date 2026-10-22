@@ -208,6 +208,10 @@ test("takes text from an input method, as Telex sends it", async ({ page }) => {
     });
   }
   await cdp.send("Input.insertText", { text: "tiếng" });
+  // A person types the next key after the committed word is on screen;
+  // xterm.js settles a composition on a timer that must run first.
+  const prompt = screenOf(focusedPane(page)).locator("> div").first();
+  await expect(prompt).toContainText("echo tiếng");
   await page.keyboard.type(" ");
   for (const step of ["V", "Vi", "Việ", "Việt"]) {
     // oxlint-disable-next-line no-await-in-loop -- composition steps arrive in order
@@ -218,6 +222,7 @@ test("takes text from an input method, as Telex sends it", async ({ page }) => {
     });
   }
   await cdp.send("Input.insertText", { text: "Việt" });
+  await expect(prompt).toContainText("echo tiếng Việt");
   await page.keyboard.press("Enter");
   const rows = screenOf(focusedPane(page)).locator("> div");
   // The echo prints the text once: nothing doubled, nothing lost.
