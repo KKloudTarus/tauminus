@@ -17,6 +17,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
+# Absolute: the app's shells start in the home directory, not here.
+$Out = (Resolve-Path $Out).Path
+if (-not $env:TAUMINUS_LOG) { $env:TAUMINUS_LOG = 'debug,russh=info' }
 $report = Join-Path $Out 'report.json'
 $samples = Join-Path $Out 'samples.csv'
 Remove-Item -ErrorAction Ignore $report, $samples
@@ -54,7 +57,13 @@ Set-Content -Path (Join-Path $Out 'launched_ms') -Value (Now-Ms)
 $process = Start-Process -FilePath $App -PassThru -RedirectStandardError (Join-Path $Out 'app.log')
 
 $deadline = (Get-Date).AddMinutes(45)
+# No note by 180 s means the shells never ran; see ci/bench.sh.
+$early = (Get-Date).AddSeconds(180)
 while (-not ((Test-Path $report) -and (Get-Item $report).Length -gt 0) -and (Get-Date) -lt $deadline -and -not $process.HasExited) {
+  if ((Get-Date) -gt $early -and -not (Test-Path "$report.log")) {
+    'no note from the benchmark after 180 s'
+    break
+  }
   $tree = Get-Tree $process.Id
   $appKiB = [math]::Round((($tree | Where-Object { $_.ProcessId -eq $process.Id }).WorkingSetSize | Measure-Object -Sum).Sum / 1024)
   $webKiB = [math]::Round((($tree | Where-Object { $_.Name -eq 'msedgewebview2.exe' }).WorkingSetSize | Measure-Object -Sum).Sum / 1024)
