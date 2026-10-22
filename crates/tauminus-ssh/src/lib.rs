@@ -29,11 +29,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use russh::client::{self, Handle};
-use russh::keys::{Algorithm, PublicKeyOrCertificate};
+use russh::keys::{Algorithm, PrivateKey, PublicKeyOrCertificate};
 use tauminus_app::ports::{
-    BoxFuture, ConnectError, Credentials, Prompter, SshConnector, TerminalStream,
+    BoxFuture, ConnectError, Credentials, Prompter, ScriptOutcome, SshConnector, TerminalStream,
 };
-use tauminus_domain::{Endpoint, SshTarget, TerminalSize};
+use tauminus_domain::{Endpoint, KeyKind, SshTarget, TerminalSize};
 use tokio::sync::{Notify, watch};
 
 pub use auth::AgentSource;
@@ -78,13 +78,15 @@ impl RusshConnector {
         self
     }
 
-    async fn open(
+    /// Connects every hop in order and signs in on each; the last hop
+    /// gets `credentials`. Returns the connections, last hop last.
+    async fn hops(
         &self,
         target: &SshTarget,
-        size: TerminalSize,
         prompter: Arc<dyn Prompter>,
         credentials: Arc<Credentials>,
-    ) -> Result<TerminalStream, ConnectError> {
+        forward_agent: bool,
+    ) -> Result<Vec<Handle<Client>>, ConnectError> {
         let none = Credentials::default();
         // Dropped when this future ends or is dropped, which cancels a host
         // key prompt still waiting inside a handshake nobody awaits anymore.
@@ -118,7 +120,7 @@ impl RusshConnector {
             let reached = Arc::new(Notify::new());
             let last = index + 1 == hops.len();
             let handler = Client {
-                forward: (last && target.session.forward_agent)
+                forward: (last && forward_agent)
                     .then(|| forward::AgentForward::new(self.agent.clone())),
                 host: hop.host.to_string(),
                 port: hop.port,
@@ -145,6 +147,87 @@ impl RusshConnector {
             tracing::debug!(hop = %hop, index, "authenticated");
             connections.push(handle);
         }
+        Ok(connections)
+    }
+
+    /// Runs `script` with `sh -s` on the last hop, without a PTY, and
+    /// returns its exit status and up to 64 KiB of its output. For one-off
+    /// jobs such as adding a key to `authorized_keys`.
+    async fn run(
+        &self,
+        target: &SshTarget,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+        script: &str,
+    ) -> Result<ScriptOutcome, ConnectError> {
+        const MAX_OUTPUT: usize = 64 * 1024;
+        /// A script that has not finished by then never will; a server that
+        /// keeps the channel open must not hold the caller forever.
+        const SCRIPT_TIMEOUT: Duration = Duration::from_mins(1);
+        let connections = self.hops(target, prompter, credentials, false).await?;
+        let last = connections
+            .last()
+            .ok_or_else(|| ConnectError::Protocol("no hops".into()))?;
+        // One bound over everything after sign-in: a live server can stall
+        // the channel open, the exec, or the output, and keepalives would
+        // keep it from ever timing out.
+        let exchange = async {
+            let mut channel = last.channel_open_session().await.map_err(protocol)?;
+            // `sh` whatever the login shell is, with the script on stdin, so
+            // nothing in it is quoted twice.
+            channel.exec(true, "exec sh -s").await.map_err(protocol)?;
+            channel.data(script.as_bytes()).await.map_err(protocol)?;
+            channel.eof().await.map_err(protocol)?;
+            let mut output = Vec::new();
+            let mut status = None;
+            let mut eof = false;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    russh::ChannelMsg::Data { data }
+                    | russh::ChannelMsg::ExtendedData { data, .. } => {
+                        // Past the cap the rest is dropped, but still read,
+                        // so the exit status arrives.
+                        let room = MAX_OUTPUT.saturating_sub(output.len());
+                        output.extend_from_slice(&data[..data.len().min(room)]);
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    russh::ChannelMsg::Eof => eof = true,
+                    russh::ChannelMsg::Close => break,
+                    _ => {}
+                }
+                // A child left running in the background can hold the
+                // channel open; the script itself is done.
+                if eof && status.is_some() {
+                    break;
+                }
+            }
+            let _ = channel.close().await;
+            Ok::<_, ConnectError>((output, status))
+        };
+        let (output, status) = tokio::time::timeout(SCRIPT_TIMEOUT, exchange)
+            .await
+            .map_err(|_| {
+                ConnectError::Protocol(format!(
+                    "the script did not finish within {} s",
+                    SCRIPT_TIMEOUT.as_secs()
+                ))
+            })??;
+        Ok(ScriptOutcome {
+            status,
+            output: String::from_utf8_lossy(&output).into_owned(),
+        })
+    }
+
+    async fn open(
+        &self,
+        target: &SshTarget,
+        size: TerminalSize,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+    ) -> Result<TerminalStream, ConnectError> {
+        let connections = self
+            .hops(target, prompter, credentials, target.session.forward_agent)
+            .await?;
         let last = connections
             .last()
             .ok_or_else(|| ConnectError::Protocol("no hops".into()))?;
@@ -214,6 +297,16 @@ impl SshConnector for RusshConnector {
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
         Box::pin(self.open(target, size, prompter, credentials))
     }
+
+    fn run_script<'a>(
+        &'a self,
+        target: &'a SshTarget,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+        script: &'a str,
+    ) -> BoxFuture<'a, Result<ScriptOutcome, ConnectError>> {
+        Box::pin(self.run(target, prompter, credentials, script))
+    }
 }
 
 /// Output messages russh buffers per channel before it stops reading the
@@ -273,6 +366,49 @@ fn preferred(recorded: &[Algorithm], certificates: bool) -> russh::Preferred {
 pub fn public_key_line(pem: &str, passphrase: Option<&str>) -> Result<String, String> {
     let key = russh::keys::decode_secret_key(pem, passphrase).map_err(|e| e.to_string())?;
     key.public_key().to_openssh().map_err(|e| e.to_string())
+}
+
+/// A new key, as an OpenSSH private key (unencrypted: the vault encrypts
+/// it) and its `authorized_keys` line. RSA takes a few seconds, so call this
+/// off the async workers.
+pub fn generate_key(kind: KeyKind, comment: &str) -> Result<GeneratedKey, String> {
+    use russh::keys::ssh_key::private::{KeypairData, RsaKeypair};
+    use russh::keys::ssh_key::{EcdsaCurve, LineEnding};
+    let mut rng = rand::rng();
+    let ecdsa = |curve| Algorithm::Ecdsa { curve };
+    let mut key = match kind {
+        KeyKind::Ed25519 => PrivateKey::random(&mut rng, Algorithm::Ed25519),
+        KeyKind::EcdsaP256 => PrivateKey::random(&mut rng, ecdsa(EcdsaCurve::NistP256)),
+        KeyKind::EcdsaP384 => PrivateKey::random(&mut rng, ecdsa(EcdsaCurve::NistP384)),
+        KeyKind::EcdsaP521 => PrivateKey::random(&mut rng, ecdsa(EcdsaCurve::NistP521)),
+        KeyKind::Rsa3072 | KeyKind::Rsa4096 => {
+            let bits = if kind == KeyKind::Rsa3072 { 3072 } else { 4096 };
+            RsaKeypair::random(&mut rng, bits)
+                .and_then(|pair| PrivateKey::new(KeypairData::from(pair), ""))
+        }
+    }
+    .map_err(|e| e.to_string())?;
+    key.set_comment(comment);
+    let private_key = key.to_openssh(LineEnding::LF).map_err(|e| e.to_string())?;
+    let public_key = key.public_key().to_openssh().map_err(|e| e.to_string())?;
+    Ok(GeneratedKey {
+        private_key,
+        public_key,
+    })
+}
+
+/// A key [`generate_key`] made. The private key is wiped when dropped.
+pub struct GeneratedKey {
+    pub private_key: zeroize::Zeroizing<String>,
+    pub public_key: String,
+}
+
+impl std::fmt::Debug for GeneratedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeneratedKey")
+            .field("public_key", &self.public_key)
+            .finish_non_exhaustive()
+    }
 }
 
 fn protocol(error: impl std::fmt::Display) -> ConnectError {

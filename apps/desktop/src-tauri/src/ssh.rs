@@ -524,24 +524,7 @@ pub(crate) async fn host_connect(
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
-    let invalid =
-        |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
-    let id = tauminus_domain::HostId::parse(&id).map_err(|e| invalid(&e))?;
-    let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
-    let book = hosts.book()?;
-    let mut target = book.resolve(&id, &me).await.map_err(|e| invalid(&e))?;
-    // A host with an identity needs the vault open: the view asks to
-    // unlock on `vault_locked` and tries again.
-    let credentials = match book.identity(&id).await.map_err(|e| invalid(&e))? {
-        Some(identity) => vault.credentials(identity.as_str()).await?,
-        None => Credentials::default(),
-    };
-    if let Some(user) = credentials.user.as_deref() {
-        let user = UserName::parse(user).map_err(|e| invalid(&e))?;
-        let destination = &target.destination;
-        target.destination = Endpoint::new(user, destination.host.clone(), destination.port)
-            .map_err(|e| invalid(&e))?;
-    }
+    let (target, credentials) = host_target(&hosts, &vault, &id).await?;
     open_target_with(
         &ssh,
         &broker,
@@ -555,6 +538,97 @@ pub(crate) async fn host_connect(
         Arc::new(credentials),
     )
     .await
+}
+
+/// A saved host's target and the credentials of its identity, if any. A
+/// host with an identity needs the vault open: the view asks to unlock on
+/// `vault_locked` and tries again. The identity's user replaces the host's.
+async fn host_target(
+    hosts: &crate::hosts::Hosts,
+    vault: &tauminus_app::vault::Vault,
+    id: &str,
+) -> Result<(SshTarget, Credentials), CommandError> {
+    let invalid =
+        |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
+    let id = tauminus_domain::HostId::parse(id).map_err(|e| invalid(&e))?;
+    let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
+    let book = hosts.book()?;
+    let mut target = book.resolve(&id, &me).await.map_err(|e| invalid(&e))?;
+    let credentials = match book.identity(&id).await.map_err(|e| invalid(&e))? {
+        Some(identity) => vault.credentials(identity.as_str()).await?,
+        None => Credentials::default(),
+    };
+    if let Some(user) = credentials.user.as_deref() {
+        let user = UserName::parse(user).map_err(|e| invalid(&e))?;
+        let destination = &target.destination;
+        target.destination = Endpoint::new(user, destination.host.clone(), destination.port)
+            .map_err(|e| invalid(&e))?;
+    }
+    Ok((target, credentials))
+}
+
+/// Adds an identity's public key to `~/.ssh/authorized_keys` on a saved
+/// host, signing in as a connect to that host would, prompts included.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn identity_install(
+    ssh: State<'_, SshSessions>,
+    broker: State<'_, Arc<PromptBroker>>,
+    hosts: State<'_, crate::hosts::Hosts>,
+    vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    identity: String,
+    host: String,
+    on_prompt: Channel<PromptRequest>,
+) -> Result<(), CommandError> {
+    let invalid = |message: String| CommandError::new(ErrorCode::InvalidArgument, message);
+    let line = vault
+        .public_key(&identity)
+        .await?
+        .ok_or_else(|| invalid("this identity has no key to install".into()))?;
+    let line =
+        tauminus_domain::PublicKeyLine::installable(&line).map_err(|e| invalid(e.to_string()))?;
+    let (target, credentials) = host_target(&hosts, &vault, &host).await?;
+    let prompter = Arc::new(ChannelPrompter {
+        broker: Arc::clone(&broker),
+        channel: on_prompt,
+        timeout: PROMPT_TIMEOUT,
+    });
+    let outcome = ssh
+        .run_script(
+            &target,
+            prompter,
+            Arc::new(credentials),
+            &tauminus_domain::install_script(&line),
+        )
+        .await
+        .map_err(|e| CommandError::from(SshOpenError::Connect(e)))?;
+    match outcome.status {
+        Some(0) => Ok(()),
+        status => Err(CommandError::new(
+            ErrorCode::LaunchFailed,
+            format!(
+                "the server could not add the key (exit {}): {}",
+                status.map_or_else(|| "unknown".into(), |s| s.to_string()),
+                server_said(&outcome.output)
+            ),
+        )),
+    }
+}
+
+/// The start of a script's output, for an error message: at most 2 KiB,
+/// without control characters a server could use to dress it up.
+fn server_said(output: &str) -> String {
+    const MAX: usize = 2 * 1024;
+    let mut text: String = output
+        .trim()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(MAX)
+        .collect();
+    if output.trim().chars().count() > MAX {
+        text.push('…');
+    }
+    text
 }
 
 /// A session's three channels to the view.

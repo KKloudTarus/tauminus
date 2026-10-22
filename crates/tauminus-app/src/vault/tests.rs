@@ -500,3 +500,24 @@ async fn a_password_change_the_keychain_refuses_still_changes_the_password() {
     );
     assert!(vault.status().await.unlocked);
 }
+
+#[tokio::test]
+async fn a_public_key_is_read_from_one_identity() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    // The public key goes with a private key, as the desktop sends them.
+    let with_key = IdentityInput {
+        private_key: Some(secret("-----BEGIN OPENSSH PRIVATE KEY-----")),
+        public_key: Some("ssh-ed25519 AAAA k".into()),
+        ..input("k")
+    };
+    let id = vault.save_identity(with_key).await.unwrap();
+    assert_eq!(
+        vault.public_key(&id).await.unwrap().as_deref(),
+        Some("ssh-ed25519 AAAA k")
+    );
+    assert!(matches!(
+        vault.public_key("nope").await,
+        Err(VaultError::NoSuchIdentity(_))
+    ));
+}

@@ -4,6 +4,7 @@
 import {
   type IdentityEdit,
   type IdentityView,
+  type PromptHandler,
   SessionCommandError,
   type VaultClient,
   type VaultStatusSpec,
@@ -96,6 +97,11 @@ export class VaultStore {
       console.warn("could not remember the vault idle time", error);
     }
     await this.refresh();
+  }
+
+  /** Adds an identity's public key to a saved host's authorized_keys. */
+  installKey(identity: string, host: string, onPrompt: PromptHandler): Promise<void> {
+    return this.#thenRefresh(this.#client.installKey(identity, host, onPrompt));
   }
 
   setKeychain(on: boolean, password?: string): Promise<void> {

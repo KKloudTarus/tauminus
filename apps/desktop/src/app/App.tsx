@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
@@ -21,6 +21,12 @@ export function App({ shell }: { shell: AppShell }) {
   const active = tabs.find((tab) => tab.id === activeTabId);
   const { sidebarOpen, vaultOpen } = useSyncExternalStore(shell.subscribe, shell.getState);
   const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
+  const savedHosts = useSyncExternalStore(shell.hosts.subscribe, shell.hosts.getSnapshot).view
+    .hosts;
+  const keyTools = useMemo(
+    () => ({ hosts: savedHosts, copy: (text: string) => shell.copyText(text) }),
+    [savedHosts, shell],
+  );
   // Stable, so a vault change does not rebuild the host tree. O(hosts) each.
   const connectHost = useCallback((host: HostView) => shell.connectHost(host), [shell]);
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
@@ -119,6 +125,7 @@ export function App({ shell }: { shell: AppShell }) {
       {vaultOpen && (
         <VaultDialog
           store={shell.vault}
+          tools={keyTools}
           onClose={() => shell.setVaultOpen(false)}
           onUnlocked={() => shell.vaultUnlocked()}
         />

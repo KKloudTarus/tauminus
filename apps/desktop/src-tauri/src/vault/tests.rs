@@ -28,6 +28,7 @@ fn an_edit_never_shows_its_secrets_in_debug() {
         password: Some("hunter2".into()),
         private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".into()),
         passphrase: Some("swordfish".into()),
+        generate: None,
     };
     let shown = format!("{edit:?}");
     assert!(
@@ -41,4 +42,13 @@ fn a_key_that_does_not_open_is_refused_when_saved() {
         public_key_of("not a key", None).unwrap_err().code,
         ErrorCode::InvalidArgument
     );
+}
+
+#[test]
+fn every_key_kind_maps_to_the_domain() {
+    use tauminus_domain::KeyKind;
+    assert_eq!(KeyKind::from(KeyKindSpec::Ed25519), KeyKind::Ed25519);
+    assert_eq!(KeyKind::from(KeyKindSpec::Rsa4096), KeyKind::Rsa4096);
+    let parsed: KeyKindSpec = serde_json::from_str("\"ecdsa-p256\"").unwrap();
+    assert_eq!(KeyKind::from(parsed), KeyKind::EcdsaP256);
 }

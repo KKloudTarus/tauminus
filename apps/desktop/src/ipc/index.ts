@@ -29,6 +29,7 @@ export {
   type IdentityEdit,
   type IdentityView,
   type KeychainSpec,
+  type KeyKindSpec,
   type VaultClient,
   type VaultStatusSpec,
   tauriVault,

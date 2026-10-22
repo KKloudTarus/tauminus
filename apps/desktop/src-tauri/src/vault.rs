@@ -92,8 +92,33 @@ impl From<IdentitySummary> for IdentityView {
     }
 }
 
+/// A key Tauminus generates for an identity.
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum KeyKindSpec {
+    Ed25519,
+    EcdsaP256,
+    EcdsaP384,
+    EcdsaP521,
+    Rsa3072,
+    Rsa4096,
+}
+
+impl From<KeyKindSpec> for tauminus_domain::KeyKind {
+    fn from(kind: KeyKindSpec) -> Self {
+        match kind {
+            KeyKindSpec::Ed25519 => Self::Ed25519,
+            KeyKindSpec::EcdsaP256 => Self::EcdsaP256,
+            KeyKindSpec::EcdsaP384 => Self::EcdsaP384,
+            KeyKindSpec::EcdsaP521 => Self::EcdsaP521,
+            KeyKindSpec::Rsa3072 => Self::Rsa3072,
+            KeyKindSpec::Rsa4096 => Self::Rsa4096,
+        }
+    }
+}
+
 /// An edit. Secrets are write-only: leave one out to keep it, send "" to
-/// remove it.
+/// remove it. `generate` makes a new key in place of `private_key`.
 #[derive(Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct IdentityEdit {
@@ -108,6 +133,8 @@ pub(crate) struct IdentityEdit {
     pub(crate) private_key: Option<String>,
     #[serde(default)]
     pub(crate) passphrase: Option<String>,
+    #[serde(default)]
+    pub(crate) generate: Option<KeyKindSpec>,
 }
 
 impl std::fmt::Debug for IdentityEdit {
@@ -235,11 +262,39 @@ pub(crate) async fn identity_save(
         password,
         private_key,
         passphrase,
+        generate,
     } = identity;
     let password = password.map(secret);
-    let private_key = private_key.map(secret);
-    let passphrase = passphrase.map(secret);
+    let mut private_key = private_key.map(secret);
+    let mut passphrase = passphrase.map(secret);
+    let mut generated = None;
+    if generate.is_some() && private_key.as_ref().is_some_and(|k| k.is_empty()) {
+        return Err(CommandError::new(
+            ErrorCode::InvalidArgument,
+            "a key cannot be generated and removed at once",
+        ));
+    }
+    if let Some(kind) = generate {
+        // The comment names the identity, as ssh-keygen names user@host.
+        let comment: String = name
+            .chars()
+            .filter(|c| c.is_ascii_graphic() && *c != '\'')
+            .take(64)
+            .collect();
+        let key = tauri::async_runtime::spawn_blocking(move || {
+            tauminus_ssh::generate_key(kind.into(), &format!("tauminus-{comment}"))
+        })
+        .await
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e))?;
+        private_key = Some(Secret::new(key.private_key.to_string()));
+        // A generated key has no passphrase: the vault encrypts it.
+        passphrase = Some(Secret::new(String::new()));
+        generated = Some(key.public_key);
+    }
     let public_key = match &private_key {
+        // Already known; decoding the new key again would only cost time.
+        _ if generated.is_some() => generated,
         Some(pem) if !pem.is_empty() => {
             // Bounded before decoding: the key's own KDF runs on decode.
             if pem.len() > MAX_SECRET {

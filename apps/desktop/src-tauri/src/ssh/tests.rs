@@ -308,3 +308,13 @@ fn connect_errors_map_to_stable_codes() {
         assert_eq!(CommandError::from(SshOpenError::Connect(error)).code, code);
     }
 }
+
+#[test]
+fn server_output_in_an_error_is_short_and_plain() {
+    assert_eq!(server_said("  denied\n"), "denied");
+    assert_eq!(server_said("a\x1b[31mb\rc"), "a [31mb c");
+    let long = "x".repeat(10_000);
+    let said = server_said(&long);
+    assert_eq!(said.chars().count(), 2 * 1024 + 1);
+    assert!(said.ends_with('…'));
+}
