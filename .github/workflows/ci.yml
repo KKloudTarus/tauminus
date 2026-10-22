@@ -98,6 +98,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p tauminus-store --release --locked -- --ignored a_million_lines --nocapture
 
+      # Biometric unlock (ADR 0009): what each runner's OS answers when the
+      # presence check asks whether it can run. Runners have no sensor, so
+      # this shows the OS calls work, not a prompt answered by a person.
+      - name: Presence check on this OS
+        run: cargo run -p tauminus-presence --example check --locked -- available
+
       - name: Check generated IPC bindings are committed
         if: runner.os == 'Linux'
         run: git diff --exit-code -- apps/desktop/src/ipc/bindings.ts
