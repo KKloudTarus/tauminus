@@ -93,10 +93,10 @@ Prod guard
 
 History
 
-- [ ] Record commands and output per session in SQLite with FTS5, encrypted at rest
-- [ ] One search box across all hosts; filters by host, time, exit code
-- [ ] Recording off per host; no capture while the remote echo is off (password prompts)
-- [ ] Size cap and retention policy with automatic cleanup
+- [x] Record commands and output per session in SQLite with FTS5, encrypted at rest
+- [x] One search box across all hosts; filters by host, time, exit code
+- [x] Recording off per host; no capture while the remote echo is off (password prompts)
+- [x] Size cap and retention policy with automatic cleanup
 
 Vault
 
@@ -116,8 +116,8 @@ Session
 - [x] Prod guard rule tests: at least 200 commands (dangerous and safe), zero false negatives on the dangerous set, false positive rate recorded
 - [x] Wrapped and obfuscated forms caught: `sudo`, `env`, `bash -c`, `;`, `&&`, `|`, `$(...)`, backticks
 - [x] Vault tests: round trip, wrong password, tampered ciphertext, truncated file
-- [ ] Secrets never appear in logs, crash reports, or history (test scans the store and log files)
-- [ ] History search over 1 million recorded lines returns in under 100 ms (benchmark in CI)
+- [x] Secrets never appear in logs, crash reports, or history (test scans the store and log files)
+- [x] History search over 1 million recorded lines returns in under 100 ms (benchmark in CI)
 - [ ] Security review of vault and history storage
 
 ## v0.3: Files, tunnels, and more protocols
