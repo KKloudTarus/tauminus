@@ -76,6 +76,15 @@ export class TerminalController {
   #session: TerminalSession | undefined;
   #opening = false;
   /**
+   * Settles when the current open does: with the session, or undefined if
+   * it failed or the pane went away. Input waits on it instead of being
+   * dropped, because the shell may need an answer before `open` returns:
+   * Windows' ConPTY asks for the cursor position at startup and holds the
+   * shell until xterm.js replies.
+   */
+  #opened: Promise<TerminalSession | undefined> = Promise.resolve(undefined);
+  #settleOpened: ((session: TerminalSession | undefined) => void) | undefined;
+  /**
    * Set by the first attach. A view that remounts after the session ended
    * must show the ended session, not quietly start a new one; only `retry`
    * opens again.
@@ -171,8 +180,8 @@ export class TerminalController {
 
     this.#input = new InputQueue(
       {
-        writeText: (data) => this.#session?.write(data) ?? Promise.resolve(),
-        writeBytes: (data) => this.#session?.writeBytes(data) ?? Promise.resolve(),
+        writeText: async (data) => (await this.#writable())?.write(data),
+        writeBytes: async (data) => (await this.#writable())?.writeBytes(data),
       },
       ignoreEndedSession,
     );
@@ -327,12 +336,21 @@ export class TerminalController {
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
+    this.#settleOpened?.(undefined);
     this.terminal.dispose();
     this.#listeners.clear();
   }
 
+  /** The session to send input to, waiting for one that is still opening. */
+  async #writable(): Promise<TerminalSession | undefined> {
+    return this.#session ?? (this.#opening ? this.#opened : undefined);
+  }
+
   #open(): void {
     this.#opening = true;
+    this.#opened = new Promise((settle) => {
+      this.#settleOpened = settle;
+    });
     this.#sentSize = { cols: this.terminal.cols, rows: this.terminal.rows };
     this.#sessions
       .open(this.spec, this.#sentSize, {
@@ -346,10 +364,12 @@ export class TerminalController {
       .then((opened) => {
         this.#opening = false;
         if (this.#disposed) {
+          this.#settleOpened?.(undefined);
           opened.close().catch(ignoreEndedSession);
           return;
         }
         this.#session = opened;
+        this.#settleOpened?.(opened);
         if (this.#status.kind === "starting") {
           this.#setStatus({ kind: "running" });
         }
@@ -359,6 +379,7 @@ export class TerminalController {
       })
       .catch((error: unknown) => {
         this.#opening = false;
+        this.#settleOpened?.(undefined);
         // Questions the connect left unanswered no longer matter.
         for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
         if (!this.#disposed) {
