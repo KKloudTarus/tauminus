@@ -224,20 +224,25 @@ impl PendingLog {
     /// aside while this one waited for the lock: then the lock is on the
     /// old file, and the frame belongs in the new one.
     fn open_locked(&self, options: &std::fs::OpenOptions) -> Result<std::fs::File, HistoryError> {
-        let mut file = options.open(&self.path)?;
+        let file = options.open(&self.path)?;
         file.lock()?;
+        // Windows does not rename a file another process holds open.
         #[cfg(unix)]
-        for _ in 0..3 {
+        let file = {
             use std::os::unix::fs::MetadataExt;
-            let held = file.metadata()?;
-            match std::fs::metadata(&self.path) {
-                Ok(named) if named.ino() == held.ino() && named.dev() == held.dev() => break,
-                _ => {
-                    file = options.open(&self.path)?;
-                    file.lock()?;
+            let mut file = file;
+            for _ in 0..3 {
+                let held = file.metadata()?;
+                match std::fs::metadata(&self.path) {
+                    Ok(named) if named.ino() == held.ino() && named.dev() == held.dev() => break,
+                    _ => {
+                        file = options.open(&self.path)?;
+                        file.lock()?;
+                    }
                 }
             }
-        }
+            file
+        };
         Ok(file)
     }
 
