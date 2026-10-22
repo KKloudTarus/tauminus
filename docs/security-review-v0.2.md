@@ -36,9 +36,17 @@ findings below were checked against the code before they were fixed.
 | Low | A same-user process can seal commands of its own into the pending file. | Accepted with the same-user exclusion, documented in ADR 0008. |
 | Low | Keys and records can reach swap or a crash dump; SQLCipher cannot lock its key pages under the default memory-lock limit; a connect keeps credentials it took before a lock. | Documented in ADR 0007. |
 | Low | `history_record` trusts the host id the view sends for the session. | Documented in ADR 0008; a compromised view can already do more. |
-| Low | The SQLCipher key text passes through SQLite's statement buffers, which it frees without wiping. | Open. Moving to `sqlite3_key_v2` with a wiped buffer is the fix. |
+| Low | The SQLCipher key text passed through SQLite's statement buffers, which it frees without wiping. | Fixed: the key goes through `sqlite3_key_v2` and `sqlite3_rekey_v2` from a wiped buffer; a test opens a file keyed the old way. |
 
 No finding was critical or high.
+
+Moving the key into `sqlite3_key_v2` had its own gate review, which found
+that SQLCipher answers OK even for a re-encryption it rolled back partway
+(a full disk): the history then took the file, still under the old key,
+for another vault's and set it aside. The file is now checked after the
+re-encryption, and a file still under its old key is reported, kept, and
+moved again later; a key call that fails is no longer taken for a wrong
+key.
 
 The fixes had their own gate review, which found five more, all fixed:
 
@@ -88,3 +96,20 @@ A second gate round found two more ways to lose the history, both fixed:
 - A secret in a shape the redaction does not know, such as a password
   typed at a shell prompt by mistake, is recorded.
 - Decrypted data in ordinary memory while the vault is open.
+
+## The v0.2 exit criteria, checked
+
+| Criterion | Evidence |
+|---|---|
+| Prod guard rule tests: 200+ commands, no false negative, false positive rate recorded | `crates/tauminus-domain/tests/guard_corpus.rs` reads 322 dangerous and 194 safe lines; every dangerous line is flagged with its rule; 1 safe line of 194 asks (`echo "DROP TABLE is dangerous"`), printed by the test. |
+| Wrapped and obfuscated forms caught | The dangerous corpus holds `sudo` and `env` forms, `bash`, `sh`, and `zsh -c` (11 lines), `$(...)` (11), backticks (4), and `;`, `&&`, `\|\|`, `\|` chains. |
+| Vault tests: round trip, wrong password, tampered ciphertext, truncated file | `crates/tauminus-store/src/vault/tests.rs`: `records_round_trip_through_the_file`, `a_wrong_password_is_refused`, `a_tampered_file_is_refused`, `a_truncated_file_is_refused`. |
+| Secrets never appear in logs, crash reports, or history | `crates/tauminus-store/tests/no_secrets.rs` runs the vault and the history end to end with every log line captured at TRACE, scans every file and log line for each secret and for the history keys in hex, and reads the history back decrypted to check the password in a recorded command was hidden. Tauminus writes no crash reports. |
+| History search over a million lines under 100 ms, in CI | `a_million_lines_are_searched_in_under_100_ms`, run by `.github/workflows/ci.yml` on Linux, fails over 100 ms. Of its 15 query shapes, 13 have a p95 under 2 ms; the slowest, 50 results with outputs of about 40 KiB and 8 words, took 21 to 44 ms at the worst of 10 runs on this machine. |
+| Security review of vault and history storage | This record. |
+
+The presence check (ADR 0009) runs the OS's own calls in CI on macOS and
+Windows runners, and prints what each answered; where the check is
+unavailable, the test asserts it refuses an unlock. A prompt answered with Touch ID
+or Windows Hello has not been run on real hardware; the polkit path was
+run against a real polkitd and agent.
