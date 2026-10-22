@@ -50,11 +50,20 @@ rss_kib() {
 }
 
 export PATH="$tools:$PATH"
+if [ "$(uname)" = Darwin ]; then
+  # The throwaway runner only: no App Nap for any app, as for a frontmost one.
+  defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
+fi
 export TAUMINUS_BENCH_OUT="$out/report.json"
 export TAUMINUS_LOG="${TAUMINUS_LOG:-debug,russh=info}"
 now_ms > "$out/launched_ms"
 "$app" > "$out/app.log" 2>&1 &
 app_pid=$!
+if [ "$(uname)" = Darwin ]; then
+  # A user's terminal is the frontmost app. Started from a CI shell it is
+  # not, and App Nap then coalesces its timers and throttles its drawing.
+  (sleep 8 && osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $app_pid) to true" > /dev/null 2>&1 || true) &
+fi
 if [ "$(uname)" = Linux ]; then
   # No window manager on Xvfb: give the window focus as a user's click would.
   (sleep 8 && xdotool search --sync --onlyvisible --name Tauminus windowactivate > /dev/null 2>&1 || true) &
