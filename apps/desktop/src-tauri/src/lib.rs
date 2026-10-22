@@ -6,6 +6,7 @@
 
 mod clipboard;
 mod commands;
+mod history;
 mod hosts;
 mod ipc;
 mod links;
@@ -19,7 +20,7 @@ use tauminus_app::{HostBook, LocalShells, SessionConfig, SessionManager, SshSess
 use tauminus_pty::NativePtyLauncher;
 use tauminus_ssh::{AgentSource, HostKeyStore, OpenSshConfig, RusshConnector};
 use tauminus_store::vault::VaultFile;
-use tauminus_store::{FileVaultBackend, JsonHostStore, OsKeychain};
+use tauminus_store::{FileHistoryBackend, FileVaultBackend, JsonHostStore, OsKeychain};
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
 use tracing::info;
@@ -62,6 +63,10 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         vault::identity_save,
         vault::identity_delete,
         ssh::identity_install,
+        history::history_record,
+        history::history_search,
+        history::history_output,
+        history::history_clear,
     ])
 }
 
@@ -109,6 +114,12 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     let vault = tauri::async_runtime::block_on(async {
         Vault::new(Arc::new(backend), tauminus_app::vault::DEFAULT_IDLE)
     });
+    let history = tauri::async_runtime::block_on(tauminus_app::history::History::new(
+        Arc::new(FileHistoryBackend::new(&config_dir)),
+        Arc::clone(&vault),
+        tauminus_domain::Retention::default(),
+    ));
+    app.manage(history);
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(

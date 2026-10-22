@@ -40,4 +40,8 @@ const COMMANDS: &[&str] = &[
     "identity_save",
     "identity_delete",
     "identity_install",
+    "history_record",
+    "history_search",
+    "history_output",
+    "history_clear",
 ];

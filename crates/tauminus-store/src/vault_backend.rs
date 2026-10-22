@@ -9,10 +9,11 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    Identity, KeychainState, OpenVault as OpenPort, VaultBackend, VaultError,
+    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, VaultBackend, VaultError,
 };
 use zeroize::Zeroizing;
 
+use crate::history::HistoryKeyPair;
 use crate::vault::{DEFAULT_KDF, Kdf, OpenVault, SecretKey, VaultError as FileError, VaultFile};
 
 /// Where the OS keeps secrets for this user: Keychain on macOS, Credential
@@ -155,6 +156,10 @@ impl VaultBackend for FileVaultBackend {
         }
     }
 
+    fn history_public(&self) -> Option<[u8; 32]> {
+        self.file.history_public().ok().flatten()
+    }
+
     fn new_id(&self) -> String {
         let mut bytes = [0u8; 16];
         if rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut bytes).is_err() {
@@ -275,6 +280,41 @@ impl OpenPort for Opened {
         }
     }
 
+    fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError> {
+        let stored = (
+            self.vault.get(HISTORY_DATABASE).map(SecretKey::from_bytes),
+            self.vault.get(HISTORY_SEALING).map(SecretKey::from_bytes),
+        );
+        match stored {
+            (Some(Ok(database)), Some(Ok(sealing))) => {
+                let pair = HistoryKeyPair::from_secret(sealing);
+                if self.vault.history_public() != Some(pair.public()) {
+                    return Err(VaultError::Corrupt(
+                        "the history key does not match the vault".into(),
+                    ));
+                }
+                return Ok((history_keys(&database, &pair), false));
+            }
+            (None, None) => {}
+            // Making new keys would orphan the history: say so instead.
+            _ => {
+                return Err(VaultError::Corrupt(
+                    "the history keys are damaged or half missing".into(),
+                ));
+            }
+        }
+        let database = SecretKey::random().map_err(port_error)?;
+        let pair = HistoryKeyPair::random().map_err(|e| VaultError::Io(e.to_string()))?;
+        self.vault
+            .put(HISTORY_DATABASE, database.as_bytes().to_vec())
+            .map_err(port_error)?;
+        self.vault
+            .put(HISTORY_SEALING, pair.secret().as_bytes().to_vec())
+            .map_err(port_error)?;
+        self.vault.set_history_public(pair.public());
+        Ok((history_keys(&database, &pair), true))
+    }
+
     /// Saves, then brings the keychain in line with the file.
     fn save(&mut self) -> Result<(), VaultError> {
         self.vault.save(&self.file).map_err(port_error)?;
@@ -317,6 +357,23 @@ impl Opened {
         self.vault.set_keychain_key(&key).map_err(port_error)?;
         self.pending = Some(Pending::Set(key));
         Ok(())
+    }
+}
+
+/// Vault records holding the history's keys.
+const HISTORY_DATABASE: &str = "history-database";
+const HISTORY_SEALING: &str = "history-sealing";
+
+fn history_keys(database: &SecretKey, pair: &HistoryKeyPair) -> HistoryKeys {
+    let key = |secret: &SecretKey| {
+        let mut out = Zeroizing::new([0u8; 32]);
+        out.copy_from_slice(secret.as_bytes());
+        out
+    };
+    HistoryKeys {
+        database: key(database),
+        sealing: key(pair.secret()),
+        public: pair.public(),
     }
 }
 

@@ -72,6 +72,10 @@ class FakeShell implements TerminalSession {
       case "echo":
         this.#print(`${argument}\r\n`);
         break;
+      case "fail":
+        // Reports its exit status as shells with OSC 133 integration do.
+        this.#print(`failed: ${argument}\r\n\u001b]133;D;2\u0007`);
+        break;
       case "title":
         this.#print(`\u001b]0;${argument}\u0007`);
         break;

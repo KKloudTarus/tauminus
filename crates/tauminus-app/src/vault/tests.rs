@@ -6,15 +6,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 
-/// A vault in memory with one password.
+/// A vault in memory with one password. Shared with the history's tests.
 #[derive(Default)]
-struct Memory {
+pub(crate) struct Memory {
     password: StdMutex<Option<String>>,
     identities: Arc<StdMutex<Vec<Identity>>>,
     keychain: StdMutex<bool>,
     next: AtomicUsize,
     /// Saves fail with this, as on a full disk or another window's write.
     failing: StdMutex<Option<VaultError>>,
+    history: Arc<StdMutex<Option<HistoryKeys>>>,
 }
 
 struct MemoryOpen {
@@ -68,6 +69,10 @@ impl VaultBackend for Arc<Memory> {
         }
     }
 
+    fn history_public(&self) -> Option<[u8; 32]> {
+        self.history.lock().unwrap().as_ref().map(|k| k.public)
+    }
+
     fn new_id(&self) -> String {
         format!("id{}", self.next.fetch_add(1, Ordering::Relaxed))
     }
@@ -108,6 +113,20 @@ impl OpenVault for MemoryOpen {
         Ok(())
     }
 
+    fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError> {
+        let mut slot = self.owner.history.lock().unwrap();
+        if let Some(keys) = slot.as_ref() {
+            return Ok((keys.clone(), false));
+        }
+        let keys = HistoryKeys {
+            database: Zeroizing::new([1; 32]),
+            sealing: Zeroizing::new([2; 32]),
+            public: [3; 32],
+        };
+        *slot = Some(keys.clone());
+        Ok((keys, true))
+    }
+
     fn save(&mut self) -> Result<(), VaultError> {
         if let Some(error) = self.owner.failing.lock().unwrap().clone() {
             return Err(error);
@@ -121,11 +140,22 @@ impl OpenVault for MemoryOpen {
     }
 }
 
-fn secret(text: &str) -> Secret {
+pub(crate) fn secret(text: &str) -> Secret {
     Secret::new(text.to_owned())
 }
 
-fn vault() -> (Arc<Memory>, Arc<Vault>) {
+/// Makes the open vault look unused for an hour, as after a suspend, with
+/// the idle tick not run yet.
+pub(crate) async fn age(vault: &Vault) {
+    if let Some(open) = vault.state.lock().await.open.as_mut() {
+        open.used = Used {
+            monotonic: Instant::now(),
+            wall: std::time::SystemTime::now() - Duration::from_hours(1),
+        };
+    }
+}
+
+pub(crate) fn vault() -> (Arc<Memory>, Arc<Vault>) {
     let memory = Arc::new(Memory::default());
     let vault = Vault::new(Arc::new(Arc::clone(&memory)), DEFAULT_IDLE);
     (memory, vault)
@@ -520,4 +550,41 @@ async fn a_public_key_is_read_from_one_identity() {
         vault.public_key("nope").await,
         Err(VaultError::NoSuchIdentity(_))
     ));
+}
+
+#[tokio::test]
+async fn history_keys_are_made_once_and_saved() {
+    let (memory, vault) = vault();
+    assert_eq!(vault.history_keys().await.unwrap_err(), VaultError::Locked);
+    vault.create(secret("correct horse")).await.unwrap();
+    assert_eq!(vault.history_public().await, None);
+    let first = vault.history_keys().await.unwrap();
+    let again = vault.history_keys().await.unwrap();
+    assert_eq!(*first.database, *again.database);
+    assert_eq!(vault.history_public().await, Some(first.public));
+    assert!(memory.history.lock().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn followers_see_every_lock_and_unlock() {
+    let (_, vault) = vault();
+    let mut open = vault.watch().await;
+    assert!(!*open.borrow());
+    vault.create(secret("correct horse")).await.unwrap();
+    open.changed().await.unwrap();
+    assert!(*open.borrow_and_update());
+    vault.lock().await;
+    open.changed().await.unwrap();
+    assert!(!*open.borrow_and_update());
+    // A use past the idle time locks, and says so.
+    vault.unlock(secret("correct horse")).await.unwrap();
+    open.changed().await.unwrap();
+    assert!(*open.borrow_and_update());
+    vault.state.lock().await.open.as_mut().unwrap().used = Used {
+        monotonic: Instant::now(),
+        wall: std::time::SystemTime::now() - Duration::from_hours(1),
+    };
+    vault.touch().await;
+    open.changed().await.unwrap();
+    assert!(!*open.borrow_and_update());
 }

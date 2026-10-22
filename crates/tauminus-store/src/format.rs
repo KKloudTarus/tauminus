@@ -77,6 +77,8 @@ struct SettingsRecord {
     env: Vec<EnvRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    history: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -109,6 +111,7 @@ impl SettingsRecord {
         self.guard.is_empty()
             && self.forward_agent.is_none()
             && self.identity.is_none()
+            && self.history.is_none()
             && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
@@ -272,6 +275,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         },
         forward_agent: s.forward_agent,
         identity: s.identity.as_ref().map(ToString::to_string),
+        history: s.history,
         env: s
             .env
             .iter()
@@ -362,6 +366,7 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         identities_only: r.identities_only,
         guard: guard(r.guard)?,
         forward_agent: r.forward_agent,
+        history: r.history,
         identity: r
             .identity
             .map(|i| IdentityId::parse(&i))

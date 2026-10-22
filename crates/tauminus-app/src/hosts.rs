@@ -97,6 +97,11 @@ impl HostBook {
         self.inventory.lock().await.resolve(id, local_user)
     }
 
+    /// Whether a host's commands go into the history. O(d).
+    pub async fn records_history(&self, id: &HostId) -> Result<bool, HostsError> {
+        self.inventory.lock().await.records_history(id)
+    }
+
     /// The vault identity a host logs in with, if any. O(d).
     pub async fn identity(&self, id: &HostId) -> Result<Option<IdentityId>, HostsError> {
         self.inventory.lock().await.identity(id)

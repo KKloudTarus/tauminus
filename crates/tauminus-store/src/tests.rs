@@ -79,6 +79,7 @@ fn rich() -> Inventory {
     db.settings.identity_files = Some(vec!["~/.ssh/id_db".into()]);
     db.settings.identities_only = Some(true);
     db.settings.jumps = Some(vec![]);
+    db.settings.history = Some(false);
     let mut legacy = Host::new(
         HostId::parse("legacy").unwrap(),
         Label::parse("legacy").unwrap(),

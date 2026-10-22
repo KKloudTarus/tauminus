@@ -409,3 +409,54 @@ fn a_save_waits_a_bounded_time_for_another_writer() {
     drop(held);
     vault.save(&file).unwrap();
 }
+
+#[test]
+fn the_history_key_is_readable_locked_and_checked_on_unlock() {
+    let dir = Dir::new("historykey");
+    let file = sample(&dir);
+    assert_eq!(file.history_public().unwrap(), None);
+    let mut vault = file.open_with_password(b"correct horse").unwrap();
+    vault.set_history_public([9; KEY_LEN]);
+    vault.save(&file).unwrap();
+    assert_eq!(file.history_public().unwrap(), Some([9; KEY_LEN]));
+    let vault = file.open_with_password(b"correct horse").unwrap();
+    assert_eq!(vault.history_public(), Some([9; KEY_LEN]));
+    // A swapped key, so commands would be sealed to someone else, fails the
+    // next unlock.
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(file.path()).unwrap()).unwrap();
+    value["history"] = encode(&[7; KEY_LEN]).into();
+    std::fs::write(file.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        file.open_with_password(b"correct horse"),
+        Err(VaultError::Corrupt(_))
+    ));
+    // Removing it fails too.
+    value.as_object_mut().unwrap().remove("history");
+    std::fs::write(file.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        file.open_with_password(b"correct horse"),
+        Err(VaultError::Corrupt(_))
+    ));
+}
+
+#[test]
+fn a_vault_without_a_history_key_keeps_its_old_manifest() {
+    // The manifest's additional data from before the history existed.
+    let costs = TEST_KDF;
+    let salt = [3u8; SALT_LEN];
+    let aad = manifest_aad("00112233445566778899aabbccddeeff", costs, &salt, None);
+    let Kdf {
+        memory_kib,
+        iterations,
+        parallelism,
+    } = costs;
+    assert_eq!(
+        aad,
+        format!(
+            "{FORMAT}/{VERSION}/manifest/00112233445566778899aabbccddeeff/argon2id/{memory_kib}/{iterations}/{parallelism}/{}",
+            hex(&salt)
+        )
+        .into_bytes()
+    );
+}

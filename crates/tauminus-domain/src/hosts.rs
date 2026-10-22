@@ -249,6 +249,9 @@ pub struct Settings {
     pub env: Vec<EnvVar>,
     /// The vault identity to log in with; `None` inherits.
     pub identity: Option<IdentityId>,
+    /// Whether commands run here go into the history; `None` inherits, and
+    /// the root default is on.
+    pub history: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -537,6 +540,16 @@ impl Inventory {
             .unwrap_or(false))
     }
 
+    /// Whether a host's commands are recorded: the nearest level's choice,
+    /// on when none chooses. O(d).
+    pub fn records_history(&self, id: &HostId) -> Result<bool, HostsError> {
+        Ok(self
+            .chain(id)?
+            .iter()
+            .find_map(|s| s.history)
+            .unwrap_or(true))
+    }
+
     /// A host's settings, then each group's up to the root.
     fn chain(&self, id: &HostId) -> Result<Vec<&Settings>, HostsError> {
         let host = self
@@ -687,7 +700,8 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         identity_files,
         identities_only,
         forward_agent,
-        identity
+        identity,
+        history
     );
     let mut env = child.env.clone();
     env.extend(parent.env.iter().cloned());

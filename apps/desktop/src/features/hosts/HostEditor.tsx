@@ -95,14 +95,17 @@ export function withGuard(base: SettingsSpec, fields: GuardFieldsState): Setting
 
 export interface SessionFieldsState {
   forwardAgent: GuardChoice;
+  history: GuardChoice;
   /** One `NAME=value` per line. */
   env: string;
 }
 
 export function sessionFields(settings: SettingsSpec | undefined): SessionFieldsState {
   const agent = settings?.forwardAgent;
+  const history = settings?.history;
   return {
     forwardAgent: agent == null ? "inherit" : agent ? "on" : "off",
+    history: history == null ? "inherit" : history ? "on" : "off",
     env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
   };
 }
@@ -126,6 +129,7 @@ export function withSession(base: SettingsSpec, fields: SessionFieldsState): Set
   return {
     ...base,
     forwardAgent: fields.forwardAgent === "inherit" ? null : fields.forwardAgent === "on",
+    history: fields.history === "inherit" ? null : fields.history === "on",
     env: env.length > 0 ? env : null,
   };
 }
@@ -577,6 +581,17 @@ function SessionFields({
             Anyone with root on the server can use your agent&apos;s keys while you are connected.
           </p>
         )}
+        <Field label="Record commands in the history">
+          <select
+            value={value.history}
+            onChange={(e) => set({ history: guardChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">Inherit (on by default)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </Field>
         <Field label="Environment variables (one per line, as LANG=C.UTF-8)">
           <textarea
             value={value.env}

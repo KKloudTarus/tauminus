@@ -634,3 +634,22 @@ fn more_than_32_variables_in_all_are_refused() {
     );
     assert_eq!(inventory, before);
 }
+
+#[test]
+fn history_is_on_unless_the_nearest_level_turns_it_off() {
+    let mut root = group("root", None);
+    root.settings.history = Some(false);
+    let mut team = group("team", Some("root"));
+    team.settings.history = Some(true);
+    let quiet = host("quiet", Some("root"));
+    let loud = host("loud", Some("team"));
+    let mut off = host("off", Some("team"));
+    off.settings.history = Some(false);
+    let free = host("free", None);
+    let inventory = Inventory::new(vec![root, team], vec![quiet, loud, off, free]).unwrap();
+    let records = |id: &str| inventory.records_history(&hid(id)).unwrap();
+    assert!(!records("quiet"));
+    assert!(records("loud"));
+    assert!(!records("off"));
+    assert!(records("free"));
+}

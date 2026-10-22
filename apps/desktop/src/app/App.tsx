@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
+import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
@@ -19,7 +20,10 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen, vaultOpen } = useSyncExternalStore(shell.subscribe, shell.getState);
+  const { sidebarOpen, vaultOpen, historyOpen } = useSyncExternalStore(
+    shell.subscribe,
+    shell.getState,
+  );
   const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
   const savedHosts = useSyncExternalStore(shell.hosts.subscribe, shell.hosts.getSnapshot).view
     .hosts;
@@ -54,7 +58,8 @@ export function App({ shell }: { shell: AppShell }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const state = shell.getState();
-      if (!event.defaultPrevented && !state.paletteOpen && !state.connectOpen && !state.vaultOpen) {
+      const modal = state.paletteOpen || state.connectOpen || state.vaultOpen || state.historyOpen;
+      if (!event.defaultPrevented && !modal) {
         shell.handleKey(event);
       }
     };
@@ -122,6 +127,16 @@ export function App({ shell }: { shell: AppShell }) {
       {/* Mounted up front so the first keystroke after opening reaches its input. */}
       <CommandPalette shell={shell} />
       <ConnectDialog shell={shell} />
+      {historyOpen && shell.history && (
+        <HistoryDialog
+          client={shell.history}
+          hosts={savedHosts}
+          onClose={() => shell.setHistoryOpen(false)}
+          onInsert={(command) => shell.insertText(command)}
+          onCopy={(text) => shell.copyText(text)}
+          onUnlock={(retry) => shell.unlockVaultThen(retry)}
+        />
+      )}
       {vaultOpen && (
         <VaultDialog
           store={shell.vault}
