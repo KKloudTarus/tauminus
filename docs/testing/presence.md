@@ -6,6 +6,16 @@ lack. CI runs the OS calls and prints what each runner answers (the
 Run them on a Mac with Touch ID and on a Windows machine with Hello set
 up, and record the results at the end.
 
+## What CI answers
+
+The "Presence check on this OS" step, on 2026-10-22 (run 39870978089):
+
+| Runner | Answer |
+|---|---|
+| macOS (`macos-latest`) | `your Mac login password: available Ok(())`: no Touch ID, so the login password answers, and the name says so |
+| Windows (`windows-latest`) | `Windows Hello: available Err("no Windows Hello device")` |
+| Ubuntu (`ubuntu-22.04`) | `system authentication: available Err("the polkit action for Tauminus is not installed")`: polkitd answers, and the action ships only with the packages |
+
 ## 1. The adapter alone
 
 ```
