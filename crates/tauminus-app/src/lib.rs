@@ -13,6 +13,7 @@ mod local;
 pub mod ports;
 mod session;
 mod ssh;
+pub mod vault;
 
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;

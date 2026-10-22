@@ -95,6 +95,11 @@ pub(crate) enum ErrorCode {
     ProtocolError,
     /// The saved hosts could not be read or written.
     StoreFailed,
+    /// The vault must be unlocked first.
+    VaultLocked,
+    WrongPassword,
+    /// A system service, such as the OS keychain, is missing.
+    Unavailable,
     Internal,
 }
 

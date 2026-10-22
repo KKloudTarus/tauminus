@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use tauminus_domain::{
-    EnvVar, Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Policy,
-    Route, Settings, SshTarget, UserName, env_list,
+    EnvVar, Group, GroupId, Hop, Host, HostId, HostName, HostsError, IdentityId, Inventory, Label,
+    Policy, Route, Settings, SshTarget, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -95,6 +95,11 @@ impl HostBook {
         local_user: &UserName,
     ) -> Result<SshTarget, HostsError> {
         self.inventory.lock().await.resolve(id, local_user)
+    }
+
+    /// The vault identity a host logs in with, if any. O(d).
+    pub async fn identity(&self, id: &HostId) -> Result<Option<IdentityId>, HostsError> {
+        self.inventory.lock().await.identity(id)
     }
 
     /// The prod guard for a host, read from the list as it is now, so a

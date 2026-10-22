@@ -12,6 +12,15 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The vault: Argon2id, XChaCha20-Poly1305, and wiping secrets. argon2,
+# chacha20, poly1305, base64ct, and zeroize are already in the tree through
+# russh; chacha20poly1305 adds only its own code.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
+base64ct = { version = "1.8.3", features = ["alloc"] }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+thiserror.workspace = true
+tracing.workspace = true
+zeroize = { workspace = true, features = ["serde"] }
 # Same version the SSH adapter uses, so the tree holds one copy.
 rand = "0.10"
 serde.workspace = true
@@ -19,6 +28,21 @@ serde_json.workspace = true
 tauminus-app.workspace = true
 tauminus-domain.workspace = true
 tokio = { workspace = true, features = ["rt"] }
+
+# The OS keychain, which holds the key that unlocks the vault without the
+# master password.
+keyring-core = "1.0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1.0.2", default-features = false, features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1.0"
+
+# Pure-Rust crypto for the Secret Service session, and zbus's own executor,
+# so calls from blocking threads need no runtime.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["rt-async-io-crypto-rust"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

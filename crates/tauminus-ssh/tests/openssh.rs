@@ -889,3 +889,146 @@ async fn a_forwarded_agent_request_with_no_local_agent_fails_fast() {
 fn client_missing_agent() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("tauminus-no-agent-{}.sock", std::process::id()))
 }
+
+#[tokio::test]
+async fn an_identity_key_logs_in_from_memory_without_prompts() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    for passphrase in ["", "vault keeps this"] {
+        let client = Client::new("");
+        let key = client.user_key("id", passphrase);
+        let pem = std::fs::read_to_string(&key).unwrap();
+        // Only the identity holds the key now.
+        std::fs::remove_file(&key).unwrap();
+        let sshd = Sshd::start(
+            &sshd_bin,
+            &[&client.scratch.path("id.pub")],
+            None,
+            SshdOptions::default(),
+        );
+        let credentials = Arc::new(tauminus_app::ports::Credentials {
+            private_key: Some(zeroize::Zeroizing::new(pem)),
+            passphrase: (!passphrase.is_empty())
+                .then(|| zeroize::Zeroizing::new(passphrase.to_owned())),
+            ..tauminus_app::ports::Credentials::default()
+        });
+        let options = AuthOptions {
+            methods: vec![AuthMethod::PublicKey],
+            identity_files: vec![client.scratch.path("absent")],
+            identities_only: true,
+        };
+        let target = target(sshd.endpoint(), vec![], Route::Direct, options);
+        let asked = ScriptedPrompter::trust();
+        let mut stream = client
+            .connector
+            .connect_with(&target, SIZE(), prompter(&asked), credentials)
+            .await
+            .unwrap();
+        let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+        assert_eq!(code, Some(0));
+        // Only the host key question was asked: no passphrase prompt.
+        assert_eq!(asked.asked().len(), 1, "{passphrase:?}");
+    }
+}
+
+fn identity_credentials(pem: String) -> Arc<tauminus_app::ports::Credentials> {
+    Arc::new(tauminus_app::ports::Credentials {
+        private_key: Some(zeroize::Zeroizing::new(pem)),
+        ..tauminus_app::ports::Credentials::default()
+    })
+}
+
+#[tokio::test]
+async fn the_identity_key_goes_before_an_agent_full_of_other_keys() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    // sshd stops after MaxAuthTries (6) refused keys; the agent holds 7.
+    let first = client.user_key("other0", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &first).await;
+    for n in 1..7 {
+        let key = client.user_key(&format!("other{n}"), "");
+        let added = std::process::Command::new("ssh-add")
+            .arg(&key)
+            .env("SSH_AUTH_SOCK", &socket)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(added.success());
+    }
+    let key = client.user_key("id", "");
+    let pem = std::fs::read_to_string(&key).unwrap();
+    std::fs::remove_file(&key).unwrap();
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let client = client.with_agent(socket);
+    let options = AuthOptions {
+        methods: vec![AuthMethod::Agent, AuthMethod::PublicKey],
+        identity_files: vec![],
+        identities_only: false,
+    };
+    let target = target(sshd.endpoint(), vec![], Route::Direct, options);
+    let mut stream = client
+        .connector
+        .connect_with(
+            &target,
+            SIZE(),
+            prompter(&ScriptedPrompter::trust()),
+            identity_credentials(pem),
+        )
+        .await
+        .unwrap();
+    let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+    assert_eq!(code, Some(0));
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+#[tokio::test]
+async fn a_jump_host_never_gets_the_identity() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let pem = std::fs::read_to_string(&key).unwrap();
+    std::fs::remove_file(&key).unwrap();
+    let pub_key = client.scratch.path("id.pub");
+    // Both hops accept only the identity's key, so the bastion lets the
+    // client in only if the identity reached it.
+    let bastion = Sshd::start(&sshd_bin, &[&pub_key], None, SshdOptions::default());
+    let inner = Sshd::start(&sshd_bin, &[&pub_key], None, SshdOptions::default());
+    let options = AuthOptions {
+        methods: vec![AuthMethod::PublicKey],
+        identity_files: vec![client.scratch.path("absent")],
+        identities_only: true,
+    };
+    let target = target(
+        inner.endpoint(),
+        vec![bastion.endpoint()],
+        Route::Direct,
+        options,
+    );
+    let Err(error) = client
+        .connector
+        .connect_with(
+            &target,
+            SIZE(),
+            prompter(&ScriptedPrompter::trust()),
+            identity_credentials(pem),
+        )
+        .await
+    else {
+        panic!("the bastion refuses a client without its own key");
+    };
+    assert!(
+        matches!(&error, ConnectError::AuthFailed { endpoint, .. } if endpoint.contains(&bastion.port.to_string())),
+        "{error:?}"
+    );
+}

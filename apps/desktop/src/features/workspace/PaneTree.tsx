@@ -14,17 +14,23 @@ import type { Tab, Workspace } from "./workspace.ts";
 interface PaneTreeProps {
   workspace: Workspace<TerminalController, SessionSpec>;
   tab: Tab;
+  onUnlockVault?: ((retry: () => void) => void) | undefined;
 }
 
 /** Renders one tab's layout: nested resizable groups with a terminal in each leaf. */
-export function PaneTree({ workspace, tab }: PaneTreeProps) {
-  return <Node workspace={workspace} tab={tab} node={tab.root} />;
+export function PaneTree({ workspace, tab, onUnlockVault }: PaneTreeProps) {
+  return <Node workspace={workspace} tab={tab} node={tab.root} onUnlockVault={onUnlockVault} />;
 }
 
-function Node({ workspace, tab, node }: PaneTreeProps & { node: LayoutNode }) {
+function Node({ workspace, tab, node, onUnlockVault }: PaneTreeProps & { node: LayoutNode }) {
   if (node.kind === "pane") {
     return (
-      <TerminalPane workspace={workspace} paneId={node.id} focused={tab.focused === node.id} />
+      <TerminalPane
+        workspace={workspace}
+        paneId={node.id}
+        focused={tab.focused === node.id}
+        onUnlockVault={onUnlockVault}
+      />
     );
   }
   const onLayoutChange = (layout: Layout) => {
@@ -43,7 +49,7 @@ function Node({ workspace, tab, node }: PaneTreeProps & { node: LayoutNode }) {
       {node.children.map((child, index) => (
         <ChildPanel key={child.id} index={index}>
           <Panel id={child.id} defaultSize={`${node.sizes[index] ?? 0}%`} minSize="8%">
-            <Node workspace={workspace} tab={tab} node={child} />
+            <Node workspace={workspace} tab={tab} node={child} onUnlockVault={onUnlockVault} />
           </Panel>
         </ChildPanel>
       ))}
@@ -67,10 +73,12 @@ function TerminalPane({
   workspace,
   paneId,
   focused,
+  onUnlockVault,
 }: {
   workspace: Workspace<TerminalController, SessionSpec>;
   paneId: PaneId;
   focused: boolean;
+  onUnlockVault: ((retry: () => void) => void) | undefined;
 }) {
   const controller = workspace.terminal(paneId);
   const title = useSyncExternalStore(
@@ -108,7 +116,11 @@ function TerminalPane({
         if (!focused) workspace.focusPane(paneId);
       }}
     >
-      <TerminalView controller={controller} className="min-h-0 flex-1" />
+      <TerminalView
+        controller={controller}
+        className="min-h-0 flex-1"
+        {...(onUnlockVault ? { onUnlockVault } : {})}
+      />
     </section>
   );
 }

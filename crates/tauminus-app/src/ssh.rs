@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauminus_domain::{SessionId, SessionKind, SessionMeta, SshTarget, TerminalSize};
 use thiserror::Error;
 
-use crate::ports::{ConnectError, OutputSink, Prompter, SshConnector};
+use crate::ports::{ConnectError, Credentials, OutputSink, Prompter, SshConnector};
 use crate::session::{SessionError, SessionManager};
 
 #[derive(Debug, Error)]
@@ -48,8 +48,24 @@ impl SshSessions {
         sink: impl OutputSink,
         prompter: Arc<dyn Prompter>,
     ) -> Result<SessionId, SshOpenError> {
+        self.open_with(target, size, sink, prompter, Arc::default())
+            .await
+    }
+
+    /// As [`SshSessions::open`], with a vault identity's credentials.
+    pub async fn open_with(
+        &self,
+        target: &SshTarget,
+        size: TerminalSize,
+        sink: impl OutputSink,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+    ) -> Result<SessionId, SshOpenError> {
         let slot = self.sessions.reserve()?;
-        let stream = self.connector.connect(target, size, prompter).await?;
+        let stream = self
+            .connector
+            .connect_with(target, size, prompter, credentials)
+            .await?;
         Ok(self.sessions.attach(
             slot,
             stream,

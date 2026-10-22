@@ -30,7 +30,9 @@ use std::time::Duration;
 
 use russh::client::{self, Handle};
 use russh::keys::{Algorithm, PublicKeyOrCertificate};
-use tauminus_app::ports::{BoxFuture, ConnectError, Prompter, SshConnector, TerminalStream};
+use tauminus_app::ports::{
+    BoxFuture, ConnectError, Credentials, Prompter, SshConnector, TerminalStream,
+};
 use tauminus_domain::{Endpoint, SshTarget, TerminalSize};
 use tokio::sync::{Notify, watch};
 
@@ -81,7 +83,9 @@ impl RusshConnector {
         target: &SshTarget,
         size: TerminalSize,
         prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
     ) -> Result<TerminalStream, ConnectError> {
+        let none = Credentials::default();
         // Dropped when this future ends or is dropped, which cancels a host
         // key prompt still waiting inside a handshake nobody awaits anymore.
         let (_alive, alive) = watch::channel(());
@@ -133,6 +137,8 @@ impl RusshConnector {
                 prompter: &prompter,
                 home: self.home.as_deref(),
                 agent: &self.agent,
+                // A jump host is another login; the identity is for the target.
+                credentials: if last { &credentials } else { &none },
             }
             .run()
             .await?;
@@ -199,13 +205,14 @@ async fn handshake(
 }
 
 impl SshConnector for RusshConnector {
-    fn connect<'a>(
+    fn connect_with<'a>(
         &'a self,
         target: &'a SshTarget,
         size: TerminalSize,
         prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
-        Box::pin(self.open(target, size, prompter))
+        Box::pin(self.open(target, size, prompter, credentials))
     }
 }
 
@@ -259,6 +266,13 @@ fn preferred(recorded: &[Algorithm], certificates: bool) -> russh::Preferred {
         key: Cow::Owned(keys),
         ..russh::Preferred::default()
     }
+}
+
+/// The `authorized_keys` line of an OpenSSH private key. An encrypted key
+/// runs its KDF to decode (about 0.2 s), so call this off the async workers.
+pub fn public_key_line(pem: &str, passphrase: Option<&str>) -> Result<String, String> {
+    let key = russh::keys::decode_secret_key(pem, passphrase).map_err(|e| e.to_string())?;
+    key.public_key().to_openssh().map_err(|e| e.to_string())
 }
 
 fn protocol(error: impl std::fmt::Display) -> ConnectError {

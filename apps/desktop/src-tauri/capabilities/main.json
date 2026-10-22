@@ -24,6 +24,18 @@
     "allow-guard-check",
     "allow-open-link",
     "allow-clipboard-read-text",
-    "allow-clipboard-write-text"
+    "allow-clipboard-write-text",
+    "allow-vault-status",
+    "allow-vault-create",
+    "allow-vault-unlock",
+    "allow-vault-unlock-keychain",
+    "allow-vault-lock",
+    "allow-vault-touch",
+    "allow-vault-set-idle",
+    "allow-vault-change-password",
+    "allow-vault-set-keychain",
+    "allow-identities-list",
+    "allow-identity-save",
+    "allow-identity-delete"
   ]
 }

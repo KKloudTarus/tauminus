@@ -1,28 +1,56 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
+import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
 
 import { CommandPalette } from "./CommandPalette.tsx";
+import type { HostView } from "@/ipc/index.ts";
+
 import type { AppShell } from "./shell.ts";
 
 export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen } = useSyncExternalStore(shell.subscribe, shell.getState);
+  const { sidebarOpen, vaultOpen } = useSyncExternalStore(shell.subscribe, shell.getState);
+  const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
+  // Stable, so a vault change does not rebuild the host tree. O(hosts) each.
+  const connectHost = useCallback((host: HostView) => shell.connectHost(host), [shell]);
+  const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
+
+  // Typing and clicking keep an open vault from locking. Capture phase: the
+  // terminal handles its keys before they would bubble here.
+  useEffect(() => {
+    const onActivity = () => shell.vault.activity();
+    // The vault may have locked itself while the window was in the background.
+    const onFocus = () => {
+      shell.vault.refresh().catch((error: unknown) => console.warn("vault status failed", error));
+    };
+    onFocus();
+    window.addEventListener("keydown", onActivity, true);
+    window.addEventListener("pointerdown", onActivity, true);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("keydown", onActivity, true);
+      window.removeEventListener("pointerdown", onActivity, true);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [shell]);
 
   // Shortcuts that arrive while focus is outside a terminal, such as on the tab bar.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const { paletteOpen, connectOpen } = shell.getState();
-      if (!event.defaultPrevented && !paletteOpen && !connectOpen) shell.handleKey(event);
+      const state = shell.getState();
+      if (!event.defaultPrevented && !state.paletteOpen && !state.connectOpen && !state.vaultOpen) {
+        shell.handleKey(event);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -43,11 +71,21 @@ export function App({ shell }: { shell: AppShell }) {
       />
       <div className="flex min-h-0 flex-1">
         {sidebarOpen && (
-          <Sidebar store={shell.hosts} onConnect={(host) => shell.connectHost(host)} />
+          <Sidebar
+            store={shell.hosts}
+            onConnect={connectHost}
+            onOpenVault={openVault}
+            identities={vault.identities}
+          />
         )}
         <div className="min-w-0 flex-1">
           {active ? (
-            <PaneTree key={active.id} workspace={workspace} tab={active} />
+            <PaneTree
+              key={active.id}
+              workspace={workspace}
+              tab={active}
+              onUnlockVault={(retry) => shell.unlockVaultThen(retry)}
+            />
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-sm opacity-80">
               <p>No open terminals.</p>
@@ -78,6 +116,13 @@ export function App({ shell }: { shell: AppShell }) {
       {/* Mounted up front so the first keystroke after opening reaches its input. */}
       <CommandPalette shell={shell} />
       <ConnectDialog shell={shell} />
+      {vaultOpen && (
+        <VaultDialog
+          store={shell.vault}
+          onClose={() => shell.setVaultOpen(false)}
+          onUnlocked={() => shell.vaultUnlocked()}
+        />
+      )}
     </main>
   );
 }

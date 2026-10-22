@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauminus_app::ports::{Answer, BoxFuture, ConnectError, Prompt, Prompter};
+use tauminus_app::ports::{Answer, BoxFuture, ConnectError, Credentials, Prompt, Prompter};
 use tauminus_app::{SshOpenError, SshSessions};
 use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
 use tauri::State;
@@ -517,6 +517,7 @@ pub(crate) async fn host_connect(
     ssh: State<'_, SshSessions>,
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
+    vault: State<'_, Arc<tauminus_app::vault::Vault>>,
     id: String,
     size: GridSize,
     on_output: Channel<OutputChunk>,
@@ -527,12 +528,40 @@ pub(crate) async fn host_connect(
         |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
     let id = tauminus_domain::HostId::parse(&id).map_err(|e| invalid(&e))?;
     let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
-    let target = hosts
-        .book()?
-        .resolve(&id, &me)
-        .await
-        .map_err(|e| invalid(&e))?;
-    open_target(&ssh, &broker, &target, size, on_output, on_exit, on_prompt).await
+    let book = hosts.book()?;
+    let mut target = book.resolve(&id, &me).await.map_err(|e| invalid(&e))?;
+    // A host with an identity needs the vault open: the view asks to
+    // unlock on `vault_locked` and tries again.
+    let credentials = match book.identity(&id).await.map_err(|e| invalid(&e))? {
+        Some(identity) => vault.credentials(identity.as_str()).await?,
+        None => Credentials::default(),
+    };
+    if let Some(user) = credentials.user.as_deref() {
+        let user = UserName::parse(user).map_err(|e| invalid(&e))?;
+        let destination = &target.destination;
+        target.destination = Endpoint::new(user, destination.host.clone(), destination.port)
+            .map_err(|e| invalid(&e))?;
+    }
+    open_target_with(
+        &ssh,
+        &broker,
+        &target,
+        size,
+        Channels {
+            output: on_output,
+            exit: on_exit,
+            prompt: on_prompt,
+        },
+        Arc::new(credentials),
+    )
+    .await
+}
+
+/// A session's three channels to the view.
+struct Channels {
+    output: Channel<OutputChunk>,
+    exit: Channel<SessionExit>,
+    prompt: Channel<PromptRequest>,
 }
 
 async fn open_target(
@@ -544,17 +573,35 @@ async fn open_target(
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
+    let channels = Channels {
+        output: on_output,
+        exit: on_exit,
+        prompt: on_prompt,
+    };
+    open_target_with(ssh, broker, target, size, channels, Arc::default()).await
+}
+
+async fn open_target_with(
+    ssh: &SshSessions,
+    broker: &Arc<PromptBroker>,
+    target: &SshTarget,
+    size: GridSize,
+    channels: Channels,
+    credentials: Arc<Credentials>,
+) -> Result<SessionHandle, CommandError> {
     let size = size.try_into()?;
     let prompter = Arc::new(ChannelPrompter {
         broker: Arc::clone(broker),
-        channel: on_prompt,
+        channel: channels.prompt,
         timeout: PROMPT_TIMEOUT,
     });
     let sink = ChannelSink {
-        output: on_output,
-        exit: on_exit,
+        output: channels.output,
+        exit: channels.exit,
     };
-    let id = ssh.open(target, size, sink, prompter).await?;
+    let id = ssh
+        .open_with(target, size, sink, prompter, credentials)
+        .await?;
     SessionHandle::try_from(id)
 }
 

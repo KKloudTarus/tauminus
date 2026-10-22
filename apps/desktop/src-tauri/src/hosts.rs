@@ -12,7 +12,8 @@ use specta::Type;
 use tauminus_app::{HostBook, HostBookError};
 use tauminus_domain::{
     EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError,
-    Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName, env_list,
+    IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName,
+    env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -70,6 +71,9 @@ pub(crate) struct SettingsSpec {
     /// wins over its groups'.
     #[serde(default)]
     pub(crate) env: Option<Vec<EnvSpec>>,
+    /// The vault identity to log in with; `null` inherits.
+    #[serde(default)]
+    pub(crate) identity: Option<String>,
 }
 
 /// One environment variable, as OpenSSH `SetEnv NAME=value`.
@@ -269,6 +273,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         }),
         identities_only: s.identities_only,
         forward_agent: s.forward_agent,
+        identity: s.identity.as_ref().map(ToString::to_string),
         env: (!s.env.is_empty()).then(|| {
             s.env
                 .iter()
@@ -406,6 +411,12 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         guard: guard_settings(spec.guard)?,
         forward_agent: spec.forward_agent,
         env: env_vars(spec.env)?,
+        identity: spec
+            .identity
+            .filter(|i| !i.is_empty())
+            .map(|i| IdentityId::parse(&i))
+            .transpose()
+            .map_err(invalid)?,
     })
 }
 

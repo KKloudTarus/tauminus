@@ -33,6 +33,8 @@ const CODE: &str = "123456";
 struct Server {
     rounds: Option<usize>,
     asked: usize,
+    /// Asks one hidden field, with this prompt, and accepts this answer.
+    single: Option<(&'static str, &'static str)>,
 }
 
 impl Server {
@@ -40,6 +42,7 @@ impl Server {
         Self {
             rounds: Some(1),
             asked: 0,
+            single: None,
         }
     }
 }
@@ -70,6 +73,22 @@ impl server::Handler for Server {
             instructions: Cow::Borrowed(""),
             prompts: Cow::Owned(vec![(Cow::Borrowed("Code: "), true)]),
         };
+        if let Some((prompt, answer)) = self.single {
+            return Ok(match response {
+                None => Auth::Partial {
+                    name: Cow::Borrowed("single"),
+                    instructions: Cow::Borrowed(""),
+                    prompts: Cow::Owned(vec![(Cow::Borrowed(prompt), false)]),
+                },
+                Some(response) => {
+                    if response.collect::<Vec<_>>() == [answer.as_bytes()] {
+                        Auth::Accept
+                    } else {
+                        reject()
+                    }
+                }
+            });
+        }
         if self.rounds != Some(1) {
             // Many rounds of one code each; accept after the last.
             if response.is_some() {
@@ -351,6 +370,7 @@ async fn the_tenth_challenge_round_still_logs_in() {
         Server {
             rounds: Some(10),
             asked: 0,
+            single: None,
         },
     )
     .await;
@@ -376,6 +396,7 @@ async fn a_server_that_never_stops_asking_is_given_up_on() {
         Server {
             rounds: None,
             asked: 0,
+            single: None,
         },
     )
     .await;
@@ -396,4 +417,73 @@ async fn a_server_that_never_stops_asking_is_given_up_on() {
         result.err()
     );
     assert_eq!(codes.0.load(std::sync::atomic::Ordering::Relaxed), 10);
+}
+
+#[tokio::test]
+async fn a_stored_password_never_answers_a_one_time_code() {
+    let scratch = Scratch::new("kbd-otp");
+    let port = start_with(
+        &scratch,
+        Server {
+            single: Some(("Verification code: ", CODE)),
+            ..Server::new()
+        },
+    )
+    .await;
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Responses(vec![secret(CODE)]),
+    ]);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(PASSWORD)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::KeyboardInteractive]),
+            size(),
+            dyn_prompter(&prompter),
+            credentials,
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            prompter.asked().get(1),
+            Some(Prompt::KeyboardInteractive { .. })
+        ),
+        "the code was asked of the user: {:?}",
+        prompter.asked()
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_stored_password_over_keyboard_interactive_then_asks() {
+    let scratch = Scratch::new("kbd-stale");
+    let port = start_with(
+        &scratch,
+        Server {
+            single: Some(("Password: ", PASSWORD)),
+            ..Server::new()
+        },
+    )
+    .await;
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Responses(vec![secret(PASSWORD)]),
+    ]);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret("stale")),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::KeyboardInteractive]),
+            size(),
+            dyn_prompter(&prompter),
+            credentials,
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompter.asked().len(), 2, "{:?}", prompter.asked());
 }
