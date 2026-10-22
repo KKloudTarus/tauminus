@@ -24,7 +24,7 @@ Tasks:
   deps      Check that inner layers depend only on what they are allowed to
   web       Frontend format check, lint, type check, and tests
   bindings  Regenerate the TypeScript IPC bindings
-  flood     Benchmark output: flood text <MiB> | yes <seconds> | report <hex>
+  flood     Benchmark output: flood text <MiB> | yes <seconds> | report <hex> | note <hex>
 ";
 
 fn main() -> ExitCode {

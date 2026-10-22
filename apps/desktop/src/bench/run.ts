@@ -89,9 +89,15 @@ function type(controller: TerminalController, line: string): void {
   controller.terminal.input(`${line}\r`);
 }
 
+/** Logs a milestone through the given pane's shell, for a run that gets stuck. */
+function note(controller: TerminalController, text: string): void {
+  type(controller, `xtask flood note ${toHex(`${new Date().toISOString()} ${text}`)}`);
+}
+
 async function scenario(
   name: string,
   quiet: TerminalController,
+  watched: TerminalController,
   start: () => void,
   done: () => boolean,
   timeoutMs: number,
@@ -109,7 +115,17 @@ async function scenario(
   const latencies: number[] = [];
   const until = performance.now() + timeoutMs;
   let completed = false;
+  let nextNote = performance.now() + 60_000;
   while (performance.now() < until) {
+    if (performance.now() > nextNote) {
+      nextNote += 60_000;
+      quiet.terminal.input("\u0015");
+      const last = tail(watched, 1).slice(0, 60);
+      note(
+        quiet,
+        `${name}: ${latencies.length} probes, ${counter.frames} frames, last line ${JSON.stringify(last)}`,
+      );
+    }
     // oxlint-disable-next-line no-await-in-loop -- one probe at a time, 250 ms apart
     latencies.push(await probe(quiet));
     if (done()) {
@@ -148,6 +164,8 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
     stamp.dispose();
   });
   await waitFor(() => !Number.isNaN(firstOutputAt), 30_000);
+  await sleep(2000);
+  note(firstPane, `first output; visibility ${document.visibilityState}`);
   // Idle time for the CI script's memory sample.
   await sleep(30_000);
   const idleUntil = epoch();
@@ -161,9 +179,13 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
   const panes = ids.map((id) => workspace.terminal(id)!);
   const quiet = panes.at(-1)!;
   const floods = panes.slice(0, 3);
+  // Keys go to the quiet pane, so that is where a user's focus would be.
+  workspace.focusPane(ids.at(-1)!);
   // Every shell prints its prompt before anything is typed.
   await waitFor(() => panes.every((pane) => tail(pane).trim() !== ""), 30_000);
   await sleep(3000);
+  note(quiet, `four panes, ${quiet.terminal.cols} x ${quiet.terminal.rows}`);
+  await sleep(1000);
 
   const results: ScenarioResult[] = [];
   const doneIn = (pane: TerminalController) => /flood-done/.test(tail(pane));
@@ -171,12 +193,14 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
     await scenario(
       "text 500 MiB in one pane",
       quiet,
+      floods[0]!,
       () => type(floods[0]!, "xtask flood text 500"),
       () => doneIn(floods[0]!),
       900_000,
     ),
   );
   const textSeconds = /flood-done ([\d.]+)/.exec(tail(floods[0]!))?.[1];
+  note(quiet, `text done: ${JSON.stringify(results.at(-1))}`);
   await sleep(30_000);
   for (const round of [1, 2, 3]) {
     // The last round's flood-done lines scroll away once `yes` starts; only
@@ -187,6 +211,7 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
       await scenario(
         `yes for 60 s in three panes, round ${round}`,
         quiet,
+        floods[0]!,
         () => {
           for (const pane of floods) type(pane, "xtask flood yes 60");
         },
@@ -194,6 +219,7 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
         120_000,
       ),
     );
+    note(quiet, `yes round ${round} done: ${JSON.stringify(results.at(-1))}`);
     // oxlint-disable-next-line no-await-in-loop -- the rest between rounds
     await sleep(30_000);
   }
