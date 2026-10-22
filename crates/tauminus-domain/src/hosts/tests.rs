@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::guard::{Pattern, PatternError};
+use crate::ssh::{EnvError, EnvVar, MAX_ENV, env_list};
 
 fn gid(id: &str) -> GroupId {
     GroupId::parse(id).unwrap()
@@ -516,4 +517,120 @@ fn removing_a_group_refuses_to_merge_past_the_pattern_limit() {
         Err(HostsError::Guard(PatternError::TooMany))
     );
     assert_eq!(inventory, before, "nothing changed");
+}
+
+fn env(pairs: &[(&str, &str)]) -> Vec<EnvVar> {
+    env_list(
+        pairs
+            .iter()
+            .map(|(n, v)| EnvVar::parse(n, v).unwrap())
+            .collect(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn environment_variables_are_validated() {
+    assert!(EnvVar::parse("LC_ALL", "C.UTF-8").is_ok());
+    assert!(EnvVar::parse("_X1", "a\tb").is_ok());
+    for name in ["", "1X", "A-B", "A B", &"A".repeat(65)] {
+        assert!(EnvVar::parse(name, "v").is_err(), "{name:?}");
+    }
+    for value in ["a\nb", "a\u{1b}[31m", &"v".repeat(1025)] {
+        assert!(EnvVar::parse("X", value).is_err(), "{value:?}");
+    }
+    let many = (0..=MAX_ENV)
+        .map(|n| EnvVar::parse(&format!("V{n}"), "x").unwrap())
+        .collect();
+    assert_eq!(env_list(many), Err(EnvError::TooMany));
+    // The first of a name wins.
+    let list = env_list(vec![
+        EnvVar::parse("B", "1").unwrap(),
+        EnvVar::parse("A", "2").unwrap(),
+        EnvVar::parse("B", "3").unwrap(),
+    ])
+    .unwrap();
+    assert_eq!(
+        list.iter()
+            .map(|v| (v.name(), v.value()))
+            .collect::<Vec<_>>(),
+        [("A", "2"), ("B", "1")]
+    );
+}
+
+#[test]
+fn session_options_come_from_the_nearest_level() {
+    let mut root = group("root", None);
+    root.settings.forward_agent = Some(true);
+    root.settings.env = env(&[("LANG", "C"), ("TEAM", "ops")]);
+    let mut team = group("team", Some("root"));
+    team.settings.env = env(&[("TEAM", "db")]);
+    let mut db = host("db", Some("team"));
+    db.settings.env = env(&[("ROLE", "primary")]);
+    let mut web = host("web", Some("team"));
+    web.settings.forward_agent = Some(false);
+    let mut inventory = Inventory::new(vec![root, team], vec![db, web]).unwrap();
+    let me = user("me");
+    let target = inventory.resolve(&hid("db"), &me).unwrap();
+    assert!(target.session.forward_agent);
+    assert_eq!(
+        target
+            .session
+            .env
+            .iter()
+            .map(|v| (v.name(), v.value()))
+            .collect::<Vec<_>>(),
+        [("LANG", "C"), ("ROLE", "primary"), ("TEAM", "db")]
+    );
+    assert!(
+        !inventory
+            .resolve(&hid("web"), &me)
+            .unwrap()
+            .session
+            .forward_agent
+    );
+    // A jump host is a separate connect: nothing here reaches it.
+    let before = inventory.resolve(&hid("db"), &me).unwrap().session;
+    inventory.remove_group(&gid("team")).unwrap();
+    assert_eq!(inventory.resolve(&hid("db"), &me).unwrap().session, before);
+}
+
+#[test]
+fn unsorted_or_repeated_variables_are_refused() {
+    let mut db = host("db", None);
+    db.settings.env = vec![
+        EnvVar::parse("B", "1").unwrap(),
+        EnvVar::parse("A", "1").unwrap(),
+    ];
+    assert!(Inventory::new(vec![], vec![db]).is_err());
+}
+
+#[test]
+fn more_than_32_variables_in_all_are_refused() {
+    let many = |prefix: &str| -> Vec<EnvVar> {
+        env_list(
+            (0..20)
+                .map(|n| EnvVar::parse(&format!("{prefix}{n}"), "x").unwrap())
+                .collect(),
+        )
+        .unwrap()
+    };
+    let mut team = group("team", None);
+    team.settings.env = many("G");
+    let mut db = host("db", Some("team"));
+    db.settings.env = many("H");
+    let mut inventory = Inventory::new(vec![team], vec![db]).unwrap();
+    // Connecting would send 40 variables: refused, while the route still resolves.
+    assert_eq!(
+        inventory.session(&hid("db")),
+        Err(HostsError::Env(EnvError::TooMany))
+    );
+    assert!(inventory.resolve_route(&hid("db"), &user("me")).is_ok());
+    // Removing the group would put 40 on the host: refused, nothing changed.
+    let before = inventory.clone();
+    assert_eq!(
+        inventory.remove_group(&gid("team")),
+        Err(HostsError::Env(EnvError::TooMany))
+    );
+    assert_eq!(inventory, before);
 }

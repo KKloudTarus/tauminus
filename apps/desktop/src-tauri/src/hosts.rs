@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::{HostBook, HostBookError};
 use tauminus_domain::{
-    Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError, Inventory, Label,
-    MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName,
+    EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError,
+    Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -63,6 +63,20 @@ pub(crate) struct SettingsSpec {
     pub(crate) identities_only: Option<bool>,
     #[serde(default)]
     pub(crate) guard: Option<GuardSpec>,
+    /// `ssh -A`; `null` inherits.
+    #[serde(default)]
+    pub(crate) forward_agent: Option<bool>,
+    /// Variables sent before the shell starts. A host's value for a name
+    /// wins over its groups'.
+    #[serde(default)]
+    pub(crate) env: Option<Vec<EnvSpec>>,
+}
+
+/// One environment variable, as OpenSSH `SetEnv NAME=value`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub(crate) struct EnvSpec {
+    pub(crate) name: String,
+    pub(crate) value: String,
 }
 
 /// The prod guard's settings on a host or group.
@@ -124,6 +138,8 @@ pub(crate) struct HostView {
     pub(crate) problem: Option<String>,
     /// Commands typed into this host are checked by the prod guard.
     pub(crate) guarded: bool,
+    /// The agent is forwarded, by the host's setting or a group's.
+    pub(crate) forwards_agent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -205,7 +221,12 @@ fn view(inventory: &Inventory) -> HostsView {
                 let resolved = me
                     .as_ref()
                     .ok_or_else(|| "the local user name is unknown".to_owned())
-                    .and_then(|me| inventory.resolve(&h.id, me).map_err(|e| e.to_string()));
+                    .and_then(|me| {
+                        inventory
+                            .resolve_route(&h.id, me)
+                            .map_err(|e| e.to_string())
+                    });
+                let forwards_agent = inventory.forwards_agent(&h.id).unwrap_or(false);
                 let (target, problem) = match resolved {
                     Ok(target) => (Some(SshTargetSpec::from(&target)), None),
                     Err(problem) => (None, Some(problem)),
@@ -220,6 +241,7 @@ fn view(inventory: &Inventory) -> HostsView {
                     target,
                     problem,
                     guarded: inventory.guarded(&h.id).unwrap_or(false),
+                    forwards_agent,
                 }
             })
             .collect(),
@@ -246,12 +268,38 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
                 .collect()
         }),
         identities_only: s.identities_only,
+        forward_agent: s.forward_agent,
+        env: (!s.env.is_empty()).then(|| {
+            s.env
+                .iter()
+                .map(|v| EnvSpec {
+                    name: v.name().to_owned(),
+                    value: v.value().to_owned(),
+                })
+                .collect()
+        }),
         guard: (!s.guard.is_empty()).then(|| GuardSpec {
             enabled: s.guard.enabled,
             allow: s.guard.allow().iter().map(ToString::to_string).collect(),
             deny: s.guard.deny().iter().map(ToString::to_string).collect(),
         }),
     }
+}
+
+fn env_vars(spec: Option<Vec<EnvSpec>>) -> Result<Vec<EnvVar>, CommandError> {
+    let vars = spec.unwrap_or_default();
+    if vars.len() > MAX_ENV {
+        return Err(invalid(EnvError::TooMany));
+    }
+    let parsed = vars
+        .iter()
+        .map(|v| EnvVar::parse(&v.name, &v.value).map_err(invalid))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sorted = env_list(parsed).map_err(invalid)?;
+    if sorted.len() < vars.len() {
+        return Err(invalid("an environment variable is listed twice"));
+    }
+    Ok(sorted)
 }
 
 fn guard_settings(spec: Option<GuardSpec>) -> Result<GuardSettings, CommandError> {
@@ -356,6 +404,8 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
             .map(|files| files.into_iter().map(PathBuf::from).collect()),
         identities_only: spec.identities_only,
         guard: guard_settings(spec.guard)?,
+        forward_agent: spec.forward_agent,
+        env: env_vars(spec.env)?,
     })
 }
 

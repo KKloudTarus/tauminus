@@ -217,3 +217,27 @@ async fn after_a_conflict_the_other_window_s_list_is_taken() {
         .unwrap();
     assert_eq!(both.hosts().count(), 2);
 }
+
+#[tokio::test]
+async fn imports_agent_forwarding_and_environment() {
+    let (_, book) = book().await;
+    let mut fa = entry("fa", "fa.internal");
+    fa.forward_agent = Some(true);
+    fa.set_env = vec![("TEAM".into(), "db".into()), ("LANG".into(), "C".into())];
+    let mut bad = entry("bad-env", "bad.internal");
+    bad.set_env = vec![("1BAD".into(), "x".into())];
+    let (report, inventory) = book.import(&Config(vec![fa, bad])).await.unwrap();
+    assert_eq!(report.added.len(), 1);
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(report.skipped[0].0, "bad-env");
+    let host = inventory.host(&report.added[0]).unwrap();
+    assert_eq!(host.settings.forward_agent, Some(true));
+    assert_eq!(
+        host.settings
+            .env
+            .iter()
+            .map(|v| (v.name(), v.value()))
+            .collect::<Vec<_>>(),
+        [("LANG", "C"), ("TEAM", "db")]
+    );
+}

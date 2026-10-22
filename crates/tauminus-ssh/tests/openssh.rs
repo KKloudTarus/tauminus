@@ -751,3 +751,141 @@ async fn identities_only_with_no_files_uses_the_default_key_names() {
     let (_, code) = run_shell(&mut stream, "exit 0\n").await;
     assert_eq!(code, Some(0));
 }
+
+/// Starts ssh-agent on a socket in `dir`, holding the key at `key`, which is
+/// then removed so only the agent has it.
+async fn start_agent(
+    dir: &std::path::Path,
+    key: &std::path::Path,
+) -> (std::process::Child, std::path::PathBuf) {
+    let socket = dir.join("agent.sock");
+    let agent = std::process::Command::new("ssh-agent")
+        .args(["-D", "-a"])
+        .arg(&socket)
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .expect("ssh-agent starts");
+    for _ in 0..200 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let added = std::process::Command::new("ssh-add")
+        .arg(key)
+        .env("SSH_AUTH_SOCK", &socket)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap();
+    assert!(added.success());
+    std::fs::remove_file(key).unwrap();
+    (agent, socket)
+}
+
+#[tokio::test]
+async fn the_agent_reaches_the_server_only_when_forwarding_is_on() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &key).await;
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let client = client.with_agent(socket);
+    let options = AuthOptions {
+        methods: vec![AuthMethod::Agent],
+        identity_files: vec![],
+        identities_only: false,
+    };
+    for forward in [true, false] {
+        let mut target = target(sshd.endpoint(), vec![], Route::Direct, options.clone());
+        target.session.forward_agent = forward;
+        let mut stream = client
+            .connector
+            .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+            .await
+            .unwrap();
+        // `ssh-add -l` exits 0 listing keys, and 2 with no agent to ask.
+        let (output, code) = run_shell(&mut stream, "ssh-add -l; exit $?\n").await;
+        if forward {
+            assert_eq!(code, Some(0), "{output}");
+            assert!(output.contains("ED25519"), "{output}");
+        } else {
+            assert_eq!(code, Some(2), "{output}");
+        }
+    }
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+#[tokio::test]
+async fn environment_variables_reach_the_shell_the_server_accepts() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions {
+            extra: vec!["AcceptEnv TAUMINUS_*".into()],
+            ..SshdOptions::default()
+        },
+    );
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    target.session.env = tauminus_domain::env_list(vec![
+        tauminus_domain::EnvVar::parse("TAUMINUS_GREETING", "xin chào").unwrap(),
+        tauminus_domain::EnvVar::parse("REFUSED_BY_SERVER", "x").unwrap(),
+    ])
+    .unwrap();
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    let (output, code) = run_shell(
+        &mut stream,
+        "echo \"[$TAUMINUS_GREETING][$REFUSED_BY_SERVER]\"; exit 0\n",
+    )
+    .await;
+    assert_eq!(code, Some(0));
+    assert!(output.contains("[xin chào][]"), "{output}");
+}
+
+#[tokio::test]
+async fn a_forwarded_agent_request_with_no_local_agent_fails_fast() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    // Forwarding is on, but the agent socket does not exist.
+    let client = client.with_agent(client_missing_agent());
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    target.session.forward_agent = true;
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    // The channel is closed rather than left open, so ssh-add returns.
+    let (output, code) = run_shell(&mut stream, "ssh-add -l; exit $?\n").await;
+    assert_ne!(code, Some(0), "{output}");
+}
+
+fn client_missing_agent() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("tauminus-no-agent-{}.sock", std::process::id()))
+}

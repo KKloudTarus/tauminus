@@ -108,8 +108,8 @@ Vault
 
 Session
 
-- [ ] Agent forwarding per host
-- [ ] Environment variables per host and group
+- [x] Agent forwarding per host
+- [x] Environment variables per host and group
 
 ### Exit criteria
 

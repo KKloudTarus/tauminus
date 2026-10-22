@@ -88,6 +88,12 @@ export type EndpointSpec = {
 	port: number,
 };
 
+/**  One environment variable, as OpenSSH `SetEnv NAME=value`. */
+export type EnvSpec = {
+	name: string,
+	value: string,
+};
+
 /**
  *  Stable error codes the view can branch on. Messages are for logs and may
  *  change.
@@ -175,6 +181,8 @@ export type HostView = {
 	problem: string | null,
 	/**  Commands typed into this host are checked by the prod guard. */
 	guarded: boolean,
+	/**  The agent is forwarded, by the host's setting or a group's. */
+	forwardsAgent: boolean,
 };
 
 export type HostsView = {
@@ -224,6 +232,13 @@ export type SettingsSpec = {
 	identityFiles?: string[] | null,
 	identitiesOnly?: boolean | null,
 	guard?: GuardSpec | null,
+	/**  `ssh -A`; `null` inherits. */
+	forwardAgent?: boolean | null,
+	/**
+	 *  Variables sent before the shell starts. A host's value for a name
+	 *  wins over its groups'.
+	 */
+	env?: EnvSpec[] | null,
 };
 
 export type SkippedHost = {

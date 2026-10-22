@@ -25,6 +25,7 @@ function host(label: string, address: string, tags: string[] = [], user = "me"):
     },
     problem: null,
     guarded: false,
+    forwardsAgent: false,
   };
 }
 

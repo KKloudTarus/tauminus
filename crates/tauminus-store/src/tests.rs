@@ -43,6 +43,12 @@ fn rich() -> Inventory {
     prod.settings.user = Some(UserName::parse("ops").unwrap());
     prod.settings.jumps = Some(vec![Hop::parse("ops@[2001:db8::1]:2222").unwrap()]);
     prod.settings.methods = Some(vec![AuthMethod::Agent, AuthMethod::Password]);
+    prod.settings.forward_agent = Some(false);
+    prod.settings.env = tauminus_domain::env_list(vec![
+        tauminus_domain::EnvVar::parse("LANG", "C.UTF-8").unwrap(),
+        tauminus_domain::EnvVar::parse("TEAM", "ops\tdb").unwrap(),
+    ])
+    .unwrap();
     prod.settings.guard = GuardSettings::new(
         Some(true),
         vec![Pattern::parse("rm -rf /tmp/*").unwrap()],
@@ -126,6 +132,16 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
         (
             "unknown guard field",
             r#"{"version": 1, "groups": [{"id": "g", "name": "g", "settings": {"guard": {"rules": []}}}]}"#
+                .to_owned(),
+        ),
+        (
+            "bad environment name",
+            r#"{"version": 1, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"env": [{"name": "1X", "value": "v"}]}}]}"#
+                .to_owned(),
+        ),
+        (
+            "repeated environment name",
+            r#"{"version": 1, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"env": [{"name": "X", "value": "1"}, {"name": "X", "value": "2"}]}}]}"#
                 .to_owned(),
         ),
         (

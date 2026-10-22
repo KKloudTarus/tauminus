@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tauminus_app::ports::{BoxFuture, HostStore, StoreError};
 
 use super::*;
-use tauminus_domain::MAX_LINE;
+use tauminus_domain::{MAX_ENV, MAX_LINE};
 
 #[derive(Default)]
 struct MemoryStore {
@@ -179,6 +179,17 @@ async fn settings_survive_a_round_trip_through_the_view() {
             allow: vec!["rm -rf /tmp/*".into()],
             deny: vec!["systemctl stop *".into()],
         }),
+        forward_agent: Some(true),
+        env: Some(vec![
+            EnvSpec {
+                name: "LANG".into(),
+                value: "C.UTF-8".into(),
+            },
+            EnvSpec {
+                name: "TEAM".into(),
+                value: "ops".into(),
+            },
+        ]),
     };
     let parsed = settings(spec.clone()).unwrap();
     let back = settings_spec(&parsed);
@@ -290,4 +301,37 @@ fn guard_patterns_are_validated() {
     assert!(settings(spec(vec!["a\u{1b}".into()])).is_err());
     let many = (0..=MAX_PATTERNS).map(|n| n.to_string()).collect();
     assert!(settings(spec(many)).is_err());
+}
+
+#[test]
+fn environment_variables_are_validated() {
+    let spec = |vars: &[(&str, &str)]| SettingsSpec {
+        env: Some(
+            vars.iter()
+                .map(|(name, value)| EnvSpec {
+                    name: (*name).into(),
+                    value: (*value).into(),
+                })
+                .collect(),
+        ),
+        ..SettingsSpec::default()
+    };
+    // Sorted on the way in.
+    let parsed = settings(spec(&[("B", "1"), ("A", "2")])).unwrap();
+    assert_eq!(
+        parsed.env.iter().map(EnvVar::name).collect::<Vec<_>>(),
+        ["A", "B"]
+    );
+    for bad in [
+        spec(&[("1A", "x")]),
+        spec(&[("A", "line\nbreak")]),
+        spec(&[("A", "1"), ("A", "2")]),
+    ] {
+        assert_eq!(settings(bad).unwrap_err().code, ErrorCode::InvalidArgument);
+    }
+    let many: Vec<(String, String)> = (0..=MAX_ENV)
+        .map(|n| (format!("V{n}"), "x".into()))
+        .collect();
+    let many: Vec<(&str, &str)> = many.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    assert!(settings(spec(&many)).is_err());
 }

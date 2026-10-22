@@ -27,7 +27,7 @@ const CONFIG = [
 
 export function fakeHosts(): HostsClient {
   let groups: GroupView[] = [];
-  let hosts: Omit<HostView, "target" | "problem" | "guarded">[] = [];
+  let hosts: Omit<HostView, "target" | "problem" | "guarded" | "forwardsAgent">[] = [];
   let next = 1;
   const id = () => `id${next++}`;
 
@@ -59,6 +59,17 @@ export function fakeHosts(): HostsClient {
     return enabled ?? host.tags.includes("prod");
   };
 
+  const forwardsAgent = (host: (typeof hosts)[number]) => {
+    let forward = host.settings.forwardAgent;
+    let group = groups.find((g) => g.id === host.group);
+    while (forward == null && group) {
+      forward = group.settings.forwardAgent;
+      const parent = group.parent;
+      group = groups.find((g) => g.id === parent);
+    }
+    return forward ?? false;
+  };
+
   const view = (): HostsView => ({
     groups: structuredClone(groups),
     hosts: hosts.map((h) => ({
@@ -77,6 +88,7 @@ export function fakeHosts(): HostsClient {
       },
       problem: null,
       guarded: guarded(h),
+      forwardsAgent: forwardsAgent(h),
     })),
   });
 

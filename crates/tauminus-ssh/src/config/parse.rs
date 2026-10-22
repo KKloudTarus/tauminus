@@ -260,6 +260,10 @@ pub(crate) fn resolve(items: &[Item], alias: &str) -> ConfigHost {
         },
         hostname: None,
         identities_only: None,
+        forward_agent_seen: false,
+        set_env_seen: false,
+        in_condition: false,
+        unsure: false,
     };
     let mut active = true;
     state.walk(items, &mut active, false);
@@ -267,8 +271,15 @@ pub(crate) fn resolve(items: &[Item], alias: &str) -> ConfigHost {
         mut host,
         hostname,
         identities_only,
+        unsure,
         ..
     } = state;
+    if unsure {
+        host.problem = Some(
+            "a Match block sets ForwardAgent or SetEnv; import with ssh installed, which evaluates it"
+                .into(),
+        );
+    }
     // `Host` lines match the name as given, but ssh then lowercases it: the
     // default HostName and `%h` are the lowercase form.
     let name = alias.to_ascii_lowercase();
@@ -288,11 +299,21 @@ pub(crate) fn resolve(items: &[Item], alias: &str) -> ConfigHost {
     host
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag tracks one keyword's first-wins state as readconf.c does"
+)]
 struct Resolving {
     name: String,
     host: ConfigHost,
     hostname: Option<String>,
     identities_only: Option<bool>,
+    forward_agent_seen: bool,
+    set_env_seen: bool,
+    /// Inside a `Match` block other than `Match all`.
+    in_condition: bool,
+    /// Such a block sets agent forwarding or the environment.
+    unsure: bool,
 }
 
 impl Resolving {
@@ -308,13 +329,21 @@ impl Resolving {
                     *active = outer;
                 }
                 Item::Line(line) => match line.keyword.as_str() {
-                    "host" => *active = !never && host_matches(&line.args, &self.name),
+                    "host" => {
+                        self.in_condition = false;
+                        *active = !never && host_matches(&line.args, &self.name);
+                    }
                     "match" => {
-                        *active = !never
-                            && line.args.len() == 1
-                            && line.args[0].eq_ignore_ascii_case("all");
+                        let all = line.args.len() == 1 && line.args[0].eq_ignore_ascii_case("all");
+                        self.in_condition = !all;
+                        *active = !never && all;
                     }
                     _ if *active => self.apply(line),
+                    // A `Match` this resolver cannot evaluate may turn
+                    // forwarding on or off; guessing either way is unsafe.
+                    "forwardagent" | "setenv" if self.in_condition && !never => {
+                        self.unsure = true;
+                    }
                     _ => {}
                 },
             }
@@ -353,6 +382,20 @@ impl Resolving {
             }
             "identitiesonly" if self.identities_only.is_none() => {
                 self.identities_only = first.map(|v| v.eq_ignore_ascii_case("yes"));
+            }
+            "forwardagent" if !self.forward_agent_seen => {
+                self.forward_agent_seen = true;
+                host.forward_agent = first.filter(|v| turns_on(v)).map(|_| true);
+            }
+            // The first `SetEnv` line wins whole, as in readconf.c.
+            "setenv" if !self.set_env_seen => {
+                self.set_env_seen = true;
+                // A name given twice keeps its first value, as ssh does.
+                for (name, value) in line.args.iter().filter_map(|arg| arg.split_once('=')) {
+                    if !host.set_env.iter().any(|(n, _)| n == name) {
+                        host.set_env.push((name.to_owned(), value.to_owned()));
+                    }
+                }
             }
             _ => {}
         }
@@ -403,4 +446,11 @@ fn expand_hostname(template: &str, alias: &str) -> String {
         }
     }
     out
+}
+
+/// `yes` or `true`, as OpenSSH reads a flag. A socket path names a
+/// restricted agent, and forwarding the default one instead would expose
+/// every key, so it does not turn forwarding on here.
+fn turns_on(value: &str) -> bool {
+    value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true")
 }
