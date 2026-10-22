@@ -43,7 +43,8 @@ guards it, so SQLCipher runs no KDF of its own.
 
 A blind index (keyed hashes of tokens in a plain database) was the
 alternative. It leaks how often each token occurs and cannot do prefix
-search; SQLCipher leaks file size only.
+search. SQLCipher leaks the file's size; the pending file leaks how many
+commands were recorded while locked and how long each was.
 
 Measured on a million lines (100,000 commands, ten output lines each),
 committed ten commands at a time as recording does, release build: every
@@ -85,8 +86,29 @@ is now, its idle time included, so nothing reaches the database after a
 lock, or after the vault has gone unused past its idle time, even before
 the history closes. A database that will not open keeps commands sealed.
 
+A password change replaces the history's keys: the vault keeps every
+earlier generation the history has not moved past, newest first, up to
+eight. The next time the history is used, a database still under an old
+key is re-encrypted in place, pending entries open with any of the pairs,
+and only then does the vault drop the old keys. A crash at any step leaves
+the next use to finish it. The re-encryption runs under a rollback
+journal, which refuses to start while another connection has the file
+open; SQLCipher rewrites every page in one transaction, 12 to 18 ms a
+MiB (some 20 s for a 1 GiB history), and needs as much free disk again.
+Records wait for it, and are sealed if it fails; a failure is not retried
+until the next unlock, unless the file was only busy. The vault then drops
+only the generations that open used, so a password change made meanwhile
+keeps its own. A window whose vault is older than the file's (another
+window changed the password) moves nothing and sets nothing aside: it
+says so, and seals what it records until it is unlocked again. SQLCipher's
+settings are pinned to version 4, so a later SQLCipher reads the file
+rather than setting it aside. A pending file with a frame length no frame
+can have is set aside whole, as `history.pending.<ms>.damaged`, rather
+than cut.
+
 Same-user writers are out of scope, as in ADR 0007: whoever can replace
-the public key can also set a `ProxyCommand`.
+the public key can also set a `ProxyCommand`. Such a writer can also seal
+commands of its own to the public key, which the next unlock imports.
 
 ### What is recorded
 
@@ -119,14 +141,32 @@ screen (the remote echo is off), when the line starts with a space (bash's
 `ignorespace`), in a full-screen program, or at a REPL's prompt. A secret
 typed inside a running command, such as at sudo's prompt, is cut from that
 command's output, which keeps the prompt only. Secrets of known shapes
-are hidden in commands and output whatever prompt they came after: AWS,
-GitHub, GitLab, Slack, OpenAI, Stripe, Google, npm, Vault, and Docker
-tokens; bearer tokens and JWTs; private key blocks; the value of
-`NAME=value` and `--name value` when the name holds PASS, SECRET, TOKEN,
-KEY, or CREDENTIAL; `-u user:password`; a URL's password; and a MySQL
-client's `-p<password>`. A saved host or group can
-turn recording off; the nearest level wins, and the root default is on.
-The backend checks the host's setting, not the view. A session opened
+are hidden in commands and output whatever prompt they came after:
+
+- AWS, GitHub, GitLab, Slack, OpenAI, Stripe, Google, npm, Vault, and
+  Docker tokens; bearer, token, and basic credentials; JWTs;
+- PEM private key blocks and PuTTY keys' private lines;
+- the value after a name holding PASS, SECRET, TOKEN, KEY, or CREDENTIAL,
+  as `NAME=value`, `name = value`, `name: value`, `--name value`,
+  `--name=value`, a form's `name=value&...`, a JSON field, or an XML
+  element;
+- `-u user:password`, `-U user%password` (smbclient), and a URL's
+  password;
+- the password flags of mysql and its kin and sshpass (`-p`), docker,
+  podman, and az after `login` (`-p`), redis-cli (`-a`), ssh-keygen
+  (`-P`, `-N`), and openssl (`-k`, `pass:`);
+- `.netrc` lines' `password`.
+
+Names are read by their parts, split at `_`, `-`, `.`, and camelCase. A
+part `KEY` is a secret's at the end of a variable's or flag's name
+(`APP_KEY`), and in a JSON or XML field only with a word saying whose
+(`api_key`, `SecretAccessKey`), since `{"Key": "Name"}` is a label.
+
+The tests list each shape. A secret in any other shape, such as a
+password typed at a shell prompt by mistake, is recorded as it shows. A
+saved host or group can turn recording off; the nearest level wins, and
+the root default is on. The backend checks the setting of the host the
+view names for the session. A session opened
 from another one (`ssh prod` typed in a local tab) records under the tab
 it runs in.
 
