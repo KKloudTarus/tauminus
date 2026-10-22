@@ -54,8 +54,12 @@ export TAUMINUS_BENCH_OUT="$out/report.json"
 now_ms > "$out/launched_ms"
 "$app" > "$out/app.log" 2>&1 &
 app_pid=$!
+if [ "$(uname)" = Linux ]; then
+  # No window manager on Xvfb: give the window focus as a user's click would.
+  (sleep 8 && xdotool search --sync --onlyvisible --name Tauminus windowactivate > /dev/null 2>&1 || true) &
+fi
 
-timeout=$((SECONDS + 1200))
+timeout=$((SECONDS + 2700))
 while [ ! -s "$out/report.json" ] && [ $SECONDS -lt $timeout ] && kill -0 "$app_pid" 2> /dev/null; do
   pids=$(tree "$app_pid")
   if [ "$(uname)" = Darwin ]; then
@@ -69,8 +73,18 @@ while [ ! -s "$out/report.json" ] && [ $SECONDS -lt $timeout ] && kill -0 "$app_
   sleep 1
 done
 
+if [ ! -s "$out/report.json" ]; then
+  # What the window showed when the run gave up.
+  if [ "$(uname)" = Darwin ]; then
+    screencapture -x "$out/screen.png" || true
+  else
+    import -window root "$out/screen.png" || true
+  fi
+fi
 kill "$app_pid" 2> /dev/null || true
 wait "$app_pid" 2> /dev/null || true
+echo "== notes from the run"
+cat "$out/report.json.log" 2> /dev/null || echo "(none)"
 if [ ! -s "$out/report.json" ]; then
   echo "the benchmark wrote no report; app log:" >&2
   tail -50 "$out/app.log" >&2
