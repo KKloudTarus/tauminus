@@ -4,6 +4,9 @@
 import {
   type GroupInput,
   type GroupView,
+  type GuardFinding,
+  type GuardSpec,
+  type GuardVerdict,
   type HostInput,
   type HostView,
   type HostsView,
@@ -13,7 +16,18 @@ import {
 } from "./bindings.ts";
 import { SessionCommandError } from "./sessions.ts";
 
-export type { GroupInput, GroupView, HostInput, HostView, HostsView, ImportResult, SettingsSpec };
+export type {
+  GroupInput,
+  GroupView,
+  GuardFinding,
+  GuardSpec,
+  GuardVerdict,
+  HostInput,
+  HostView,
+  HostsView,
+  ImportResult,
+  SettingsSpec,
+};
 
 /** Saved hosts. Every change returns the whole list. */
 export interface HostsClient {
@@ -25,6 +39,11 @@ export interface HostsClient {
   /** How many hosts `~/.ssh/config` names. */
   configAliases(): Promise<number>;
   importConfig(): Promise<ImportResult>;
+  /**
+   * Checks the readings of a command line about to run on a saved host
+   * against its prod guard. `incomplete` comes from the first.
+   */
+  checkCommand(hostId: string, lines: string[]): Promise<GuardVerdict>;
 }
 
 type Result<T> = Promise<
@@ -46,4 +65,5 @@ export const tauriHosts: HostsClient = {
   deleteGroup: (id) => unwrap(commands.groupDelete(id)),
   configAliases: () => unwrap(commands.sshConfigAliases()),
   importConfig: () => unwrap(commands.hostsImportSshConfig()),
+  checkCommand: (hostId, lines) => unwrap(commands.guardCheck(hostId, lines)),
 };

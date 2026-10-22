@@ -5,5 +5,7 @@
 extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/", "crates/tauminus-ssh/tests/fixtures/"]
 
 [default.extend-words]
+# mke2fs, the ext2/3/4 formatter
+mke = "mke"
 # Proper names and protocol terms
 tauminus = "tauminus"

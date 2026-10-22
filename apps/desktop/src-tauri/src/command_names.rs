@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "ssh_config_aliases",
     "hosts_import_ssh_config",
     "host_connect",
+    "guard_check",
     "open_link",
     "clipboard_read_text",
     "clipboard_write_text",

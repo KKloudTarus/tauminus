@@ -3,7 +3,7 @@
 
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import type { GroupView, HostView, SettingsSpec } from "@/ipc/index.ts";
+import type { GroupView, GuardSpec, HostView, SettingsSpec } from "@/ipc/index.ts";
 
 import { type HostsStore, messageOf } from "./hosts-store.ts";
 
@@ -45,6 +45,45 @@ export function withEdits(
   if (fields.identityFiles !== undefined)
     settings.identityFiles = list(fields.identityFiles) ?? null;
   return settings;
+}
+
+export type GuardChoice = "inherit" | "on" | "off";
+
+export interface GuardFieldsState {
+  enabled: GuardChoice;
+  /** One pattern per line. */
+  allow: string;
+  deny: string;
+}
+
+export function guardFields(guard: GuardSpec | null | undefined): GuardFieldsState {
+  return {
+    enabled: guard?.enabled == null ? "inherit" : guard.enabled ? "on" : "off",
+    allow: (guard?.allow ?? []).join("\n"),
+    deny: (guard?.deny ?? []).join("\n"),
+  };
+}
+
+function lines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function guardChoice(value: string): GuardChoice {
+  return value === "on" || value === "off" ? value : "inherit";
+}
+
+/** The guard fields over `base`; nothing set means no guard settings at all. */
+export function withGuard(base: SettingsSpec, fields: GuardFieldsState): SettingsSpec {
+  const guard: GuardSpec = {
+    enabled: fields.enabled === "inherit" ? null : fields.enabled === "on",
+    allow: lines(fields.allow),
+    deny: lines(fields.deny),
+  };
+  const empty = guard.enabled === null && guard.allow?.length === 0 && guard.deny?.length === 0;
+  return { ...base, guard: empty ? null : guard };
 }
 
 function describeRoute(route: NonNullable<SettingsSpec["route"]>): string {
@@ -147,6 +186,7 @@ function HostForm({
   const [identityFiles, setIdentityFiles] = useState(
     host?.settings.identityFiles?.join(", ") ?? "",
   );
+  const [guard, setGuard] = useState(() => guardFields(host?.settings.guard));
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -164,13 +204,16 @@ function HostForm({
         address,
         group: group || null,
         tags: list(tags) ?? [],
-        settings: withEdits(host?.settings ?? {}, {
-          user,
-          port: portText,
-          jumps,
-          direct,
-          identityFiles,
-        }),
+        settings: withGuard(
+          withEdits(host?.settings ?? {}, {
+            user,
+            port: portText,
+            jumps,
+            direct,
+            identityFiles,
+          }),
+          guard,
+        ),
       });
       onDone();
     } catch (failure) {
@@ -275,6 +318,7 @@ function HostForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
     </Form>
   );
 }
@@ -296,6 +340,7 @@ function GroupForm({
   const [user, setUser] = useState(group?.settings.user ?? "");
   const [portText, setPortText] = useState(group?.settings.port?.toString() ?? "");
   const [jumps, setJumps] = useState(group?.settings.jumps?.join(", ") ?? "");
+  const [guard, setGuard] = useState(() => guardFields(group?.settings.guard));
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const excluded = group ? descendants(view.groups, group.id) : new Set<string>();
@@ -312,7 +357,10 @@ function GroupForm({
         id: group?.id ?? null,
         name,
         parent: parent || null,
-        settings: withEdits(group?.settings ?? {}, { user, port: portText, jumps }),
+        settings: withGuard(
+          withEdits(group?.settings ?? {}, { user, port: portText, jumps }),
+          guard,
+        ),
       });
       onDone();
     } catch (failure) {
@@ -378,7 +426,69 @@ function GroupForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <GuardFields value={guard} onChange={setGuard} inherited="Inherit from the parent group" />
     </Form>
+  );
+}
+
+/**
+ * The prod guard's settings. Patterns are command globs, one per line, matched
+ * against the command as it would run, after quotes and `sudo` are removed.
+ */
+function GuardFields({
+  value,
+  onChange,
+  inherited,
+}: {
+  value: GuardFieldsState;
+  onChange: (next: GuardFieldsState) => void;
+  inherited: string;
+}) {
+  const set = (patch: Partial<GuardFieldsState>) => onChange({ ...value, ...patch });
+  return (
+    <details
+      className="mb-3 rounded border border-current/15 px-3 py-2"
+      open={value.enabled === "on"}
+    >
+      <summary className="cursor-pointer select-none">Prod guard</summary>
+      <div className="mt-2">
+        <Field label="Check commands before they run">
+          <select
+            value={value.enabled}
+            onChange={(e) => set({ enabled: guardChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">{inherited}</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </Field>
+        <Field label="Always ask before (one pattern per line, * matches anything)">
+          <textarea
+            value={value.deny}
+            onChange={(e) => set({ deny: e.target.value })}
+            rows={2}
+            placeholder="systemctl stop *"
+            spellCheck={false}
+            className={`${FIELD} font-mono`}
+          />
+        </Field>
+        <Field label="Never ask before">
+          <textarea
+            value={value.allow}
+            onChange={(e) => set({ allow: e.target.value })}
+            rows={2}
+            placeholder="rm -rf /tmp/build/*"
+            spellCheck={false}
+            className={`${FIELD} font-mono`}
+          />
+        </Field>
+        <p className="text-xs opacity-60">
+          Patterns from the host and all its groups apply. A deny pattern always asks, even when an
+          allow pattern matches.
+        </p>
+      </div>
+    </details>
   );
 }
 

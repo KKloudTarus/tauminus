@@ -6,7 +6,7 @@ import { render } from "vitest-browser-react";
 
 import { fakeHosts } from "@/ipc/fake-hosts.ts";
 
-import { EditorDialog, withEdits } from "./HostEditor.tsx";
+import { EditorDialog, guardFields, withEdits, withGuard } from "./HostEditor.tsx";
 import { HostsStore } from "./hosts-store.ts";
 
 describe("withEdits", () => {
@@ -30,7 +30,47 @@ describe("withEdits", () => {
   });
 });
 
+describe("withGuard", () => {
+  it("round-trips the guard settings and drops an empty one", () => {
+    const guard = { enabled: false, allow: ["ls *"], deny: ["reboot", "rm -rf /x, y"] };
+    expect(withGuard({ user: "u" }, guardFields(guard))).toEqual({ user: "u", guard });
+    expect(withGuard({ guard }, guardFields(null))).toEqual({ guard: null });
+    expect(withGuard({}, { enabled: "on", allow: "  \n a \n\n", deny: "" }).guard).toEqual({
+      enabled: true,
+      allow: ["a"],
+      deny: [],
+    });
+  });
+});
+
 describe("EditorDialog", () => {
+  it("turns the prod guard on with a deny pattern", async () => {
+    const client = fakeHosts();
+    await client.saveHost({ label: "db", address: "db.internal" });
+    const store = new HostsStore(client);
+    await store.load();
+    const host = store.getSnapshot().view.hosts[0]!;
+    expect(host.guarded).toBe(false);
+    let closed = false;
+    const screen = await render(
+      <EditorDialog
+        store={store}
+        editing={{ kind: "host", host }}
+        onClose={() => (closed = true)}
+      />,
+    );
+    await screen.getByText("Prod guard").click();
+    await screen
+      .getByRole("combobox", { name: "Check commands before they run" })
+      .selectOptions("on");
+    await screen.getByLabelText(/Always ask before/).fill("systemctl stop *");
+    await screen.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => closed).toBe(true);
+    const saved = store.getSnapshot().view.hosts[0]!;
+    expect(saved.guarded).toBe(true);
+    expect(saved.settings.guard).toEqual({ enabled: true, allow: [], deny: ["systemctl stop *"] });
+  });
+
   it("saves an edit without dropping the route or methods", async () => {
     const client = fakeHosts();
     await client.saveHost({

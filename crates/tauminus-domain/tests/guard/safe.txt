@@ -1,0 +1,198 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Lines the guard should let through. Each one it flags counts as a false
+# positive; the test prints the rate and fails above the recorded bound.
+ls -la
+ls -la /
+cd /var/log
+pwd
+whoami
+uptime
+df -h
+du -sh /var/log/*
+free -m
+top -b -n 1
+ps aux | grep nginx
+ps -ef | grep -v grep | grep java
+tail -f /var/log/syslog
+tail -n 100 /var/log/nginx/error.log
+less /var/log/app.log
+cat /etc/os-release
+grep -r "timeout" /etc/nginx
+grep -rn TODO src/
+journalctl -u nginx --since "1 hour ago"
+journalctl -fu app
+systemctl status nginx
+systemctl restart nginx
+sudo systemctl reload nginx
+systemctl list-units --failed
+systemctl enable --now app
+service nginx restart
+docker ps
+docker logs -f web
+docker compose up -d
+docker compose pull && docker compose up -d
+docker system df
+docker stats --no-stream
+kubectl get pods -A
+kubectl get pods -n prod
+kubectl describe pod web-1
+kubectl logs -f deploy/web
+kubectl rollout restart deploy/web
+kubectl rollout status deploy/web
+kubectl apply -f deploy.yaml
+kubectl scale deploy web --replicas=3
+kubectl top nodes
+kubectl port-forward svc/web 8080:80
+helm list -A
+helm upgrade --install web ./chart
+terraform init
+terraform plan
+terraform plan -out=tfplan
+terraform apply tfplan
+terraform fmt -recursive
+terraform state list
+git status
+git pull --rebase
+git log --oneline -20
+git diff HEAD~1
+git rm -r --cached dist
+git checkout -b fix
+git stash
+rm build.log
+rm -f /tmp/app.pid
+rm -i notes.txt
+rm -- -rf
+rm *.tmp
+rmdir empty
+mkdir -p /srv/app/releases
+cp -r config /tmp/config.bak
+cp app.conf /etc/app/app.conf
+mv old.log old.log.1
+ln -s /srv/app/current /var/www/app
+tar -czf backup.tar.gz /srv/app
+tar -xzf release.tar.gz -C /srv/app
+rsync -avz ./dist/ web:/srv/app/
+scp app.tar.gz web:/tmp/
+chmod +x deploy.sh
+chmod 600 ~/.ssh/id_ed25519
+chmod -R 755 /var/www/app
+chown -R www-data:www-data /var/www/app
+chown app:app /srv/app/config.yml
+find /var/log -name '*.gz' -mtime +30
+find . -type f -name '*.py' | wc -l
+find . -name node_modules -prune
+dd if=/dev/zero of=/tmp/test bs=1M count=100
+dd if=/dev/sda of=/backup/sda.img bs=4M
+cat /dev/null > /var/log/app.log
+echo hello > /tmp/hello
+echo test 2>/dev/null
+command -v nginx
+which python3
+type ls
+echo 'rm -rf /'
+echo "DROP TABLE is dangerous"
+printf '%s\n' "kubectl delete is dangerous"
+man rm
+man shutdown
+SELECT * FROM users LIMIT 10;
+select count(*) from orders where created_at > now() - interval '1 day';
+UPDATE users SET name = 'x' WHERE id = 1;
+INSERT INTO logs (msg) VALUES ('hi');
+DELETE FROM sessions WHERE expires_at < now();
+delete from users where id = 42;
+CREATE TABLE t (id int);
+ALTER TABLE users ADD COLUMN age int;
+EXPLAIN ANALYZE SELECT 1;
+\dt
+\l
+psql -U postgres -c 'SELECT 1'
+mysql -e 'SHOW DATABASES'
+redis-cli GET session:1
+redis-cli INFO memory
+truncate -s 0 /var/log/app.log
+truncate --size 0 app.log
+sudo -u postgres psql
+sudo -i
+sudo su -
+ssh db1
+ssh -L 5432:localhost:5432 db1
+ssh db1 uptime
+ssh db1 'df -h'
+bash
+bash script.sh
+sh ./install.sh --prefix /opt
+bash -n script.sh
+zsh -l
+python3 manage.py migrate
+python3 -c 'print(1 + 1)'
+node -e 'console.log(process.version)'
+perl -e 'print "hi\n"'
+awk '{print $1}' access.log
+awk -F: '{print $1}' /etc/passwd
+sed -i 's/a/b/' config.yml
+vim /etc/nginx/nginx.conf
+nano config.yml
+curl -s https://example.com/health
+curl -fsSL https://example.com/install.sh -o install.sh
+wget https://example.com/release.tar.gz
+apt update && apt upgrade -y
+apt-get install -y nginx
+yum install -y htop
+dnf upgrade
+pip install -r requirements.txt
+npm ci
+npm run build
+cargo build --release
+make -j8
+export PATH=$PATH:/opt/bin
+FOO=bar ./run.sh
+source ~/.bashrc
+. ./env.sh
+history | tail
+crontab -l
+openssl x509 -in cert.pem -noout -dates
+ping -c 3 8.8.8.8
+dig example.com
+nslookup example.com
+netstat -tulpn
+ss -tlnp
+ip addr
+iptables -L -n
+ufw status
+htop
+watch -n 1 df -h
+date
+echo $HOME
+echo "$PATH"
+for f in *.log; do gzip "$f"; done
+while true; do curl -s localhost/health; sleep 1; done
+if [ -f /etc/app.conf ]; then cat /etc/app.conf; fi
+nohup ./server &
+time make
+timeout 5 curl -s localhost
+xargs -n1 echo < list
+echo harmless-$((6*7))
+echo "${HOME//\//-}"
+i=$((i + 1))
+git commit -m "remove the old build step"
+journalctl --since "1 hour ago" -u nginx
+grep -rn "TODO: fix" src
+tmux new -s work
+tmux attach -t work
+trap - EXIT
+printf '%s\n' "rm -rf would be bad"
+grep -rn "rm -rf" scripts/
+git commit -m "drop the rm -rf / workaround"
+git stash push -m "wip kubectl delete fix"
+awk '$3 > 100' data.txt
+awk -F: '$3 >= 1000' /etc/passwd
+PROMPT_COMMAND="history -a; $PROMPT_COMMAND"
+declare -A m=([k]=v)
+ssh -é host
+kubectl -ñ get pods
+rm -f -- "$tmpfile"
+rm -f "./$f"
+trap 'rm -f -- "$tmpfile"' EXIT
+kubectl delete pod api-123 --dry-run=client
+python3 -c 'import shutil; print(shutil.which("ls"))'

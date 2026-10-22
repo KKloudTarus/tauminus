@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use crate::guard::{Pattern, PatternError};
 
 fn gid(id: &str) -> GroupId {
     GroupId::parse(id).unwrap()
@@ -438,4 +439,81 @@ fn a_cycle_away_from_the_first_group_is_named_as_a_cycle() {
         vec![],
     );
     assert!(matches!(result, Err(HostsError::Cycle(_))), "{result:?}");
+}
+
+fn guard(enabled: Option<bool>, allow: &[&str], deny: &[&str]) -> GuardSettings {
+    let patterns = |list: &[&str]| list.iter().map(|p| Pattern::parse(p).unwrap()).collect();
+    GuardSettings::new(enabled, patterns(allow), patterns(deny)).unwrap()
+}
+
+#[test]
+fn the_guard_is_on_for_prod_hosts_unless_a_level_turns_it_off() {
+    let mut inventory = Inventory::new(
+        vec![group("root", None), group("team", Some("root"))],
+        vec![host("db", Some("team")), host("web", None)],
+    )
+    .unwrap();
+    assert!(!inventory.guard_policy(&hid("db")).unwrap().active);
+    let mut db = inventory.host(&hid("db")).unwrap().clone();
+    db.set_tags(vec![Tag::parse("prod").unwrap()]).unwrap();
+    inventory.put_host(db.clone()).unwrap();
+    assert!(inventory.guard_policy(&hid("db")).unwrap().active);
+    // A group can turn it off, and the host can turn it back on.
+    let mut team = inventory.group(&gid("team")).unwrap().clone();
+    team.settings.guard = guard(Some(false), &[], &[]);
+    inventory.put_group(team).unwrap();
+    assert!(!inventory.guard_policy(&hid("db")).unwrap().active);
+    db.settings.guard = guard(Some(true), &[], &[]);
+    inventory.put_host(db).unwrap();
+    assert!(inventory.guard_policy(&hid("db")).unwrap().active);
+    // An untagged host is guarded when a group says so.
+    let mut web = inventory.host(&hid("web")).unwrap().clone();
+    web.group = Some(gid("root"));
+    inventory.put_host(web).unwrap();
+    let mut root = inventory.group(&gid("root")).unwrap().clone();
+    root.settings.guard = guard(Some(true), &[], &[]);
+    inventory.put_group(root).unwrap();
+    assert!(inventory.guard_policy(&hid("web")).unwrap().active);
+    assert!(inventory.guard_policy(&hid("nope")).is_err());
+}
+
+#[test]
+fn guard_patterns_add_up_through_the_groups() {
+    let mut root = group("root", None);
+    root.settings.guard = guard(None, &["ls *"], &["reboot*"]);
+    let mut team = group("team", Some("root"));
+    team.settings.guard = guard(None, &["rm -rf /tmp/*"], &[]);
+    let mut db = host("db", Some("team"));
+    db.settings.guard = guard(Some(true), &[], &["systemctl stop *"]);
+    let mut inventory = Inventory::new(vec![root, team], vec![db]).unwrap();
+    let policy = inventory.guard_policy(&hid("db")).unwrap();
+    let strings = |list: &[Pattern]| {
+        list.iter()
+            .map(|p| p.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(strings(&policy.allow), ["ls *", "rm -rf /tmp/*"]);
+    assert_eq!(strings(&policy.deny), ["reboot*", "systemctl stop *"]);
+    // Removing a group keeps what its members inherited from it.
+    inventory.remove_group(&gid("team")).unwrap();
+    assert_eq!(inventory.guard_policy(&hid("db")).unwrap(), policy);
+}
+
+#[test]
+fn removing_a_group_refuses_to_merge_past_the_pattern_limit() {
+    let many = |prefix: &str| -> Vec<String> { (0..60).map(|n| format!("{prefix} {n}")).collect() };
+    let (group_patterns, host_patterns) = (many("ls"), many("cat"));
+    let group_strs: Vec<&str> = group_patterns.iter().map(String::as_str).collect();
+    let host_strs: Vec<&str> = host_patterns.iter().map(String::as_str).collect();
+    let mut team = group("team", None);
+    team.settings.guard = guard(None, &group_strs, &[]);
+    let mut db = host("db", Some("team"));
+    db.settings.guard = guard(None, &host_strs, &[]);
+    let mut inventory = Inventory::new(vec![team], vec![db]).unwrap();
+    let before = inventory.clone();
+    assert_eq!(
+        inventory.remove_group(&gid("team")),
+        Err(HostsError::Guard(PatternError::TooMany))
+    );
+    assert_eq!(inventory, before, "nothing changed");
 }

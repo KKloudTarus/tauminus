@@ -21,6 +21,7 @@
   --terminal-cursor: #1f5fbf;
   --terminal-selection: #c6d4ea;
   --accent: #1f5fbf;
+  --prod: #c62828;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +33,7 @@
     --terminal-cursor: #8cc4ff;
     --terminal-selection: #34405a;
     --accent: #8cc4ff;
+    --prod: #d32f2f;
   }
 }
 
@@ -43,6 +45,7 @@
   --terminal-cursor: #8cc4ff;
   --terminal-selection: #34405a;
   --accent: #8cc4ff;
+  --prod: #d32f2f;
 }
 
 .light {
@@ -53,6 +56,7 @@
   --terminal-cursor: #1f5fbf;
   --terminal-selection: #c6d4ea;
   --accent: #1f5fbf;
+  --prod: #c62828;
 }
 
 @theme inline {

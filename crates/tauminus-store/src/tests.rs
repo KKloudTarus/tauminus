@@ -4,7 +4,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tauminus_domain::{
-    AuthMethod, Group, GroupId, Hop, Host, HostId, HostName, Label, Route, Settings, Tag, UserName,
+    AuthMethod, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Label, Pattern, Route,
+    Settings, Tag, UserName,
 };
 
 use super::*;
@@ -42,6 +43,12 @@ fn rich() -> Inventory {
     prod.settings.user = Some(UserName::parse("ops").unwrap());
     prod.settings.jumps = Some(vec![Hop::parse("ops@[2001:db8::1]:2222").unwrap()]);
     prod.settings.methods = Some(vec![AuthMethod::Agent, AuthMethod::Password]);
+    prod.settings.guard = GuardSettings::new(
+        Some(true),
+        vec![Pattern::parse("rm -rf /tmp/*").unwrap()],
+        vec![Pattern::parse("systemctl stop *").unwrap()],
+    )
+    .unwrap();
     let eu = Group {
         id: GroupId::parse("eu").unwrap(),
         name: Label::parse("EU 🇪🇺").unwrap(),
@@ -110,6 +117,16 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
         (
             "bad address",
             r#"{"version": 1, "hosts": [{"id": "a", "label": "a", "address": "a;b"}]}"#.to_owned(),
+        ),
+        (
+            "bad guard pattern",
+            r#"{"version": 1, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"guard": {"deny": [" "]}}}]}"#
+                .to_owned(),
+        ),
+        (
+            "unknown guard field",
+            r#"{"version": 1, "groups": [{"id": "g", "name": "g", "settings": {"guard": {"rules": []}}}]}"#
+                .to_owned(),
         ),
         (
             "dangling group",

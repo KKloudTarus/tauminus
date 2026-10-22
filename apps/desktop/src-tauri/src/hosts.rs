@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::{HostBook, HostBookError};
 use tauminus_domain::{
-    Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Route, Settings,
-    Tag, UserName,
+    Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError, Inventory, Label,
+    MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -61,6 +61,43 @@ pub(crate) struct SettingsSpec {
     pub(crate) identity_files: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) identities_only: Option<bool>,
+    #[serde(default)]
+    pub(crate) guard: Option<GuardSpec>,
+}
+
+/// The prod guard's settings on a host or group.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GuardSpec {
+    /// `null` inherits; with no level setting it, hosts tagged `prod` are
+    /// guarded.
+    #[serde(default)]
+    pub(crate) enabled: Option<bool>,
+    /// Command globs the built-in rules never ask about.
+    #[serde(default)]
+    pub(crate) allow: Vec<String>,
+    /// Command globs that always ask.
+    #[serde(default)]
+    pub(crate) deny: Vec<String>,
+}
+
+/// Why a command line needs confirmation, empty when it may run.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GuardVerdict {
+    pub(crate) findings: Vec<GuardFinding>,
+    /// The shell waits for another line before running this one.
+    pub(crate) incomplete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct GuardFinding {
+    /// A stable rule name such as `recursive-delete`.
+    pub(crate) rule: String,
+    pub(crate) reason: String,
+    /// The command as the shell would run it, at most 200 characters.
+    pub(crate) command: String,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -85,6 +122,8 @@ pub(crate) struct HostView {
     /// when the settings cannot connect; `problem` then says why.
     pub(crate) target: Option<SshTargetSpec>,
     pub(crate) problem: Option<String>,
+    /// Commands typed into this host are checked by the prod guard.
+    pub(crate) guarded: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -180,6 +219,7 @@ fn view(inventory: &Inventory) -> HostsView {
                     settings: settings_spec(&h.settings),
                     target,
                     problem,
+                    guarded: inventory.guarded(&h.id).unwrap_or(false),
                 }
             })
             .collect(),
@@ -206,7 +246,27 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
                 .collect()
         }),
         identities_only: s.identities_only,
+        guard: (!s.guard.is_empty()).then(|| GuardSpec {
+            enabled: s.guard.enabled,
+            allow: s.guard.allow().iter().map(ToString::to_string).collect(),
+            deny: s.guard.deny().iter().map(ToString::to_string).collect(),
+        }),
     }
+}
+
+fn guard_settings(spec: Option<GuardSpec>) -> Result<GuardSettings, CommandError> {
+    let Some(spec) = spec else {
+        return Ok(GuardSettings::default());
+    };
+    let patterns = |list: Vec<String>| {
+        if list.len() > MAX_PATTERNS {
+            return Err(invalid(format!("at most {MAX_PATTERNS} patterns")));
+        }
+        list.iter()
+            .map(|p| Pattern::parse(p).map_err(invalid))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    GuardSettings::new(spec.enabled, patterns(spec.allow)?, patterns(spec.deny)?).map_err(invalid)
 }
 
 /// Most entries in one list field, against oversized input.
@@ -295,6 +355,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
             .identity_files
             .map(|files| files.into_iter().map(PathBuf::from).collect()),
         identities_only: spec.identities_only,
+        guard: guard_settings(spec.guard)?,
     })
 }
 
@@ -432,6 +493,59 @@ pub(crate) async fn group_delete(
         .edit(|inventory| inventory.remove_group(&id).map(drop))
         .await?;
     Ok(view(&inventory))
+}
+
+/// Checks the readings of a command line about to run on a saved host
+/// against its prod guard. Lines are never logged: they may hold a secret
+/// typed on the command line.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn guard_check(
+    hosts: State<'_, Hosts>,
+    id: String,
+    lines: Vec<String>,
+) -> Result<GuardVerdict, CommandError> {
+    check_lines(hosts.book()?, &id, lines).await
+}
+
+/// Most readings of one Enter checked together; the view sends at most 8.
+const MAX_CANDIDATES: usize = 8;
+
+/// Checks the readings of one submitted line: the line as typed, the whole
+/// screen line, the rows below, the keys typed. Findings from all of them
+/// count; `incomplete` comes from the first.
+async fn check_lines(
+    book: &HostBook,
+    id: &str,
+    lines: Vec<String>,
+) -> Result<GuardVerdict, CommandError> {
+    let id = HostId::parse(id).map_err(invalid)?;
+    if lines.len() > MAX_CANDIDATES {
+        return Err(invalid(format!("at most {MAX_CANDIDATES} lines per check")));
+    }
+    let policy = book.guard_policy(&id).await.map_err(invalid)?;
+    // Lines over `MAX_LINE` bytes come back flagged unread, without a parse.
+    // The readings share one budget (8·MAX_LINE characters lexed, 64 Mi
+    // characters matched) but may take milliseconds, so they run off the
+    // async workers.
+    let verdict = tauri::async_runtime::spawn_blocking(move || {
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        policy.check_all(&lines)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
+    Ok(GuardVerdict {
+        findings: verdict
+            .findings
+            .into_iter()
+            .map(|f| GuardFinding {
+                rule: f.rule.id().to_owned(),
+                reason: f.rule.reason().to_owned(),
+                command: f.command,
+            })
+            .collect(),
+        incomplete: verdict.incomplete,
+    })
 }
 
 /// How many hosts `~/.ssh/config` names, for the first-run offer. Reads the

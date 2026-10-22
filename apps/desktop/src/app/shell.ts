@@ -109,6 +109,7 @@ export class AppShell {
       const controller = new TerminalController(options.sessions, {
         ...(options.renderer ? { renderer: options.renderer } : {}),
         ...(spec ? { spec } : {}),
+        ...(spec?.kind === "host" ? { guard: this.hosts.guardFor(spec.hostId) } : {}),
         mac: this.platform === "mac",
         ...(links
           ? {

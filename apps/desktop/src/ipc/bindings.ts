@@ -51,6 +51,12 @@ export const commands = {
 	hostsImportSshConfig: () => typedError<ImportResult, CommandError>(__TAURI_INVOKE("hosts_import_ssh_config")),
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
+	/**
+	 *  Checks the readings of a command line about to run on a saved host
+	 *  against its prod guard. Lines are never logged: they may hold a secret
+	 *  typed on the command line.
+	 */
+	guardCheck: (id: string, lines: string[]) => typedError<GuardVerdict, CommandError>(__TAURI_INVOKE("guard_check", { id, lines })),
 	/**  Opens an `http` or `https` link in the default browser. */
 	openLink: (url: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_link", { url })),
 	/**  The clipboard's text, or "" when it holds none. */
@@ -116,6 +122,34 @@ export type GroupView = {
 	settings: SettingsSpec,
 };
 
+export type GuardFinding = {
+	/**  A stable rule name such as `recursive-delete`. */
+	rule: string,
+	reason: string,
+	/**  The command as the shell would run it, at most 200 characters. */
+	command: string,
+};
+
+/**  The prod guard's settings on a host or group. */
+export type GuardSpec = {
+	/**
+	 *  `null` inherits; with no level setting it, hosts tagged `prod` are
+	 *  guarded.
+	 */
+	enabled?: boolean | null,
+	/**  Command globs the built-in rules never ask about. */
+	allow?: string[],
+	/**  Command globs that always ask. */
+	deny?: string[],
+};
+
+/**  Why a command line needs confirmation, empty when it may run. */
+export type GuardVerdict = {
+	findings: GuardFinding[],
+	/**  The shell waits for another line before running this one. */
+	incomplete: boolean,
+};
+
 export type HostInput = {
 	/**  Absent for a new host. */
 	id?: string | null,
@@ -139,6 +173,8 @@ export type HostView = {
 	 */
 	target: SshTargetSpec | null,
 	problem: string | null,
+	/**  Commands typed into this host are checked by the prod guard. */
+	guarded: boolean,
 };
 
 export type HostsView = {
@@ -187,6 +223,7 @@ export type SettingsSpec = {
 	methods?: AuthMethodSpec[] | null,
 	identityFiles?: string[] | null,
 	identitiesOnly?: boolean | null,
+	guard?: GuardSpec | null,
 };
 
 export type SkippedHost = {

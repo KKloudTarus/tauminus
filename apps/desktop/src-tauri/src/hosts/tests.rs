@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tauminus_app::ports::{BoxFuture, HostStore, StoreError};
 
 use super::*;
+use tauminus_domain::MAX_LINE;
 
 #[derive(Default)]
 struct MemoryStore {
@@ -173,6 +174,11 @@ async fn settings_survive_a_round_trip_through_the_view() {
         methods: Some(vec![AuthMethodSpec::Agent, AuthMethodSpec::Password]),
         identity_files: Some(vec!["~/.ssh/id_work".into()]),
         identities_only: Some(true),
+        guard: Some(GuardSpec {
+            enabled: Some(true),
+            allow: vec!["rm -rf /tmp/*".into()],
+            deny: vec!["systemctl stop *".into()],
+        }),
     };
     let parsed = settings(spec.clone()).unwrap();
     let back = settings_spec(&parsed);
@@ -195,4 +201,93 @@ fn an_unavailable_store_is_reported_on_every_call() {
     let hosts = Hosts::Unavailable("hosts.json is unreadable".into());
     let error = hosts.book().err().unwrap();
     assert_eq!(error.code, ErrorCode::StoreFailed);
+}
+
+#[tokio::test]
+async fn prod_hosts_are_guarded_and_their_commands_checked() {
+    let book = book().await;
+    let mut prod = parse_host(
+        &book,
+        HostInput {
+            tags: vec!["prod".into()],
+            ..input("db", "db")
+        },
+    )
+    .unwrap();
+    prod.id = HostId::parse("db").unwrap();
+    let mut dev = parse_host(&book, input("dev", "dev")).unwrap();
+    dev.id = HostId::parse("dev").unwrap();
+    let inventory = book
+        .edit(|inventory| {
+            inventory.put_host(prod)?;
+            inventory.put_host(dev)
+        })
+        .await
+        .unwrap();
+    let guarded: Vec<_> = view(&inventory)
+        .hosts
+        .iter()
+        .map(|h| (h.id.clone(), h.guarded))
+        .collect();
+    assert_eq!(guarded, [("db".into(), true), ("dev".into(), false)]);
+
+    let verdict = check_lines(&book, "db", vec!["sudo rm -rf /srv".into()])
+        .await
+        .unwrap();
+    assert_eq!(verdict.findings.len(), 1);
+    assert_eq!(verdict.findings[0].rule, "recursive-delete");
+    assert_eq!(verdict.findings[0].command, "rm -rf /srv");
+    assert_eq!(verdict.findings[0].reason, "deletes files recursively");
+    assert!(!verdict.incomplete);
+    assert!(
+        check_lines(&book, "db", vec!["echo 'open".into(), "ls".into()])
+            .await
+            .unwrap()
+            .incomplete
+    );
+    let unguarded = check_lines(&book, "dev", vec!["rm -rf /srv".into()])
+        .await
+        .unwrap();
+    assert!(unguarded.findings.is_empty());
+    let long = check_lines(&book, "db", vec!["a".repeat(MAX_LINE + 1)])
+        .await
+        .unwrap();
+    assert_eq!(long.findings[0].rule, "unreadable");
+    // Findings from every reading count, once each.
+    let merged = check_lines(
+        &book,
+        "db",
+        vec!["ls".into(), "rm -rf /a".into(), "rm -rf /a".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(merged.findings.len(), 1);
+    assert!(
+        check_lines(&book, "db", vec!["ls".into(); 9])
+            .await
+            .is_err()
+    );
+    for bad in ["nope", "../x"] {
+        let error = check_lines(&book, bad, vec!["ls".into()])
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidArgument, "{bad}");
+    }
+}
+
+#[test]
+fn guard_patterns_are_validated() {
+    let spec = |allow: Vec<String>| SettingsSpec {
+        guard: Some(GuardSpec {
+            enabled: None,
+            allow,
+            deny: vec![],
+        }),
+        ..SettingsSpec::default()
+    };
+    assert!(settings(spec(vec!["ls *".into()])).is_ok());
+    assert!(settings(spec(vec![" ".into()])).is_err());
+    assert!(settings(spec(vec!["a\u{1b}".into()])).is_err());
+    let many = (0..=MAX_PATTERNS).map(|n| n.to_string()).collect();
+    assert!(settings(spec(many)).is_err());
 }

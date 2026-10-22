@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useState, useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import type { SessionSpec } from "@/ipc/index.ts";
 
 import type { TerminalController } from "@/features/terminal/controller.ts";
 
+import { paneIds } from "./layout.ts";
 import type { Tab, Workspace } from "./workspace.ts";
 
 interface TabBarProps {
@@ -75,6 +76,21 @@ function TabButton({
     () => controller?.title ?? "",
   );
   const label = title || controller?.defaultTitle || "Terminal";
+  // A tab is marked when any of its panes is guarded, not just the focused one.
+  const subscribeGuards = useCallback(
+    (listener: () => void) => {
+      const stops = paneIds(tab.root).map(
+        (id) => workspace.terminal(id)?.subscribeGuard(listener) ?? (() => {}),
+      );
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
+    [workspace, tab.root],
+  );
+  const guarded = useSyncExternalStore(subscribeGuards, () =>
+    paneIds(tab.root).some((id) => workspace.terminal(id)?.guarded ?? false),
+  );
 
   return (
     <div
@@ -83,9 +99,10 @@ function TabButton({
       tabIndex={active ? 0 : -1}
       draggable
       data-tab-id={tab.id}
+      data-guarded={guarded}
       className={`group flex max-w-56 min-w-28 items-center gap-2 border-r border-current/10 px-3 ${
         active ? "bg-current/[0.06]" : "opacity-70 hover:opacity-100"
-      }`}
+      } ${guarded ? "border-b-2 border-b-[var(--prod)]" : ""}`}
       onClick={() => workspace.activateTab(tab.id)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") workspace.activateTab(tab.id);
@@ -101,6 +118,11 @@ function TabButton({
         onDrop();
       }}
     >
+      {guarded && (
+        <span className="rounded bg-[var(--prod)] px-1 text-[10px] leading-4 font-semibold text-white">
+          PROD
+        </span>
+      )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <button
         type="button"

@@ -7,6 +7,7 @@ import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
 
 import { ConnectFailure } from "./ConnectFailure.tsx";
 import type { TerminalController } from "./controller.ts";
+import { GuardDialog } from "./GuardDialog.tsx";
 
 interface TerminalViewProps {
   controller: TerminalController;
@@ -18,6 +19,8 @@ export function TerminalView({ controller, className }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const status = useSyncExternalStore(controller.subscribe, controller.getStatus);
   const prompt = useSyncExternalStore(controller.subscribe, controller.getPrompt);
+  const guardRequest = useSyncExternalStore(controller.subscribe, controller.getGuardRequest);
+  const guarded = useSyncExternalStore(controller.subscribeGuard, () => controller.guarded);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -67,7 +70,22 @@ export function TerminalView({ controller, className }: TerminalViewProps) {
             Could not start the shell: {status.message}
           </output>
         ))}
+      {guarded && (
+        <output
+          data-testid="prod-status"
+          className="block bg-[var(--prod)] px-3 py-0.5 text-xs font-medium text-white"
+        >
+          PROD · {controller.defaultTitle} · commands are checked before they run
+        </output>
+      )}
       {prompt && <PromptDialog prompt={prompt} onAnswer={(answer) => controller.answer(answer)} />}
+      {guardRequest && (
+        <GuardDialog
+          request={guardRequest}
+          host={controller.defaultTitle}
+          onAnswer={(run) => controller.answerGuard(run)}
+        />
+      )}
     </div>
   );
 }
