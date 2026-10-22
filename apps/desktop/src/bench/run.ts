@@ -214,6 +214,16 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
     ),
   );
   if (root) root.style.visibility = "";
+  // What redraws while nothing happens: renders and resizes per pane.
+  const counts = panes.map(() => ({ renders: 0, resizes: 0 }));
+  const counters = panes.flatMap((pane, i) => [
+    pane.terminal.onRender(() => {
+      counts[i]!.renders += 1;
+    }),
+    pane.terminal.onResize(() => {
+      counts[i]!.resizes += 1;
+    }),
+  ]);
   const idleUntilAt = performance.now() + 10_000;
   results.push(
     await scenario(
@@ -226,6 +236,9 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
     ),
   );
   const doneIn = (pane: TerminalController) => /flood-done/.test(tail(pane));
+  for (const counter of counters) counter.dispose();
+  note(quiet, `idle redraws per pane: ${JSON.stringify(counts)}`);
+  await sleep(1000);
   results.push(
     await scenario(
       "text 500 MiB in one pane",
