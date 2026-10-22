@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-presence"
+description = "Asks the OS to confirm the user is present: Touch ID, Windows Hello, polkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tauminus-app.workspace = true
+tracing.workspace = true
+
+# LocalAuthentication's LAContext; objc2, block2, and objc2-foundation are
+# already in the tree through tauri.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-local-authentication = { version = "0.3.2", default-features = false, features = ["std", "block2", "LABiometryType", "LAContext", "LAError"] }
+
+# UserConsentVerifier (Windows Hello); windows 0.62 is already in the tree
+# through tauri.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_UI", "Win32_Foundation", "Win32_System_WinRT"] }
+windows-future = "0.3.2"
+
+# polkit over the system bus; zbus is already in the tree through the
+# Secret Service store, with its own executor.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus = { version = "5.19.0", default-features = false, features = ["async-io", "blocking-api"] }
+
+[lints]
+workspace = true

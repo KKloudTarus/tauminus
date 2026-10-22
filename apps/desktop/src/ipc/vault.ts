@@ -31,6 +31,9 @@ export interface VaultClient {
   changePassword(current: string, next: string): Promise<string | null>;
   /** Turning it on takes the master password again. */
   setKeychain(on: boolean, password?: string): Promise<void>;
+  /** Makes keychain unlock ask the OS to confirm the user is present, or
+   * stop asking; the OS asks once now, either way. */
+  setPresence(on: boolean): Promise<void>;
   identities(): Promise<IdentityView[]>;
   saveIdentity(identity: IdentityEdit): Promise<string>;
   deleteIdentity(id: string): Promise<void>;
@@ -66,6 +69,7 @@ export const tauriVault: VaultClient = {
   setIdle: (minutes) => done(commands.vaultSetIdle(minutes)),
   changePassword: (current, next) => unwrap(commands.vaultChangePassword(current, next)),
   setKeychain: (on, password) => done(commands.vaultSetKeychain(on, password ?? null)),
+  setPresence: (on) => done(commands.vaultSetPresence(on)),
   identities: () => unwrap(commands.identitiesList()),
   saveIdentity: (identity) => unwrap(commands.identitySave(identity)),
   deleteIdentity: (id) => done(commands.identityDelete(id)),

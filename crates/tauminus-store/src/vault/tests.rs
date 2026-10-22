@@ -165,23 +165,25 @@ fn a_keychain_key_opens_the_vault_and_can_be_removed() {
     let key = SecretKey::random().unwrap();
     let mut vault = file.open_with_password(b"correct horse").unwrap();
     assert!(!file.has_keychain_slot().unwrap());
-    vault.set_keychain_key(&key).unwrap();
+    vault.set_keychain_key(&key, SlotKind::Keychain).unwrap();
     vault.save(&file).unwrap();
     assert!(file.has_keychain_slot().unwrap());
     assert_eq!(
-        file.open_with_key(&key).unwrap().get("id1"),
+        file.open_with_key(&key, SlotKind::Keychain)
+            .unwrap()
+            .get("id1"),
         Some(&b"secret one"[..])
     );
     assert!(matches!(
-        file.open_with_key(&SecretKey::random().unwrap()),
+        file.open_with_key(&SecretKey::random().unwrap(), SlotKind::Keychain),
         Err(VaultError::WrongKey)
     ));
     // The password slot does not open with the keychain key, nor the reverse.
-    let mut vault = file.open_with_key(&key).unwrap();
+    let mut vault = file.open_with_key(&key, SlotKind::Keychain).unwrap();
     vault.remove_keychain_key();
     vault.save(&file).unwrap();
     assert!(matches!(
-        file.open_with_key(&key),
+        file.open_with_key(&key, SlotKind::Keychain),
         Err(VaultError::WrongKey)
     ));
     assert!(file.open_with_password(b"correct horse").is_ok());
@@ -211,7 +213,7 @@ fn changing_the_password_replaces_the_data_key() {
     let old = file.open_with_password(b"correct horse").unwrap();
     let mut vault = file.open_with_password(b"correct horse").unwrap();
     vault
-        .set_keychain_key(&SecretKey::random().unwrap())
+        .set_keychain_key(&SecretKey::random().unwrap(), SlotKind::Keychain)
         .unwrap();
     vault.change_password(b"battery staple").unwrap();
     assert!(!vault.has_keychain_key());
@@ -259,7 +261,7 @@ fn kdf_costs_are_checked_and_bound_on_every_unlock() {
     let file = sample(&dir);
     let key = SecretKey::random().unwrap();
     let mut vault = file.open_with_password(b"correct horse").unwrap();
-    vault.set_keychain_key(&key).unwrap();
+    vault.set_keychain_key(&key, SlotKind::Keychain).unwrap();
     vault.save(&file).unwrap();
     let original: serde_json::Value =
         serde_json::from_slice(&std::fs::read(file.path()).unwrap()).unwrap();
@@ -268,7 +270,7 @@ fn kdf_costs_are_checked_and_bound_on_every_unlock() {
     weak["kdf"]["memoryKib"] = 8.into();
     std::fs::write(file.path(), serde_json::to_vec(&weak).unwrap()).unwrap();
     assert!(matches!(
-        file.open_with_key(&key),
+        file.open_with_key(&key, SlotKind::Keychain),
         Err(VaultError::Corrupt(_))
     ));
     // Costs inside the bounds but not the ones the slot was made with fail
@@ -282,14 +284,14 @@ fn kdf_costs_are_checked_and_bound_on_every_unlock() {
     ));
     // The keychain path checks them too, through the manifest.
     assert!(matches!(
-        file.open_with_key(&key),
+        file.open_with_key(&key, SlotKind::Keychain),
         Err(VaultError::Corrupt(_))
     ));
     let mut salted = original;
     salted["kdf"]["salt"] = encode(&[0u8; SALT_LEN]).into();
     std::fs::write(file.path(), serde_json::to_vec(&salted).unwrap()).unwrap();
     assert!(matches!(
-        file.open_with_key(&key),
+        file.open_with_key(&key, SlotKind::Keychain),
         Err(VaultError::Corrupt(_))
     ));
 }
@@ -459,4 +461,58 @@ fn a_vault_without_a_history_key_keeps_its_old_manifest() {
         )
         .into_bytes()
     );
+}
+
+#[test]
+fn a_presence_slot_opens_only_as_itself() {
+    let dir = Dir::new("presence");
+    let file = sample(&dir);
+    let key = SecretKey::random().unwrap();
+    let mut vault = file.open_with_password(b"correct horse").unwrap();
+    vault
+        .set_keychain_key(&key, SlotKind::KeychainPresence)
+        .unwrap();
+    vault.save(&file).unwrap();
+    assert_eq!(
+        file.keychain_slot().unwrap(),
+        Some(SlotKind::KeychainPresence)
+    );
+    assert!(file.open_with_key(&key, SlotKind::KeychainPresence).is_ok());
+    // Asked as a plain keychain slot, it is not there.
+    assert!(matches!(
+        file.open_with_key(&key, SlotKind::Keychain),
+        Err(VaultError::WrongKey)
+    ));
+    // Edited in the file to look like a plain one, it opens nothing.
+    let text = std::fs::read_to_string(dir.0.join("vault.json")).unwrap();
+    std::fs::write(
+        dir.0.join("vault.json"),
+        text.replace("\"keychainPresence\"", "\"keychain\""),
+    )
+    .unwrap();
+    assert_eq!(file.keychain_slot().unwrap(), Some(SlotKind::Keychain));
+    assert!(matches!(
+        file.open_with_key(&key, SlotKind::Keychain),
+        Err(VaultError::WrongKey)
+    ));
+}
+
+#[test]
+fn one_keychain_slot_at_a_time() {
+    let dir = Dir::new("one-slot");
+    let file = sample(&dir);
+    let mut vault = file.open_with_password(b"correct horse").unwrap();
+    vault
+        .set_keychain_key(&SecretKey::random().unwrap(), SlotKind::Keychain)
+        .unwrap();
+    let key = SecretKey::random().unwrap();
+    vault
+        .set_keychain_key(&key, SlotKind::KeychainPresence)
+        .unwrap();
+    assert_eq!(vault.keychain_kind(), Some(SlotKind::KeychainPresence));
+    assert_eq!(
+        vault.slots.iter().filter(|s| s.kind.is_keychain()).count(),
+        1
+    );
+    assert!(vault.set_keychain_key(&key, SlotKind::Password).is_err());
 }

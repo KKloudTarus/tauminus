@@ -36,6 +36,7 @@ const COMMANDS: &[&str] = &[
     "vault_set_idle",
     "vault_change_password",
     "vault_set_keychain",
+    "vault_set_presence",
     "identities_list",
     "identity_save",
     "identity_delete",

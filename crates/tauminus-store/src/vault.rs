@@ -118,6 +118,11 @@ impl Kdf {
 pub enum SlotKind {
     Password,
     Keychain,
+    /// A keychain slot the app opens only after the OS confirmed the user
+    /// is present (Touch ID, Windows Hello, polkit). Its kind is in its
+    /// additional data, so a file edited to call it a plain keychain slot
+    /// opens nothing.
+    KeychainPresence,
 }
 
 impl SlotKind {
@@ -125,6 +130,21 @@ impl SlotKind {
         match self {
             Self::Password => "password",
             Self::Keychain => "keychain",
+            Self::KeychainPresence => "keychain-presence",
+        }
+    }
+
+    fn is_keychain(self) -> bool {
+        matches!(self, Self::Keychain | Self::KeychainPresence)
+    }
+
+    /// The keychain slot's kind, with or without the presence check.
+    #[must_use]
+    pub fn keychain(presence: bool) -> Self {
+        if presence {
+            Self::KeychainPresence
+        } else {
+            Self::Keychain
         }
     }
 }
@@ -291,10 +311,14 @@ impl VaultFile {
         open(file, seen, SlotKind::Password, &wrapping)
     }
 
-    /// Opens the vault with the key a keychain holds.
-    pub fn open_with_key(&self, key: &SecretKey) -> Result<OpenVault, VaultError> {
+    /// Opens the vault with the key a keychain holds, through a keychain
+    /// slot of `kind` only: the caller checked what that kind asks first.
+    pub fn open_with_key(&self, key: &SecretKey, kind: SlotKind) -> Result<OpenVault, VaultError> {
+        if !kind.is_keychain() {
+            return Err(VaultError::Corrupt("not a keychain slot".into()));
+        }
         let (file, seen) = self.read()?;
-        open(file, seen, SlotKind::Keychain, key)
+        open(file, seen, kind, key)
     }
 
     /// The vault's id, without unlocking.
@@ -314,12 +338,19 @@ impl VaultFile {
 
     /// Whether a keychain slot exists, without unlocking.
     pub fn has_keychain_slot(&self) -> Result<bool, VaultError> {
+        Ok(self.keychain_slot()?.is_some())
+    }
+
+    /// The keychain slot's kind, without unlocking; `None` without one.
+    /// Not authenticated: a slot whose kind was edited opens nothing.
+    pub fn keychain_slot(&self) -> Result<Option<SlotKind>, VaultError> {
         Ok(self
             .read()?
             .0
             .slots
             .iter()
-            .any(|s| s.kind == SlotKind::Keychain))
+            .map(|s| s.kind)
+            .find(|kind| kind.is_keychain()))
     }
 
     /// The parsed file and the fingerprint of its bytes.
@@ -460,14 +491,29 @@ impl OpenVault {
         self.records.remove(id).is_some()
     }
 
-    /// A new keychain slot opening this vault with `key`, replacing any
-    /// keychain slot before it.
-    pub fn set_keychain_key(&mut self, key: &SecretKey) -> Result<(), VaultError> {
-        self.set_slot(SlotKind::Keychain, key)
+    /// A new keychain slot of `kind` opening this vault with `key`,
+    /// replacing any keychain slot before it.
+    pub fn set_keychain_key(&mut self, key: &SecretKey, kind: SlotKind) -> Result<(), VaultError> {
+        if !kind.is_keychain() {
+            return Err(VaultError::Corrupt("not a keychain slot".into()));
+        }
+        let slot = wrap_slot(&self.id, kind, self.kdf, &self.salt, &self.data_key, key)?;
+        self.remove_keychain_key();
+        self.slots.push(slot);
+        self.slots.sort_by_key(|s| s.kind);
+        Ok(())
     }
 
     pub fn remove_keychain_key(&mut self) {
-        self.slots.retain(|s| s.kind != SlotKind::Keychain);
+        self.slots.retain(|s| !s.kind.is_keychain());
+    }
+
+    /// The keychain slot's kind; `None` without one.
+    pub fn keychain_kind(&self) -> Option<SlotKind> {
+        self.slots
+            .iter()
+            .map(|s| s.kind)
+            .find(|kind| kind.is_keychain())
     }
 
     /// The history's public key, to save with the vault.
@@ -480,7 +526,7 @@ impl OpenVault {
     }
 
     pub fn has_keychain_key(&self) -> bool {
-        self.slots.iter().any(|s| s.kind == SlotKind::Keychain)
+        self.keychain_kind().is_some()
     }
 
     /// Replaces the master password, with a fresh salt, and a fresh data

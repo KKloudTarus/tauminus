@@ -14,7 +14,9 @@ use tauminus_app::vault::{
 use zeroize::Zeroizing;
 
 use crate::history::HistoryKeyPair;
-use crate::vault::{DEFAULT_KDF, Kdf, OpenVault, SecretKey, VaultError as FileError, VaultFile};
+use crate::vault::{
+    DEFAULT_KDF, Kdf, OpenVault, SecretKey, SlotKind, VaultError as FileError, VaultFile,
+};
 
 /// Where the OS keeps secrets for this user: Keychain on macOS, Credential
 /// Manager on Windows, the Secret Service on Linux.
@@ -125,7 +127,7 @@ impl VaultBackend for FileVaultBackend {
         Ok(self.wrap(vault))
     }
 
-    fn unlock_with_keychain(&self) -> Result<Box<dyn OpenPort>, VaultError> {
+    fn unlock_with_keychain(&self, presence: bool) -> Result<Box<dyn OpenPort>, VaultError> {
         self.keys
             .available()
             .map_err(VaultError::KeychainUnavailable)?;
@@ -136,13 +138,18 @@ impl VaultBackend for FileVaultBackend {
             .map_err(VaultError::KeychainUnavailable)?
             .ok_or_else(|| VaultError::KeychainUnavailable("no key for this vault".into()))?;
         let key = SecretKey::from_bytes(&bytes).map_err(port_error)?;
-        let vault = self.file.open_with_key(&key).map_err(|error| match error {
-            // The password was never asked; say what is wrong.
-            FileError::WrongKey => VaultError::KeychainUnavailable(
-                "the keychain's key no longer opens this vault; unlock with the password".into(),
-            ),
-            other => port_error(other),
-        })?;
+        let kind = SlotKind::keychain(presence);
+        let vault = self
+            .file
+            .open_with_key(&key, kind)
+            .map_err(|error| match error {
+                // The password was never asked; say what is wrong.
+                FileError::WrongKey => VaultError::KeychainUnavailable(
+                    "the keychain's key no longer opens this vault; unlock with the password"
+                        .into(),
+                ),
+                other => port_error(other),
+            })?;
         Ok(self.wrap(vault))
     }
 
@@ -150,8 +157,10 @@ impl VaultBackend for FileVaultBackend {
         if let Err(reason) = self.keys.available() {
             return KeychainState::Unavailable(reason);
         }
-        match self.file.has_keychain_slot() {
-            Ok(true) => KeychainState::On,
+        match self.file.keychain_slot() {
+            Ok(Some(kind)) => KeychainState::On {
+                presence: kind == SlotKind::KeychainPresence,
+            },
             _ => KeychainState::Off,
         }
     }
@@ -257,12 +266,12 @@ impl OpenPort for Opened {
     /// The new password comes with a new data key, which drops the keychain
     /// slot; a keychain that was on gets a new key for it.
     fn change_password(&mut self, password: &Secret) -> Result<(), VaultError> {
-        let keychain = self.vault.has_keychain_key();
+        let keychain = self.vault.keychain_kind();
         self.vault
             .change_password(password.as_bytes())
             .map_err(port_error)?;
-        if keychain {
-            self.new_keychain_key()?;
+        if let Some(kind) = keychain {
+            self.new_keychain_key(kind)?;
         }
         Ok(())
     }
@@ -272,12 +281,29 @@ impl OpenPort for Opened {
             self.keys
                 .available()
                 .map_err(VaultError::KeychainUnavailable)?;
-            self.new_keychain_key()
+            // A fresh key keeps the slot's kind: turning the keychain on
+            // again never drops the presence check.
+            let kind = self.vault.keychain_kind().unwrap_or(SlotKind::Keychain);
+            self.new_keychain_key(kind)
         } else {
             self.vault.remove_keychain_key();
             self.pending = Some(Pending::Delete);
             Ok(())
         }
+    }
+
+    /// A fresh keychain key with a slot of the other kind: the old key
+    /// opens nothing after the save.
+    fn set_presence(&mut self, on: bool) -> Result<(), VaultError> {
+        if self.vault.keychain_kind().is_none() {
+            return Err(VaultError::Invalid(
+                "turn on unlocking with the keychain first".into(),
+            ));
+        }
+        self.keys
+            .available()
+            .map_err(VaultError::KeychainUnavailable)?;
+        self.new_keychain_key(SlotKind::keychain(on))
     }
 
     fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError> {
@@ -351,10 +377,13 @@ impl OpenPort for Opened {
 }
 
 impl Opened {
-    /// A fresh keychain slot, stored in the keychain at the next save.
-    fn new_keychain_key(&mut self) -> Result<(), VaultError> {
+    /// A fresh keychain slot of `kind`, stored in the keychain at the next
+    /// save.
+    fn new_keychain_key(&mut self, kind: SlotKind) -> Result<(), VaultError> {
         let key = SecretKey::random().map_err(port_error)?;
-        self.vault.set_keychain_key(&key).map_err(port_error)?;
+        self.vault
+            .set_keychain_key(&key, kind)
+            .map_err(port_error)?;
         self.pending = Some(Pending::Set(key));
         Ok(())
     }

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    IdentityInput, IdentitySummary, KeychainState, MAX_SECRET, Vault, VaultError, VaultStatus,
+    IdentityInput, IdentitySummary, KeychainState, MAX_SECRET, PresenceError, Vault, VaultError,
+    VaultStatus,
 };
 use tauri::State;
 
@@ -25,10 +26,15 @@ impl From<VaultError> for CommandError {
             VaultError::WrongKey => ErrorCode::WrongPassword,
             VaultError::Missing | VaultError::NoSuchIdentity(_) => ErrorCode::NotFound,
             VaultError::Exists | VaultError::Invalid(_) => ErrorCode::InvalidArgument,
-            VaultError::KeychainUnavailable(_) => ErrorCode::Unavailable,
+            VaultError::KeychainUnavailable(_)
+            | VaultError::Presence(PresenceError::Unavailable(_)) => ErrorCode::Unavailable,
             VaultError::Corrupt(_) | VaultError::Io(_) | VaultError::Conflict => {
                 ErrorCode::StoreFailed
             }
+            VaultError::Presence(PresenceError::Cancelled | PresenceError::TimedOut) => {
+                ErrorCode::Cancelled
+            }
+            VaultError::Presence(PresenceError::Denied) => ErrorCode::AuthFailed,
         };
         Self::new(code, error.to_string())
     }
@@ -37,9 +43,24 @@ impl From<VaultError> for CommandError {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum KeychainSpec {
-    Unavailable { reason: String },
+    Unavailable {
+        reason: String,
+    },
     Off,
-    On,
+    /// With `presence`, the OS confirms the user is present before the
+    /// keychain's key is used.
+    On {
+        presence: bool,
+    },
+}
+
+/// The OS's presence check: what it is called, and why it cannot run
+/// here, when it cannot.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PresenceSpec {
+    pub(crate) name: String,
+    pub(crate) unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -48,6 +69,7 @@ pub(crate) struct VaultStatusSpec {
     pub(crate) exists: bool,
     pub(crate) unlocked: bool,
     pub(crate) keychain: KeychainSpec,
+    pub(crate) presence: PresenceSpec,
     /// Minutes unused before the vault locks itself.
     pub(crate) idle_minutes: u32,
 }
@@ -60,7 +82,11 @@ impl From<VaultStatus> for VaultStatusSpec {
             keychain: match status.keychain {
                 KeychainState::Unavailable(reason) => KeychainSpec::Unavailable { reason },
                 KeychainState::Off => KeychainSpec::Off,
-                KeychainState::On => KeychainSpec::On,
+                KeychainState::On { presence } => KeychainSpec::On { presence },
+            },
+            presence: PresenceSpec {
+                name: status.presence.name,
+                unavailable: status.presence.available.err(),
             },
             idle_minutes: u32::try_from(status.idle.as_secs() / 60).unwrap_or(u32::MAX),
         }
@@ -220,6 +246,18 @@ pub(crate) async fn vault_change_password(
     next: String,
 ) -> Result<Option<String>, CommandError> {
     Ok(vault.change_password(secret(current), secret(next)).await?)
+}
+
+/// Makes unlocking with the keychain ask the OS to confirm the user is
+/// present (Touch ID, Windows Hello, polkit), or stop asking. The OS asks
+/// once now, either way; the check runs here, not in the view.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn vault_set_presence(
+    vault: VaultState<'_>,
+    on: bool,
+) -> Result<(), CommandError> {
+    Ok(vault.set_presence(on).await?)
 }
 
 /// Lets the OS keychain unlock the vault, or stops it. Turning it on takes
