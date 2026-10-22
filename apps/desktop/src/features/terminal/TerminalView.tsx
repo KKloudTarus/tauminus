@@ -30,8 +30,19 @@ export function TerminalView({ controller, className }: TerminalViewProps) {
   }, [controller]);
 
   return (
-    <div className={`relative flex flex-col ${className ?? ""}`}>
-      <div ref={hostRef} className="min-h-0 flex-1 p-2" data-testid="terminal-host" />
+    <div className={`relative flex flex-col ${className ?? ""}`} style={{ minWidth: 0 }}>
+      {/*
+        Sized by the layout alone: with size containment the terminal's own
+        width cannot widen the pane, which fit would answer with more columns
+        and a wider terminal, a loop that ran 30 times a second on macOS.
+        Inline, so no stylesheet can lose it.
+      */}
+      <div
+        ref={hostRef}
+        className="min-h-0 flex-1 p-2"
+        style={{ minWidth: 0, contain: "strict" }}
+        data-testid="terminal-host"
+      />
       {status.kind === "starting" && remote && !prompt && (
         <output className="absolute inset-x-0 top-0 px-3 py-1 text-xs opacity-70">
           Connecting to {controller.defaultTitle}…

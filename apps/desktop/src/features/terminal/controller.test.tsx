@@ -14,6 +14,10 @@ import {
   type TerminalSession,
 } from "@/ipc/index.ts";
 
+// The app's styles, so views get the layout they have in the app; without
+// them a pane takes its size from the terminal inside it.
+import "@/app/styles.css";
+
 import { ACK_THRESHOLD_BYTES } from "./ack-batcher.ts";
 import { TerminalController } from "./controller.ts";
 import { OutputScheduler } from "./output-scheduler.ts";
@@ -177,6 +181,27 @@ describe("TerminalController with TerminalView", () => {
     await expect
       .poll(() => sessions.session.acknowledge.mock.calls)
       .toEqual([[ACK_THRESHOLD_BYTES]]);
+  });
+
+  it("never lets the terminal's own width size its pane", async () => {
+    // A pane beside another in a row, as a split lays them out. If wide
+    // content could push the pane wider, fit would add columns, the content
+    // would widen again, and on macOS that loop ran 30 times a second.
+    const { sessions, controller } = setup();
+    const screen = await render(
+      <div style={{ display: "flex", width: 600, height: 300 }}>
+        <TerminalView controller={controller} className="flex-1" />
+        <div style={{ flex: 1 }} />
+      </div>,
+    );
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const host = screen.getByTestId("terminal-host").element();
+    const before = host.getBoundingClientRect().width;
+    controller.terminal.resize(400, 24);
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    expect(host.getBoundingClientRect().width).toBe(before);
+    expect(before).toBeLessThanOrEqual(300);
   });
 
   it("answers a cursor query that arrives before the session finishes opening", async () => {
