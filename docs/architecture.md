@@ -10,6 +10,7 @@ Cargo.toml                 virtual workspace manifest
 crates/
   tauminus-domain/         rules and types, no I/O, no runtime
   tauminus-app/            use cases (SessionManager, LocalShells) and ports
+  tauminus-presence/       adapter: Touch ID, Windows Hello, polkit before the keychain unlocks
   tauminus-pty/            adapter: local shells over portable-pty
   tauminus-ssh/            adapter: SSH shells over russh, known_hosts, auth, proxies, ssh_config import
   tauminus-store/          adapter: saved hosts in one JSON file, written atomically
@@ -31,9 +32,10 @@ docs/                      roadmap, ADRs, benchmarks
 ## Dependency direction
 
 ```
-tauminus-desktop ──► tauminus-pty ──► tauminus-app ──► tauminus-domain
-        │      └───► tauminus-ssh ──►      ▲
-        └──────────────────────────────────┘
+tauminus-desktop ──► tauminus-pty ──────► tauminus-app ──► tauminus-domain
+        │      ├───► tauminus-ssh ──────►      ▲
+        │      └───► tauminus-presence ─►      │
+        └──────────────────────────────────────┘
 ```
 
 - `tauminus-domain` depends on `thiserror` only. No tokio, no serde.
@@ -230,6 +232,13 @@ fails with `vault_locked` while it is locked. The identity's key and
 password are tried on the last hop only, before any prompt. Secrets go into
 the backend and never come back to the view. Details in
 [ADR 0007](adr/0007-vault.md).
+
+Unlocking with the keychain can ask the OS to confirm the user is present
+first: Touch ID on macOS, Windows Hello, polkit on Linux, each behind the
+`Presence` port in `tauminus-presence`. The backend runs the check, and the
+keychain slot's kind, bound into its additional data, says whether it asks.
+It guards the app's own unlock, not the keychain entry. Details in
+[ADR 0009](adr/0009-presence-unlock.md).
 
 An identity's key can be pasted (import) or generated in the backend:
 Ed25519 by default, ECDSA P-256/384/521, or RSA 3072/4096. A generated key
