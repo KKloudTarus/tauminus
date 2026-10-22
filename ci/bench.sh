@@ -15,7 +15,8 @@
 set -euo pipefail
 
 app=$1
-tools=$2
+# Absolute: the app's shells start in the home directory, not here.
+tools=$(cd "$2" && pwd)
 out=$3
 mkdir -p "$out"
 rm -f "$out/report.json" "$out/samples.csv"
@@ -28,6 +29,15 @@ tree() {
   echo "$pid"
   for child in $(pgrep -P "$pid" || true); do
     tree "$child"
+  done
+}
+
+# Prints those of the given PIDs whose command is a WebKit process.
+webkit_only() {
+  for pid in "$@"; do
+    if ps -o comm= -p "$pid" 2> /dev/null | grep -q '^WebKit'; then
+      echo "$pid"
+    fi
   done
 }
 
@@ -52,9 +62,7 @@ while [ ! -s "$out/report.json" ] && [ $SECONDS -lt $timeout ] && kill -0 "$app_
     web=$(pgrep -f 'com.apple.WebKit' || true)
   else
     # The app's children include its shells; only WebKit's processes count.
-    web=$(for pid in $pids; do
-      case $(ps -o comm= -p "$pid" 2> /dev/null) in WebKit*) echo "$pid" ;; esac
-    done)
+    web=$(webkit_only $pids)
   fi
   # shellcheck disable=SC2086 # word splitting turns the lists into arguments
   echo "$(now_ms),$(rss_kib "$app_pid"),$(rss_kib $web)" >> "$out/samples.csv"
