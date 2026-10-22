@@ -13,6 +13,8 @@ struct Memory {
     rows: Arc<StdMutex<Vec<HistoryEntry>>>,
     pending: StdMutex<Vec<([u8; 32], HistoryEntry)>>,
     opened: StdMutex<u32>,
+    /// Every try to open, failed or not.
+    tries: std::sync::atomic::AtomicU32,
     /// The database will not open.
     broken: std::sync::atomic::AtomicBool,
 }
@@ -62,7 +64,12 @@ impl HistoryStore for Rows {
             .map(|e| e.output.clone()))
     }
 
-    fn prune(&self, retention: Retention, _now_ms: i64) -> Result<u64, HistoryError> {
+    fn prune(
+        &self,
+        retention: Retention,
+        _now_ms: i64,
+        _open: &dyn Fn() -> bool,
+    ) -> Result<u64, HistoryError> {
         let mut rows = self.0.lock().unwrap();
         let mut removed = 0;
         while rows.iter().map(HistoryEntry::size).sum::<u64>() > retention.max_bytes {
@@ -82,6 +89,8 @@ impl HistoryStore for Rows {
 
 impl HistoryBackend for Arc<Memory> {
     fn open(&self, _keys: &HistoryKeys) -> Result<Arc<dyn HistoryStore>, HistoryError> {
+        self.tries
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.broken.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(HistoryError::Store("disk on fire".into()));
         }
@@ -291,4 +300,30 @@ async fn a_lock_the_follower_missed_still_closes_the_database() {
         2,
         "the database of the earlier session was reused"
     );
+}
+
+#[tokio::test]
+async fn a_database_that_failed_to_open_is_not_retried_until_the_next_unlock() {
+    let (memory, vault, history) = history(Retention::default()).await;
+    vault.create(secret("correct horse")).await.unwrap();
+    history.search(query("")).await.unwrap();
+    vault.lock().await;
+    memory
+        .broken
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    vault.unlock(secret("correct horse")).await.unwrap();
+    let tries = || memory.tries.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(history.record(entry("kept")).await, Ok(Recorded::Sealed));
+    let after_one = tries();
+    for _ in 0..3 {
+        assert_eq!(history.record(entry("kept")).await, Ok(Recorded::Sealed));
+    }
+    assert_eq!(tries(), after_one, "opening was retried on every record");
+    // The next unlock tries again.
+    memory
+        .broken
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    vault.lock().await;
+    vault.unlock(secret("correct horse")).await.unwrap();
+    assert_eq!(history.record(entry("stored")).await, Ok(Recorded::Stored));
 }

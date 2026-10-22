@@ -21,7 +21,8 @@ impl From<HistoryError> for CommandError {
             HistoryError::Locked => ErrorCode::VaultLocked,
             HistoryError::NoVault => ErrorCode::NotFound,
             HistoryError::Invalid(_) => ErrorCode::InvalidArgument,
-            HistoryError::Store(_) => ErrorCode::StoreFailed,
+            HistoryError::Store(_) | HistoryError::Stale => ErrorCode::StoreFailed,
+            HistoryError::Busy(_) => ErrorCode::Unavailable,
         };
         Self::new(code, error.to_string())
     }

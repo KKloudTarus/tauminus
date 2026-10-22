@@ -9,7 +9,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, VaultBackend, VaultError,
+    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys, VaultBackend,
+    VaultError,
 };
 use zeroize::Zeroizing;
 
@@ -82,6 +83,7 @@ impl FileVaultBackend {
         Box::new(Opened {
             vault,
             file: self.file.clone(),
+            kdf: self.kdf,
             keys: Arc::clone(&self.keys),
             pending: None,
         })
@@ -188,6 +190,8 @@ impl VaultBackend for FileVaultBackend {
 struct Opened {
     vault: OpenVault,
     file: VaultFile,
+    /// The least Argon2id costs a new password gets.
+    kdf: Kdf,
     keys: Arc<dyn KeyStore>,
     /// The keychain change to make once the file is saved. The keychain
     /// entry must open the file on disk: a new key written before a save
@@ -265,15 +269,18 @@ impl OpenPort for Opened {
 
     /// The new password comes with a new data key, which drops the keychain
     /// slot; a keychain that was on gets a new key for it.
+    /// The history's keys are replaced too, so an old copy of the vault
+    /// and the old password open nothing recorded after the change; the
+    /// old ones stay as `previous` until the history has moved.
     fn change_password(&mut self, password: &Secret) -> Result<(), VaultError> {
         let keychain = self.vault.keychain_kind();
         self.vault
-            .change_password(password.as_bytes())
+            .change_password(password.as_bytes(), self.kdf)
             .map_err(port_error)?;
         if let Some(kind) = keychain {
             self.new_keychain_key(kind)?;
         }
-        Ok(())
+        self.rotate_history_keys()
     }
 
     fn set_keychain(&mut self, on: bool) -> Result<(), VaultError> {
@@ -306,6 +313,22 @@ impl OpenPort for Opened {
         self.new_keychain_key(SlotKind::keychain(on))
     }
 
+    fn forget_previous_history_keys(&mut self, known: &[PreviousHistoryKeys]) -> bool {
+        let Ok(stored) = self.previous_history_keys() else {
+            return false;
+        };
+        let same = |a: &PreviousHistoryKeys, b: &PreviousHistoryKeys| {
+            a.database[..] == b.database[..] && a.sealing[..] == b.sealing[..]
+        };
+        let (gone, kept): (Vec<_>, Vec<_>) = stored
+            .into_iter()
+            .partition(|generation| known.iter().any(|k| same(k, generation)));
+        if gone.is_empty() {
+            return false;
+        }
+        self.store_previous_history_keys(&kept).is_ok()
+    }
+
     fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError> {
         let stored = (
             self.vault.get(HISTORY_DATABASE).map(SecretKey::from_bytes),
@@ -319,7 +342,9 @@ impl OpenPort for Opened {
                         "the history key does not match the vault".into(),
                     ));
                 }
-                return Ok((history_keys(&database, &pair), false));
+                let mut keys = history_keys(&database, &pair);
+                keys.previous = self.previous_history_keys()?;
+                return Ok((keys, false));
             }
             (None, None) => {}
             // Making new keys would orphan the history: say so instead.
@@ -377,6 +402,98 @@ impl OpenPort for Opened {
 }
 
 impl Opened {
+    /// The history's keys from before each password change since it last
+    /// moved, newest first: one 32-byte key after another in each record.
+    fn previous_history_keys(&self) -> Result<Vec<PreviousHistoryKeys>, VaultError> {
+        let (database, sealing) = (
+            self.vault
+                .get(HISTORY_DATABASE_PREVIOUS)
+                .unwrap_or_default(),
+            self.vault.get(HISTORY_SEALING_PREVIOUS).unwrap_or_default(),
+        );
+        if database.len() != sealing.len()
+            || database.len() % 32 != 0
+            || database.len() > 32 * MAX_GENERATIONS
+        {
+            return Err(VaultError::Corrupt(
+                "the history's previous keys are damaged".into(),
+            ));
+        }
+        let (databases, _) = database.as_chunks::<32>();
+        let (sealings, _) = sealing.as_chunks::<32>();
+        Ok(databases
+            .iter()
+            .zip(sealings)
+            .map(|(database, sealing)| PreviousHistoryKeys {
+                database: Zeroizing::new(*database),
+                sealing: Zeroizing::new(*sealing),
+            })
+            .collect())
+    }
+
+    /// Writes the history's earlier key generations, or removes the records
+    /// when there are none.
+    fn store_previous_history_keys(
+        &mut self,
+        generations: &[PreviousHistoryKeys],
+    ) -> Result<(), VaultError> {
+        if generations.is_empty() {
+            self.vault.remove(HISTORY_DATABASE_PREVIOUS);
+            self.vault.remove(HISTORY_SEALING_PREVIOUS);
+            return Ok(());
+        }
+        let mut databases = Zeroizing::new(Vec::with_capacity(32 * generations.len()));
+        let mut sealings = Zeroizing::new(Vec::with_capacity(32 * generations.len()));
+        for generation in generations {
+            databases.extend_from_slice(&generation.database[..]);
+            sealings.extend_from_slice(&generation.sealing[..]);
+        }
+        self.vault
+            .put(HISTORY_DATABASE_PREVIOUS, databases.to_vec())
+            .map_err(port_error)?;
+        self.vault
+            .put(HISTORY_SEALING_PREVIOUS, sealings.to_vec())
+            .map_err(port_error)
+    }
+
+    /// New history keys, with the current ones put first among the
+    /// previous: every generation the history has not confirmed stays, since
+    /// the database may be under any of them and entries sealed to any.
+    /// Nothing to do before the history's first use.
+    fn rotate_history_keys(&mut self) -> Result<(), VaultError> {
+        let key = |id: &str| {
+            self.vault.get(id).map(|bytes| {
+                <[u8; 32]>::try_from(bytes)
+                    .map(Zeroizing::new)
+                    .map_err(|_| VaultError::Corrupt("a history key is not 32 bytes".into()))
+            })
+        };
+        let (Some(database), Some(sealing)) = (key(HISTORY_DATABASE), key(HISTORY_SEALING)) else {
+            return Ok(());
+        };
+        let mut generations = vec![PreviousHistoryKeys {
+            database: database?,
+            sealing: sealing?,
+        }];
+        generations.extend(self.previous_history_keys()?);
+        if generations.len() > MAX_GENERATIONS {
+            // Eight changes and the history never opened: the oldest goes.
+            tracing::warn!("the history's oldest key is dropped; what it holds may be lost");
+            generations.truncate(MAX_GENERATIONS);
+        }
+        self.store_previous_history_keys(&generations)?;
+        let database = SecretKey::random().map_err(port_error)?;
+        let pair = HistoryKeyPair::random().map_err(|e| VaultError::Io(e.to_string()))?;
+        self.vault
+            .put(HISTORY_DATABASE, database.as_bytes().to_vec())
+            .map_err(port_error)?;
+        self.vault
+            .put(HISTORY_SEALING, pair.secret().as_bytes().to_vec())
+            .map_err(port_error)?;
+        self.vault.set_history_public(pair.public());
+        Ok(())
+    }
+
     /// A fresh keychain slot of `kind`, stored in the keychain at the next
     /// save.
     fn new_keychain_key(&mut self, kind: SlotKind) -> Result<(), VaultError> {
@@ -392,6 +509,12 @@ impl Opened {
 /// Vault records holding the history's keys.
 const HISTORY_DATABASE: &str = "history-database";
 const HISTORY_SEALING: &str = "history-sealing";
+/// The same, from before each password change the history has not moved past.
+const HISTORY_DATABASE_PREVIOUS: &str = "history-database-previous";
+const HISTORY_SEALING_PREVIOUS: &str = "history-sealing-previous";
+/// Most key generations kept for a history that has not moved: eight
+/// password changes without the history opening once.
+const MAX_GENERATIONS: usize = 8;
 
 fn history_keys(database: &SecretKey, pair: &HistoryKeyPair) -> HistoryKeys {
     let key = |secret: &SecretKey| {
@@ -403,6 +526,7 @@ fn history_keys(database: &SecretKey, pair: &HistoryKeyPair) -> HistoryKeys {
         database: key(database),
         sealing: key(pair.secret()),
         public: pair.public(),
+        previous: Vec::new(),
     }
 }
 

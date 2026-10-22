@@ -368,3 +368,26 @@ fn a_presence_key_the_keychain_refuses_leaves_no_slot() {
     assert_eq!(refusing.keychain(), KeychainState::Off);
     assert!(refusing.unlock(&secret("correct horse")).is_ok());
 }
+
+#[test]
+fn forgetting_drops_only_the_generations_the_history_moved_past() {
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    let (first, _) = open.history_keys().unwrap();
+    open.change_password(&secret("battery staple 1")).unwrap();
+    let (second, _) = open.history_keys().unwrap();
+    assert_eq!(second.previous.len(), 1);
+    assert_eq!(second.previous[0].database[..], first.database[..]);
+    // The history starts moving past the first generation, and the password
+    // changes again meanwhile.
+    let known = second.previous.clone();
+    open.change_password(&secret("battery staple 2")).unwrap();
+    assert!(open.forget_previous_history_keys(&known));
+    let (third, _) = open.history_keys().unwrap();
+    assert_eq!(third.previous.len(), 1, "the second generation stays");
+    assert_eq!(third.previous[0].database[..], second.database[..]);
+    assert!(
+        !open.forget_previous_history_keys(&known),
+        "nothing more to drop"
+    );
+}

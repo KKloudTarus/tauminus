@@ -534,9 +534,17 @@ impl OpenVault {
     /// saved after this. Every other slot is dropped, since it wraps the
     /// old key; the caller adds a new keychain slot if it wants one. The
     /// records are encrypted again on the next save. Runs Argon2id.
-    pub fn change_password(&mut self, password: &[u8]) -> Result<(), VaultError> {
+    /// The new password's Argon2id costs are the file's, raised to at least
+    /// `floor` in each part, so a vault made at low costs, or under older
+    /// defaults, does not keep them forever.
+    pub fn change_password(&mut self, password: &[u8], floor: Kdf) -> Result<(), VaultError> {
         // The manifest authenticated these costs when the vault opened.
-        let kdf = self.kdf;
+        let kdf = Kdf {
+            memory_kib: self.kdf.memory_kib.max(floor.memory_kib),
+            iterations: self.kdf.iterations.max(floor.iterations),
+            parallelism: self.kdf.parallelism.max(floor.parallelism),
+        }
+        .check()?;
         let mut salt = [0u8; SALT_LEN];
         fill(&mut salt)?;
         let wrapping = derive(password, &salt, kdf)?;

@@ -186,8 +186,7 @@ impl PendingLog {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         self.open_dir()?;
-        let mut file = options.open(&self.path)?;
-        file.lock()?;
+        let mut file = self.open_locked(&options)?;
         let len = file.metadata()?.len();
         let mut checked = self.checked();
         // A frame cut short by a crash would swallow this one: end the file
@@ -196,7 +195,16 @@ impl PendingLog {
         let whole = if *checked == Some(len) {
             len
         } else {
-            whole_frames(&mut file)?
+            match whole_frames(&mut file)? {
+                Frames::Whole(at) => at,
+                // A length no frame has, before the end: what follows it
+                // cannot be framed, and cutting it would lose it. The file
+                // is set aside as it is, and a new one started.
+                Frames::Damaged(good) => {
+                    file = self.set_aside(file, &options, good)?;
+                    good
+                }
+            }
         };
         if whole != len {
             file.set_len(whole)?;
@@ -210,6 +218,55 @@ impl PendingLog {
         file.sync_data()?;
         *checked = Some(whole + frame.len() as u64);
         Ok(true)
+    }
+
+    /// The file at the path, locked. Another process may have set the file
+    /// aside while this one waited for the lock: then the lock is on the
+    /// old file, and the frame belongs in the new one.
+    fn open_locked(&self, options: &std::fs::OpenOptions) -> Result<std::fs::File, HistoryError> {
+        let mut file = options.open(&self.path)?;
+        file.lock()?;
+        #[cfg(unix)]
+        for _ in 0..3 {
+            use std::os::unix::fs::MetadataExt;
+            let held = file.metadata()?;
+            match std::fs::metadata(&self.path) {
+                Ok(named) if named.ino() == held.ino() && named.dev() == held.dev() => break,
+                _ => {
+                    file = options.open(&self.path)?;
+                    file.lock()?;
+                }
+            }
+        }
+        Ok(file)
+    }
+
+    /// Sets a damaged file aside as it is, as `history.pending.<ms>.damaged`,
+    /// and starts a new one holding the `good` bytes of whole frames before
+    /// the damage. Returns the new file, locked.
+    fn set_aside(
+        &self,
+        mut file: std::fs::File,
+        options: &std::fs::OpenOptions,
+        good: u64,
+    ) -> Result<std::fs::File, HistoryError> {
+        let aside = self.path.with_extension(format!(
+            "pending.{}.damaged",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis())
+        ));
+        tracing::warn!(path = %aside.display(), "the pending history file is damaged; set aside");
+        let mut before = vec![0u8; usize::try_from(good).unwrap_or(0)];
+        file.seek(SeekFrom::Start(0))?;
+        file.read_exact(&mut before)?;
+        std::fs::rename(&self.path, &aside)?;
+        drop(file);
+        let mut file = options.open(&self.path)?;
+        file.lock()?;
+        file.set_len(0)?;
+        file.write_all(&before)?;
+        Ok(file)
     }
 
     /// Every entry `keys` opens, oldest first, and how many frames could not
@@ -233,7 +290,7 @@ impl PendingLog {
             }
             Err(e) => return Err(e.into()),
         }
-        Ok(open_frames(&bytes, keys))
+        Ok(open_frames(&bytes, &[keys]))
     }
 
     /// Opens every entry `keys` opens and hands them to `store`; once it
@@ -243,7 +300,7 @@ impl PendingLog {
     /// would not open. O(file).
     pub fn import(
         &self,
-        keys: &HistoryKeyPair,
+        keys: &[&HistoryKeyPair],
         store: &mut dyn FnMut(&[HistoryEntry]) -> Result<(), HistoryError>,
     ) -> Result<usize, HistoryError> {
         let mut file = match std::fs::OpenOptions::new()
@@ -291,12 +348,34 @@ impl PendingLog {
 /// Opens the whole frames at the start of `bytes`: the entries `keys`
 /// opens, how many would not open, and how many bytes they took. Stops at a
 /// short last frame, or at a length no frame has.
-fn open_frames(bytes: &[u8], keys: &HistoryKeyPair) -> Pending {
+/// One frame's plaintext, when `keys` sealed it.
+fn open_frame(frame: &[u8], keys: &HistoryKeyPair) -> Option<Zeroizing<Vec<u8>>> {
+    let mut secret = Zeroizing::new([0u8; 32]);
+    secret.copy_from_slice(keys.secret.as_bytes());
+    let mut ephemeral = [0u8; 32];
+    ephemeral.copy_from_slice(&frame[..32]);
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(&frame[32..HEADER]);
+    let shared = Zeroizing::new(MontgomeryPoint(ephemeral).mul_clamped(*secret).to_bytes());
+    let cipher = cipher(&shared, &ephemeral, &keys.public).ok()?;
+    cipher
+        .decrypt(
+            &XNonce::from(nonce),
+            Payload {
+                msg: &frame[HEADER..],
+                aad: AAD,
+            },
+        )
+        .ok()
+        .map(Zeroizing::new)
+}
+
+/// The entries in `bytes` any of `keys` opens: the current pair, and the
+/// one before a password change. O(frames · keys).
+fn open_frames(bytes: &[u8], keys: &[&HistoryKeyPair]) -> Pending {
     let mut entries = Vec::new();
     let mut unreadable = 0;
     let mut rest = bytes;
-    let mut secret = Zeroizing::new([0u8; 32]);
-    secret.copy_from_slice(keys.secret.as_bytes());
     while rest.len() >= 4 {
         let len = u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
         if !(HEADER + 16..=MAX_FRAME).contains(&len) {
@@ -309,23 +388,7 @@ fn open_frames(bytes: &[u8], keys: &HistoryKeyPair) -> Pending {
             break;
         };
         rest = &rest[4 + len..];
-        let mut ephemeral = [0u8; 32];
-        ephemeral.copy_from_slice(&frame[..32]);
-        let mut nonce = [0u8; 24];
-        nonce.copy_from_slice(&frame[32..HEADER]);
-        let shared = Zeroizing::new(MontgomeryPoint(ephemeral).mul_clamped(*secret).to_bytes());
-        let opened = cipher(&shared, &ephemeral, &keys.public).and_then(|cipher| {
-            cipher
-                .decrypt(
-                    &XNonce::from(nonce),
-                    Payload {
-                        msg: &frame[HEADER..],
-                        aad: AAD,
-                    },
-                )
-                .map_err(|_| HistoryError::WrongKey)
-        });
-        let Ok(plain) = opened.map(Zeroizing::new) else {
+        let Some(plain) = keys.iter().find_map(|pair| open_frame(frame, pair)) else {
             unreadable += 1;
             continue;
         };
@@ -372,19 +435,32 @@ fn remove_front(file: &mut std::fs::File, consumed: u64) -> Result<(), HistoryEr
 
 /// The length of the file's whole frames, from their headers. Stops at a
 /// frame that runs past the end or has a length no frame has.
-fn whole_frames(file: &mut std::fs::File) -> Result<u64, HistoryError> {
+/// Where the whole frames end, or that the file is damaged before then.
+enum Frames {
+    /// The end of the last whole frame; past it, at most a torn frame.
+    Whole(u64),
+    /// A frame's length no frame can have, after this many bytes of whole
+    /// frames.
+    Damaged(u64),
+}
+
+fn whole_frames(file: &mut std::fs::File) -> Result<Frames, HistoryError> {
     let len = file.metadata()?.len();
     let mut at = 0u64;
     let mut header = [0u8; 4];
     loop {
         if at + 4 > len {
-            return Ok(at);
+            return Ok(Frames::Whole(at));
         }
         file.seek(SeekFrom::Start(at))?;
         file.read_exact(&mut header)?;
         let frame = u64::from(u32::from_le_bytes(header));
-        if !(HEADER as u64 + 16..=MAX_FRAME as u64).contains(&frame) || at + 4 + frame > len {
-            return Ok(at);
+        if !(HEADER as u64 + 16..=MAX_FRAME as u64).contains(&frame) {
+            return Ok(Frames::Damaged(at));
+        }
+        // A whole length running past the end: a crash cut this frame.
+        if at + 4 + frame > len {
+            return Ok(Frames::Whole(at));
         }
         at += 4 + frame;
     }

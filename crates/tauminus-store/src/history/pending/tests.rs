@@ -126,3 +126,55 @@ fn clearing_keeps_what_was_appended_after_the_read() {
     assert_eq!(left.entries, [entry("late")]);
     let _ = std::fs::remove_dir_all(log.path().parent().unwrap());
 }
+
+#[test]
+fn entries_sealed_to_the_previous_pair_open_too() {
+    let log = log("previous");
+    let old = HistoryKeyPair::random().unwrap();
+    let new = HistoryKeyPair::random().unwrap();
+    assert!(log.append(&old.public(), &entry("before")).unwrap());
+    assert!(log.append(&new.public(), &entry("after")).unwrap());
+    let mut imported = Vec::new();
+    let unreadable = log
+        .import(&[&new, &old], &mut |entries| {
+            imported.extend(entries.iter().map(|e| e.command.clone()));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(unreadable, 0);
+    assert_eq!(imported, ["before", "after"]);
+    let _ = std::fs::remove_dir_all(log.path().parent().unwrap());
+}
+
+#[test]
+fn a_damaged_length_sets_the_file_aside_and_loses_nothing() {
+    let log = log("damaged");
+    let keys = HistoryKeyPair::random().unwrap();
+    for n in 0..3 {
+        assert!(
+            log.append(&keys.public(), &entry(&format!("cmd{n}")))
+                .unwrap()
+        );
+    }
+    // The second frame's length, made impossible.
+    let mut bytes = std::fs::read(log.path()).unwrap();
+    let first = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+    bytes[4 + first..8 + first].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::write(log.path(), &bytes).unwrap();
+    // Another process appends: the damaged file is kept whole, aside.
+    *log.checked() = None;
+    assert!(log.append(&keys.public(), &entry("cmd3")).unwrap());
+    let dir = log.path().parent().unwrap();
+    let aside: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|f| f.unwrap().path())
+        .filter(|p| p.to_string_lossy().ends_with(".damaged"))
+        .collect();
+    assert_eq!(aside.len(), 1);
+    assert_eq!(std::fs::read(&aside[0]).unwrap(), bytes);
+    // The whole frame before the damage stays, and the new one follows.
+    let read = log.read(&keys).unwrap();
+    let commands: Vec<_> = read.entries.iter().map(|e| e.command.as_str()).collect();
+    assert_eq!(commands, ["cmd0", "cmd3"]);
+    let _ = std::fs::remove_dir_all(dir);
+}

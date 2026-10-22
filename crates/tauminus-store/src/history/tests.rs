@@ -684,3 +684,47 @@ fn an_insert_stores_nothing_once_the_vault_closed() {
     assert!(!stored);
     assert_eq!(db.count().unwrap(), 0);
 }
+
+#[test]
+fn a_prune_stops_once_the_vault_locks() {
+    let dir = Dir::new("prune-lock");
+    let db = HistoryDb::open(&dir.db(), &SecretKey::random().unwrap()).unwrap();
+    sample(&db);
+    let before = db.count().unwrap();
+    let nothing = Retention {
+        max_bytes: 0,
+        max_days: 0,
+    };
+    assert_eq!(db.prune_while(nothing, NOW, &|| false).unwrap(), 0);
+    assert_eq!(db.count().unwrap(), before);
+    assert_eq!(db.prune_while(nothing, NOW, &|| true).unwrap(), before);
+}
+
+#[test]
+fn a_rekey_waits_for_the_file_to_be_free() {
+    let dir = Dir::new("rekey-busy");
+    let old = SecretKey::random().unwrap();
+    let new = SecretKey::random().unwrap();
+    let db = HistoryDb::open(&dir.db(), &old).unwrap();
+    sample(&db);
+    // Another connection is open: the file stays as it is.
+    assert!(matches!(
+        HistoryDb::rekey(&dir.db(), &old, &new),
+        Err(HistoryError::Busy)
+    ));
+    assert_eq!(db.count().unwrap(), 4);
+    drop(db);
+    HistoryDb::rekey(&dir.db(), &old, &new).unwrap();
+    assert!(matches!(
+        HistoryDb::open(&dir.db(), &old),
+        Err(HistoryError::WrongKey)
+    ));
+    let db = HistoryDb::open(&dir.db(), &new).unwrap();
+    assert_eq!(db.count().unwrap(), 4);
+    // Back on the write-ahead log.
+    let mode: String = db
+        .lock()
+        .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(mode, "wal");
+}

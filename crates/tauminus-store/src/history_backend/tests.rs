@@ -119,6 +119,7 @@ fn a_history_file_from_another_vault_is_set_aside() {
         database: zeroize::Zeroizing::new([byte; 32]),
         sealing: zeroize::Zeroizing::new([byte; 32]),
         public: [0; 32],
+        previous: Vec::new(),
     };
     let old = backend.open(&keys(1)).unwrap();
     old.insert(&[entry("old", "")], &|| true).unwrap();
@@ -137,5 +138,60 @@ fn a_history_file_from_another_vault_is_set_aside() {
         })
         .count();
     assert_eq!(set_aside, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_database_under_the_previous_key_moves_to_the_new_one() {
+    use tauminus_app::history::HistoryBackend;
+    use tauminus_app::vault::PreviousHistoryKeys;
+    let mut suffix = [0u8; 8];
+    rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut suffix).unwrap();
+    let dir = std::env::temp_dir().join(format!("tauminus-hist-rekey-{suffix:02x?}"));
+    let backend = FileHistoryBackend::new(&dir);
+    let keys = |byte, previous: &[u8]| HistoryKeys {
+        database: zeroize::Zeroizing::new([byte; 32]),
+        sealing: zeroize::Zeroizing::new([byte; 32]),
+        public: [0; 32],
+        previous: previous
+            .iter()
+            .map(|&old| PreviousHistoryKeys {
+                database: zeroize::Zeroizing::new([old; 32]),
+                sealing: zeroize::Zeroizing::new([old; 32]),
+            })
+            .collect(),
+    };
+    let db = backend.open(&keys(1, &[])).unwrap();
+    db.insert(&[entry("kept across the change", "")], &|| true)
+        .unwrap();
+    drop(db);
+    // As after two password changes the history did not see: new keys,
+    // and both older generations kept, newest first.
+    let db = backend.open(&keys(3, &[2, 1])).unwrap();
+    let hits = db
+        .search(&HistoryQuery {
+            limit: 10,
+            ..HistoryQuery::default()
+        })
+        .unwrap();
+    assert_eq!(hits.len(), 1, "the rows moved with the key");
+    drop(db);
+    let old = SecretKey::from_bytes(&[1; 32]).unwrap();
+    assert!(matches!(
+        HistoryDb::open(&dir.join("history.db"), &old),
+        Err(DbError::WrongKey)
+    ));
+    // Nothing was set aside.
+    let aside = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter(|f| {
+            f.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains("unreadable")
+        })
+        .count();
+    assert_eq!(aside, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
