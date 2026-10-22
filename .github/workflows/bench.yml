@@ -30,11 +30,16 @@ concurrency:
 
 jobs:
   bench:
-    name: Bench (${{ matrix.os }})
+    name: Bench (${{ matrix.os }}, ${{ matrix.renderer }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, macos-latest, windows-latest]
+        renderer: [auto]
+        # macOS uses WebGL by default; the DOM run shows what the VM's GPU costs.
+        include:
+          - os: macos-latest
+            renderer: dom
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:
@@ -67,6 +72,7 @@ jobs:
         shell: bash
         env:
           VITE_TAUMINUS_BENCH: "1"
+          VITE_TAUMINUS_RENDERER: ${{ matrix.renderer }}
         run: |
           (cd apps/desktop && pnpm install --frozen-lockfile && pnpm exec vite build)
           cargo build --release --locked -p tauminus-desktop --features tauri/custom-protocol
@@ -123,7 +129,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: bench-${{ matrix.os }}
+          name: bench-${{ matrix.os }}-${{ matrix.renderer }}
           path: bench-out
           if-no-files-found: ignore
 
