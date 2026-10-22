@@ -28,6 +28,10 @@ const shell = new AppShell({
 });
 shell.workspace.newTab();
 void shell.hosts.load();
+// Only a benchmark build has this flag; other builds drop the import.
+if (import.meta.env.VITE_TAUMINUS_BENCH === "1") {
+  void import("@/bench/run.ts").then(({ runBenchmark }) => runBenchmark(shell));
+}
 
 createRoot(root).render(
   <StrictMode>

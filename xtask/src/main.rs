@@ -11,6 +11,8 @@ use std::process::{Command, ExitCode};
 
 use anyhow::{Context, Result, bail};
 
+mod flood;
+
 const BINDINGS: &str = "apps/desktop/src/ipc/bindings.ts";
 
 const HELP: &str = "\
@@ -22,10 +24,16 @@ Tasks:
   deps      Check that inner layers depend only on what they are allowed to
   web       Frontend format check, lint, type check, and tests
   bindings  Regenerate the TypeScript IPC bindings
+  flood     Benchmark output: flood text <MiB> | yes <seconds> | report <hex>
 ";
 
 fn main() -> ExitCode {
-    match run(std::env::args().nth(1).as_deref()) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
+        Some("flood") => flood::run(&args[1..]),
+        task => run(task),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             #[expect(clippy::print_stderr, reason = "a CLI reports failures on stderr")]
