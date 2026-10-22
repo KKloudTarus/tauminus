@@ -333,12 +333,15 @@ function taskPoster(): (task: () => void) => void {
 
 /**
  * Sizes for every terminal in the window. A 6 ms turn leaves most of a
- * 16.7 ms frame to paint and to handle input, and 4 KiB chunks bound how far
- * a turn overshoots. No legitimate 4 KiB chunk takes 250 ms to parse, and a
- * stall that is only a slow lane costs it no more than a turn boundary.
+ * 16.7 ms frame to paint and to handle input. 1 KiB chunks bound how far a
+ * turn overshoots: on the 3-core macOS runner a 4 KiB chunk of wrapped text
+ * took long enough that two in flight stretched turns past a frame, and 1 KiB
+ * cost about 3% of throughput on Linux. No legitimate chunk takes 250 ms to
+ * parse, and a stall that is only a slow lane costs it no more than a turn
+ * boundary.
  */
 export const outputScheduler = new OutputScheduler({
-  slice: 4 * 1024,
+  slice: 1024,
   direct: 4 * 1024,
   turnMs: 6,
   stallMs: 250,
