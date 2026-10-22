@@ -7,5 +7,7 @@ extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg
 [default.extend-words]
 # mke2fs, the ext2/3/4 formatter
 mke = "mke"
+# zsh's backward incremental search prompt, bck-i-search
+bck = "bck"
 # Proper names and protocol terms
 tauminus = "tauminus"
