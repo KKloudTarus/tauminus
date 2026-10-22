@@ -137,17 +137,34 @@ test("opens a link only on Ctrl+click, and only http and https", async ({ page }
   await expect(screen).toContainText("https://example.com/docs");
   const terminal = focusedPane(page).locator(".xterm");
   const opened = () => page.evaluate(() => window.tauminusOpenedLinks ?? []);
+  // A point inside `text` on screen. xterm.js may split a word across spans
+  // (a hovered link, a selection), so this walks the spans of the row.
   const pointAt = async (text: string) => {
-    const box = await screen.locator("span", { hasText: text }).last().boundingBox();
-    if (!box) throw new Error(`no ${text} on screen`);
-    const row = { x: box.x, y: box.y + box.height / 2 };
-    // Find the text's column in the row, one cell at a time.
-    const offset =
-      (await screen.locator("span", { hasText: text }).last().textContent())?.indexOf(text) ?? 0;
-    const cell =
-      box.width /
-      ((await screen.locator("span", { hasText: text }).last().textContent())?.length ?? 1);
-    return { x: row.x + (offset + 1) * cell, y: row.y };
+    const row = screen.locator("> div", { hasText: text }).last();
+    const spans = await row.locator("span").evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const box = node.getBoundingClientRect();
+        return {
+          text: node.textContent ?? "",
+          x: box.x,
+          y: box.y,
+          width: box.width,
+          height: box.height,
+        };
+      }),
+    );
+    const line = spans.map((span) => span.text).join("");
+    const at = line.indexOf(text);
+    if (at < 0) throw new Error(`no ${text} on screen`);
+    let start = 0;
+    for (const span of spans) {
+      if (at < start + span.text.length) {
+        const cell = span.width / span.text.length;
+        return { x: span.x + (at - start + 1.5) * cell, y: span.y + span.height / 2 };
+      }
+      start += span.text.length;
+    }
+    throw new Error(`no ${text} on screen`);
   };
   const { x, y } = await pointAt("example.com");
 
