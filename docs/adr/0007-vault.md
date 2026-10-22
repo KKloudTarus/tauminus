@@ -116,5 +116,6 @@ POSIX `sh` (Windows OpenSSH) reports the failure.
   vault. The setup dialog says so.
 - The keychain slot is as strong as the user's OS login. The settings say so
   next to the switch.
-- Biometric unlock (Touch ID, Windows Hello) will be a keychain slot whose
-  entry the OS guards with biometrics.
+- Unlocking with the keychain can ask for Touch ID, Windows Hello, or polkit
+  first (ADR 0009). That check guards the app's own unlock; keys the OS
+  guards with biometrics wait for signed builds and a tested Hello slot.

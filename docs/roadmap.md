@@ -102,7 +102,7 @@ Vault
 
 - [x] Vault file: Argon2id key derivation, ChaCha20-Poly1305 per record
 - [x] Master password unlock, OS keychain unlock, auto-lock after idle time
-- [ ] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit
+- [x] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit (ADR 0009)
 - [x] Identities: reusable user, password, and key bundles
 - [x] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
 
