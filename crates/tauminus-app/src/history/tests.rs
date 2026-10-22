@@ -275,3 +275,20 @@ async fn a_vault_past_its_idle_time_gives_no_history() {
     assert_eq!(history.search(query("")).await, Err(HistoryError::Locked));
     assert_eq!(history.record(entry("after")).await, Ok(Recorded::Sealed));
 }
+
+#[tokio::test]
+async fn a_lock_the_follower_missed_still_closes_the_database() {
+    let (memory, vault, history) = history(Retention::default()).await;
+    vault.create(secret("correct horse")).await.unwrap();
+    history.search(query("")).await.unwrap();
+    assert_eq!(*memory.opened.lock().unwrap(), 1);
+    // No yield between them: the follower sees neither.
+    vault.lock().await;
+    vault.unlock(secret("correct horse")).await.unwrap();
+    history.search(query("")).await.unwrap();
+    assert_eq!(
+        *memory.opened.lock().unwrap(),
+        2,
+        "the database of the earlier session was reused"
+    );
+}

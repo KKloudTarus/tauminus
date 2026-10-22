@@ -218,6 +218,8 @@ struct State {
     /// Counts locks, so an unlock that was still deriving its key when the
     /// user locked does not open the vault after all.
     locks: u64,
+    /// Counts unlocks: each time the vault opens, a new session.
+    sessions: u64,
     /// Whether the vault is open, for whoever follows it (the history).
     unlocked: watch::Sender<bool>,
 }
@@ -250,6 +252,7 @@ impl Vault {
                 unlocked: watch::Sender::new(false),
                 idle: idle.clamp(MIN_IDLE, MAX_IDLE),
                 locks: 0,
+                sessions: 0,
             }),
             kdf: Mutex::new(()),
         });
@@ -266,9 +269,16 @@ impl Vault {
     /// Whether the vault is open now: past its idle time it locks first,
     /// so a wake from suspend cannot read a vault that should be locked.
     pub async fn is_open(&self) -> bool {
+        self.session().await.is_some()
+    }
+
+    /// Which unlock the vault is open from, now: past its idle time it
+    /// locks first. `None` while locked. A lock and an unlock in between
+    /// give a new number, even to a follower that saw neither.
+    pub async fn session(&self) -> Option<u64> {
         let mut state = self.state.lock().await;
         state.expire();
-        state.open.is_some()
+        state.open.is_some().then_some(state.sessions)
     }
 
     pub async fn status(&self) -> VaultStatus {
@@ -545,6 +555,7 @@ impl Vault {
     async fn keep(&self, vault: Box<dyn OpenVault>, locks: u64) {
         let mut state = self.state.lock().await;
         if state.locks == locks {
+            state.sessions += 1;
             state.open = Some(Open {
                 vault,
                 used: Used::now(),
