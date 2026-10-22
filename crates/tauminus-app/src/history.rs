@@ -90,7 +90,8 @@ pub trait HistoryBackend: Send + Sync + 'static {
 }
 
 struct State {
-    db: Option<Arc<dyn HistoryStore>>,
+    /// The database, and the vault session it was opened in.
+    db: Option<(u64, Arc<dyn HistoryStore>)>,
     since_prune: u32,
 }
 
@@ -239,13 +240,19 @@ impl History {
         &self,
         state: &mut State,
     ) -> Result<Option<Arc<dyn HistoryStore>>, HistoryError> {
-        // The vault as it is now, idle time included, not as last told.
-        if !*self.unlocked.borrow() || !self.vault.is_open().await {
-            state.db = None;
-            return Ok(None);
-        }
-        if let Some(db) = &state.db {
-            return Ok(Some(Arc::clone(db)));
+        // The vault as it is now, idle time included, not as last told. A
+        // database from an earlier session closes, even when a lock and
+        // unlock came too close for the follower to see.
+        let session = match self.vault.session().await {
+            Some(session) if *self.unlocked.borrow() => session,
+            _ => {
+                state.db = None;
+                return Ok(None);
+            }
+        };
+        match &state.db {
+            Some((opened, db)) if *opened == session => return Ok(Some(Arc::clone(db))),
+            _ => state.db = None,
         }
         let keys = match self.vault.history_keys().await {
             Ok(keys) => keys,
@@ -265,7 +272,7 @@ impl History {
             Ok(db)
         })
         .await?;
-        state.db = Some(Arc::clone(&db));
+        state.db = Some((session, Arc::clone(&db)));
         self.prune(Arc::clone(&db));
         Ok(Some(db))
     }

@@ -588,3 +588,15 @@ async fn followers_see_every_lock_and_unlock() {
     open.changed().await.unwrap();
     assert!(!*open.borrow_and_update());
 }
+
+#[tokio::test]
+async fn each_unlock_is_a_new_session() {
+    let (_, vault) = vault();
+    assert_eq!(vault.session().await, None);
+    vault.create(secret("correct horse")).await.unwrap();
+    let first = vault.session().await.unwrap();
+    vault.lock().await;
+    assert_eq!(vault.session().await, None);
+    vault.unlock(secret("correct horse")).await.unwrap();
+    assert_ne!(vault.session().await.unwrap(), first);
+}
