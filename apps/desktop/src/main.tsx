@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/app/App.tsx";
 import { AppShell } from "@/app/shell.ts";
-import { hostsClient, linkOpener, sessionClient } from "@/ipc/index.ts";
+import { hostsClient, linkOpener, sessionClient, textClipboard } from "@/ipc/index.ts";
 import "@/app/styles.css";
 
 const root = document.getElementById("root");
@@ -22,7 +22,7 @@ const shell = new AppShell({
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),
   root: document.documentElement,
-  clipboard: navigator.clipboard,
+  clipboard: await textClipboard(),
   // End-to-end tests read the screen from the DOM renderer; a benchmark
   // build may pin one to compare them.
   renderer: import.meta.env.MODE === "e2e" ? "dom" : rendererOverride(),

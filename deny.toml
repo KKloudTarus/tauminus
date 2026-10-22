@@ -33,6 +33,8 @@ allow = [
   "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
+  # clipboard-win and error-code, arboard's Windows backend.
+  "BSL-1.0",
   "CC0-1.0",
   "GPL-3.0-or-later",
   "ISC",
@@ -55,6 +57,7 @@ allow-wildcard-paths = true
 deny = [
   { crate = "portable-pty", wrappers = ["tauminus-pty"], reason = "only the PTY adapter talks to the OS pseudo-terminal" },
   { crate = "russh", wrappers = ["tauminus-ssh"], reason = "only the SSH adapter speaks the SSH protocol" },
+  { crate = "arboard", wrappers = ["tauminus-desktop"], reason = "the OS clipboard belongs to the desktop shell" },
   { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
   { crate = "specta", wrappers = ["tauminus-desktop", "tauri", "tauri-specta", "specta-typescript", "specta-serde", "specta-util"], reason = "IPC types live in the desktop shell" },
 ]

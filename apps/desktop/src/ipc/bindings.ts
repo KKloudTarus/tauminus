@@ -53,6 +53,9 @@ export const commands = {
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**  Opens an `http` or `https` link in the default browser. */
 	openLink: (url: string) => typedError<null, CommandError>(__TAURI_INVOKE("open_link", { url })),
+	/**  The clipboard's text, or "" when it holds none. */
+	clipboardReadText: () => typedError<string, CommandError>(__TAURI_INVOKE("clipboard_read_text")),
+	clipboardWriteText: (text: string) => typedError<null, CommandError>(__TAURI_INVOKE("clipboard_write_text", { text })),
 };
 
 /* Types */

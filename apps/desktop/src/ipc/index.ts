@@ -3,6 +3,7 @@
 
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
+import type { TextClipboard } from "./clipboard.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
 import type { SessionClient } from "./sessions.ts";
@@ -18,6 +19,7 @@ export {
   type SettingsSpec,
   tauriHosts,
 } from "./hosts.ts";
+export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
 export { type LinkOpener, tauriLinks } from "./links.ts";
 export {
   type AnswerSpec,
@@ -61,4 +63,12 @@ export async function linkOpener(): Promise<LinkOpener> {
     return (await import("./fake-links.ts")).fakeLinks;
   }
   return (await import("./links.ts")).tauriLinks;
+}
+
+/** The clipboard; the `e2e` build, in a plain browser, uses the browser's. */
+export async function textClipboard(): Promise<TextClipboard | undefined> {
+  if (import.meta.env.MODE === "e2e") {
+    return globalThis.navigator?.clipboard;
+  }
+  return (await import("./clipboard.ts")).tauriClipboard;
 }

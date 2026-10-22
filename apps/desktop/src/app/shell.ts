@@ -13,7 +13,14 @@ import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
-import type { HostView, HostsClient, LinkOpener, SessionClient, SessionSpec } from "@/ipc/index.ts";
+import type {
+  HostView,
+  HostsClient,
+  LinkOpener,
+  SessionClient,
+  SessionSpec,
+  TextClipboard,
+} from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
@@ -71,7 +78,7 @@ export class AppShell {
     userAgent: string;
     storage: Storage | undefined;
     root: HTMLElement;
-    clipboard: Pick<Clipboard, "readText" | "writeText"> | undefined;
+    clipboard: TextClipboard | undefined;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -120,7 +127,7 @@ export class AppShell {
 
   readonly #storage: Storage | undefined;
   readonly #root: HTMLElement;
-  readonly #clipboard: Pick<Clipboard, "readText" | "writeText"> | undefined;
+  readonly #clipboard: TextClipboard | undefined;
 
   subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
