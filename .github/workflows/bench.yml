@@ -1,0 +1,126 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# The v0.1 performance criteria on all three webviews: WebKitGTK on Linux,
+# WKWebView on macOS, WebView2 on Windows. A benchmark build of the app runs
+# its own workload (apps/desktop/src/bench/run.ts) while ci/bench.sh or
+# ci/bench.ps1 samples memory; the job summary has the results, which go
+# into docs/benchmarks.md by hand. On Linux and macOS, ci/idle.sh also
+# measures Termius idle on the same runner. It runs by hand, or when the
+# benchmark itself changes: a run takes about half an hour per platform.
+
+name: Bench
+
+on:
+  workflow_dispatch:
+  # Also when the benchmark itself changes, so a change to it is seen to run.
+  pull_request:
+    paths:
+      - .github/workflows/bench.yml
+      - ci/bench*
+      - ci/idle.sh
+      - apps/desktop/src/bench/**
+      - xtask/src/flood.rs
+
+permissions: {}
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Bench (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev xvfb xdotool
+
+      # rustup reads rust-toolchain.toml and installs the pinned compiler.
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      # No caches: a benchmark should not depend on what an earlier run left.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Build the benchmark app
+        shell: bash
+        env:
+          VITE_TAUMINUS_BENCH: "1"
+        run: |
+          (cd apps/desktop && pnpm install --frozen-lockfile && pnpm exec vite build)
+          cargo build --release --locked -p tauminus-desktop --features tauri/custom-protocol
+          cargo build --release --locked -p xtask
+
+      - name: Run the benchmark (Linux)
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+        run: |
+          xvfb-run -a -s "-screen 0 1280x800x24" bash -c '
+            bash ci/bench.sh target/release/tauminus-desktop target/release bench-out &&
+            bash ci/idle.sh tauminus Tauminus bench-out target/release/tauminus-desktop'
+          cat bench-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the benchmark (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          bash ci/bench.sh target/release/tauminus-desktop target/release bench-out
+          bash ci/idle.sh tauminus Tauminus bench-out target/release/tauminus-desktop
+          cat bench-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the benchmark (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh ci/bench.ps1 target/release/tauminus-desktop.exe target/release bench-out
+          Get-Content bench-out/summary.md | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      # Termius publishes no checksums, so its version is printed instead. It
+      # runs on a throwaway runner that holds no secrets.
+      - name: Measure Termius idle (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL -o termius.deb https://www.termius.com/download/linux/Termius.deb
+          dpkg-deb --field termius.deb Version
+          dpkg-deb -x termius.deb termius
+          xvfb-run -a -s "-screen 0 1280x800x24" \
+            bash ci/idle.sh termius Termius bench-out termius/opt/Termius/termius-app --no-sandbox
+          { echo; echo "Idle on this runner:"; cat bench-out/idle-*.json; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Measure Termius idle (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          curl -fsSL -o termius.dmg https://www.termius.com/download/mac/Termius.dmg
+          hdiutil attach -nobrowse -mountpoint termius-volume termius.dmg
+          defaults read "$PWD/termius-volume/Termius.app/Contents/Info" CFBundleShortVersionString
+          bash ci/idle.sh termius Termius bench-out termius-volume/Termius.app/Contents/MacOS/Termius
+          { echo; echo "Idle on this runner:"; cat bench-out/idle-*.json; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Print the raw results
+        if: always()
+        shell: bash
+        run: |
+          for file in bench-out/report.json bench-out/summary.json bench-out/idle-*.json; do
+            [ -f "$file" ] && { echo "== $file"; cat "$file"; echo; }
+          done
+          true

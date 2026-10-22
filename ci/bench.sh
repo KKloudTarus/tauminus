@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Runs the in-app benchmark (apps/desktop/src/bench/run.ts) on Linux or macOS
+# and samples memory once a second while it runs.
+#
+#   ci/bench.sh <app binary> <dir with the xtask binary> <output dir>
+#
+# The app must be a benchmark build (VITE_TAUMINUS_BENCH=1). On Linux it runs
+# on the X display in $DISPLAY. On macOS WebKit runs its web content in XPC
+# processes that are not the app's children, so they are found by name; the
+# runner has no other WebKit app open.
+
+set -euo pipefail
+
+app=$1
+tools=$2
+out=$3
+mkdir -p "$out"
+rm -f "$out/report.json" "$out/samples.csv"
+
+now_ms() { python3 -c 'import time; print(int(time.time() * 1000))'; }
+
+# Prints the PIDs of $1 and all its descendants.
+tree() {
+  local pid=$1
+  echo "$pid"
+  for child in $(pgrep -P "$pid" || true); do
+    tree "$child"
+  done
+}
+
+rss_kib() {
+  local total=0
+  for pid in "$@"; do
+    total=$((total + $(ps -o rss= -p "$pid" 2> /dev/null || echo 0)))
+  done
+  echo "$total"
+}
+
+export PATH="$tools:$PATH"
+export TAUMINUS_BENCH_OUT="$out/report.json"
+now_ms > "$out/launched_ms"
+"$app" > "$out/app.log" 2>&1 &
+app_pid=$!
+
+timeout=$((SECONDS + 1200))
+while [ ! -s "$out/report.json" ] && [ $SECONDS -lt $timeout ] && kill -0 "$app_pid" 2> /dev/null; do
+  pids=$(tree "$app_pid")
+  if [ "$(uname)" = Darwin ]; then
+    web=$(pgrep -f 'com.apple.WebKit' || true)
+  else
+    # The app's children include its shells; only WebKit's processes count.
+    web=$(for pid in $pids; do
+      case $(ps -o comm= -p "$pid" 2> /dev/null) in WebKit*) echo "$pid" ;; esac
+    done)
+  fi
+  # shellcheck disable=SC2086 # word splitting turns the lists into arguments
+  echo "$(now_ms),$(rss_kib "$app_pid"),$(rss_kib $web)" >> "$out/samples.csv"
+  sleep 1
+done
+
+kill "$app_pid" 2> /dev/null || true
+wait "$app_pid" 2> /dev/null || true
+if [ ! -s "$out/report.json" ]; then
+  echo "the benchmark wrote no report; app log:" >&2
+  tail -50 "$out/app.log" >&2
+  exit 1
+fi
+python3 "$(dirname "$0")/bench_summary.py" "$out"
