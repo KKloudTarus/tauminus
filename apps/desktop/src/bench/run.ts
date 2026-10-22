@@ -62,7 +62,11 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<boolean
   return check();
 }
 
-/** Types one key and times it until the echo is parsed and painted. */
+/**
+ * Types one key and times it until the echo is parsed and painted, then
+ * erases it with a backspace, which every shell takes; cmd.exe has no
+ * Ctrl+U to clear a line.
+ */
 function probe(controller: TerminalController): Promise<number> {
   const { terminal } = controller;
   return new Promise((resolve) => {
@@ -72,6 +76,7 @@ function probe(controller: TerminalController): Promise<number> {
       written.dispose();
       rendered.dispose();
       clearTimeout(timer);
+      terminal.input("\u007f");
       resolve(value);
     };
     const written = terminal.onWriteParsed(() => {
@@ -119,7 +124,6 @@ async function scenario(
   while (performance.now() < until) {
     if (performance.now() > nextNote) {
       nextNote += 60_000;
-      quiet.terminal.input("\u0015");
       const last = tail(watched, 1).slice(0, 60);
       note(
         quiet,
@@ -136,8 +140,6 @@ async function scenario(
     await sleep(250);
   }
   running = false;
-  // Ctrl+U clears the probe keys from the quiet shell's line.
-  quiet.terminal.input("\u0015");
   return {
     name,
     startedAt,
