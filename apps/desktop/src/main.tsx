@@ -23,8 +23,9 @@ const shell = new AppShell({
   storage: safeLocalStorage(),
   root: document.documentElement,
   clipboard: navigator.clipboard,
-  // End-to-end tests read the screen from the DOM renderer.
-  renderer: import.meta.env.MODE === "e2e" ? "dom" : "auto",
+  // End-to-end tests read the screen from the DOM renderer; a benchmark
+  // build may pin one to compare them.
+  renderer: import.meta.env.MODE === "e2e" ? "dom" : rendererOverride(),
 });
 shell.workspace.newTab();
 void shell.hosts.load();
@@ -38,6 +39,11 @@ createRoot(root).render(
     <App shell={shell} />
   </StrictMode>,
 );
+
+function rendererOverride(): "auto" | "dom" | "webgl" {
+  const value = import.meta.env.VITE_TAUMINUS_RENDERER;
+  return value === "dom" || value === "webgl" ? value : "auto";
+}
 
 function safeLocalStorage(): Storage | undefined {
   try {

@@ -4,4 +4,6 @@
 interface ImportMetaEnv {
   /** "1" in a benchmark build; see src/bench/run.ts. */
   readonly VITE_TAUMINUS_BENCH?: string;
+  /** "dom" or "webgl" pins the terminal renderer at build time; else auto. */
+  readonly VITE_TAUMINUS_RENDERER?: string;
 }
