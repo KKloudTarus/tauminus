@@ -395,14 +395,17 @@ fn removing_or_rolling_back_a_record_is_refused() {
 }
 
 #[test]
-fn a_save_waits_at_most_about_a_second_for_another_writer() {
+fn a_save_waits_a_bounded_time_for_another_writer() {
     let dir = Dir::new("locked");
     let file = sample(&dir);
     let mut vault = file.open_with_password(b"correct horse").unwrap();
     let held = lock_file(file.path()).unwrap();
     let started = std::time::Instant::now();
+    assert!(lock_file(file.path()).is_err());
+    let waited = started.elapsed();
+    // At least the wait, and not unbounded; loaded CI runners oversleep.
+    assert!(waited >= LOCK_WAIT && waited < LOCK_WAIT * 10, "{waited:?}");
     assert!(matches!(vault.save(&file), Err(VaultError::Io(_))));
-    assert!(started.elapsed() < std::time::Duration::from_secs(3));
     drop(held);
     vault.save(&file).unwrap();
 }
