@@ -33,6 +33,13 @@ pub enum HistoryError {
     Invalid(String),
     #[error("the history: {0}")]
     Store(String),
+    /// The history is in use elsewhere for a moment; trying again works.
+    #[error("the history: {0}")]
+    Busy(String),
+    /// The vault holds older keys than the file: another window changed
+    /// the password. Unlocking again reads the newer vault.
+    #[error("the vault changed in another window; lock and unlock it to use the history")]
+    Stale,
 }
 
 impl From<VaultError> for HistoryError {
@@ -67,7 +74,14 @@ pub trait HistoryStore: Send + Sync {
     ) -> Result<bool, HistoryError>;
     fn search(&self, query: &HistoryQuery) -> Result<Vec<HistoryHit>, HistoryError>;
     fn output(&self, id: i64) -> Result<Option<String>, HistoryError>;
-    fn prune(&self, retention: Retention, now_ms: i64) -> Result<u64, HistoryError>;
+    /// Applies `retention`, stopping between chunks once `open` no longer
+    /// holds.
+    fn prune(
+        &self,
+        retention: Retention,
+        now_ms: i64,
+        open: &dyn Fn() -> bool,
+    ) -> Result<u64, HistoryError>;
     fn clear(&self, host: Option<&str>) -> Result<u64, HistoryError>;
 }
 
@@ -92,6 +106,11 @@ pub trait HistoryBackend: Send + Sync + 'static {
 struct State {
     /// The database, and the vault session it was opened in.
     db: Option<(u64, Arc<dyn HistoryStore>)>,
+    /// The vault session in which opening the database failed: it is not
+    /// tried again until the next unlock, since moving a large history to
+    /// a new key that failed (a full disk, say) would fail again, each
+    /// time rewriting the file. Commands are sealed meanwhile.
+    failed: Option<u64>,
     since_prune: u32,
 }
 
@@ -132,6 +151,7 @@ impl History {
             retention,
             state: Mutex::new(State {
                 db: None,
+                failed: None,
                 since_prune: 0,
             }),
             unlocked: open.clone(),
@@ -254,11 +274,28 @@ impl History {
             Some((opened, db)) if *opened == session => return Ok(Some(Arc::clone(db))),
             _ => state.db = None,
         }
+        if state.failed == Some(session) {
+            return Err(HistoryError::Store(
+                "the history did not open; it is tried again at the next unlock".into(),
+            ));
+        }
         let keys = match self.vault.history_keys().await {
             Ok(keys) => keys,
             Err(VaultError::Locked | VaultError::Missing) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        // The file says which key the newest vault seals to. Another window
+        // changed the password if it differs from this vault's: this copy's
+        // keys would take the history for another vault's and set it aside.
+        if self
+            .vault
+            .history_public()
+            .await
+            .is_some_and(|on_disk| on_disk != keys.public)
+        {
+            return Err(HistoryError::Stale);
+        }
+        let known = keys.previous.clone();
         let backend = Arc::clone(&self.backend);
         let db = blocking(move || {
             let db = backend.open(&keys)?;
@@ -271,7 +308,22 @@ impl History {
             }
             Ok(db)
         })
-        .await?;
+        .await
+        .inspect_err(|e| {
+            // Busy for a moment (another connection still open): try again
+            // on the next use. Anything else waits for the next unlock.
+            if !matches!(e, HistoryError::Busy(_)) {
+                state.failed = Some(session);
+            }
+        })?;
+        // The database and the pending entries are under the new keys now:
+        // the old ones can go, so an old copy of the vault opens nothing
+        // recorded from here on.
+        if !known.is_empty()
+            && let Err(e) = self.vault.forget_previous_history_keys(known).await
+        {
+            tracing::warn!(error = %e, "could not drop the history's old keys");
+        }
         state.db = Some((session, Arc::clone(&db)));
         self.prune(Arc::clone(&db));
         Ok(Some(db))
@@ -288,8 +340,11 @@ impl History {
         let pruning = Arc::clone(&self.pruning);
         let retention = self.retention;
         let now = self.backend.now_ms();
+        // A lock stops it between chunks, so its connection to the
+        // database, and the key, do not outlive the lock by more than one.
+        let unlocked = self.unlocked.clone();
         tokio::task::spawn_blocking(move || {
-            match db.prune(retention, now) {
+            match db.prune(retention, now, &|| *unlocked.borrow()) {
                 Ok(0) => {}
                 Ok(removed) => tracing::info!(removed, "history pruned"),
                 Err(e) => tracing::warn!(error = %e, "history prune failed"),

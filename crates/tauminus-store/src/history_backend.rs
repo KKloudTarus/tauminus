@@ -36,12 +36,11 @@ fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "map_err hands over the error by value"
-)]
 fn store_error(error: DbError) -> HistoryError {
-    HistoryError::Store(error.to_string())
+    match error {
+        DbError::Busy => HistoryError::Busy(error.to_string()),
+        other => HistoryError::Store(other.to_string()),
+    }
 }
 
 fn secret(bytes: &[u8; 32]) -> Result<SecretKey, HistoryError> {
@@ -69,8 +68,15 @@ impl HistoryStore for Open {
         self.0.output(id).map_err(store_error)
     }
 
-    fn prune(&self, retention: Retention, now_ms: i64) -> Result<u64, HistoryError> {
-        self.0.prune(retention, now_ms).map_err(store_error)
+    fn prune(
+        &self,
+        retention: Retention,
+        now_ms: i64,
+        open: &dyn Fn() -> bool,
+    ) -> Result<u64, HistoryError> {
+        self.0
+            .prune_while(retention, now_ms, open)
+            .map_err(store_error)
     }
 
     fn clear(&self, host: Option<&str>) -> Result<u64, HistoryError> {
@@ -81,9 +87,23 @@ impl HistoryStore for Open {
 impl HistoryBackend for FileHistoryBackend {
     /// A database the key does not open was made under another vault: it
     /// is set aside, renamed, and a new one started, so recording goes on.
+    /// After a password change the file may still be under the previous
+    /// key: it is moved to the current one first.
     fn open(&self, keys: &HistoryKeys) -> Result<Arc<dyn HistoryStore>, HistoryError> {
         let key = secret(&keys.database)?;
-        match HistoryDb::open(&self.db, &key) {
+        let mut opened = HistoryDb::open(&self.db, &key);
+        // Under one of the keys from before: the newest first.
+        for previous in &keys.previous {
+            if !matches!(opened, Err(DbError::WrongKey)) {
+                break;
+            }
+            let old = secret(&previous.database)?;
+            opened = HistoryDb::rekey(&self.db, &old, &key).and_then(|()| {
+                tracing::info!("history moved to the new key");
+                HistoryDb::open(&self.db, &key)
+            });
+        }
+        match opened {
             Ok(db) => Ok(Arc::new(Open(db))),
             Err(DbError::WrongKey) => {
                 let aside = self
@@ -122,11 +142,18 @@ impl HistoryBackend for FileHistoryBackend {
         store: &mut dyn FnMut(&[HistoryEntry]) -> Result<(), HistoryError>,
     ) -> Result<usize, HistoryError> {
         let pair = HistoryKeyPair::from_secret(secret(&keys.sealing)?);
+        // Entries sealed before a password change were sealed to an old pair.
+        let previous = keys
+            .previous
+            .iter()
+            .map(|previous| secret(&previous.sealing).map(HistoryKeyPair::from_secret))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pairs: Vec<&HistoryKeyPair> = std::iter::once(&pair).chain(&previous).collect();
         // The store's error crosses the file's own error type and back.
         let mut failed = None;
         let unreadable = self
             .pending
-            .import(&pair, &mut |entries| {
+            .import(&pairs, &mut |entries| {
                 store(entries).map_err(|e| {
                     let text = e.to_string();
                     failed = Some(e);

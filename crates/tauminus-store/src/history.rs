@@ -45,6 +45,9 @@ pub enum HistoryError {
     Io(#[from] std::io::Error),
     #[error("the history file is damaged: {0}")]
     Corrupt(String),
+    /// Another connection has the file open; trying later works.
+    #[error("the history file is open elsewhere")]
+    Busy,
 }
 
 /// The open history database. Calls block on SQLite: run them off the
@@ -99,6 +102,36 @@ impl HistoryDb {
             conn: FairMutex::new(conn),
             reader: FairMutex::new(reader),
         })
+    }
+
+    /// Encrypts the database at `path` under `new` in place of `old`, as a
+    /// password change asks. SQLCipher rewrites every page in one write
+    /// transaction, under a rollback journal: the write-ahead log is
+    /// checkpointed and turned off first, which fails while any other
+    /// connection has the file open, so nothing reads it half rewritten. A
+    /// crash leaves it under one key or the other. O(file size), 12 to
+    /// 18 ms a MiB, with as much free disk again for the journal.
+    pub fn rekey(path: &Path, old: &SecretKey, new: &SecretKey) -> Result<(), HistoryError> {
+        let busy = || HistoryError::Busy;
+        let conn = connect(path, old)?;
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode = DELETE", [], |r| r.get(0))
+            .map_err(|_| busy())?;
+        if !mode.eq_ignore_ascii_case("delete") {
+            return Err(busy());
+        }
+        let statement = key_statement("rekey", new);
+        let rekeyed = conn.execute_batch(&statement);
+        // Back to the log, under whichever key the file is now.
+        let _ = conn.query_row("PRAGMA journal_mode = WAL", [], |r| r.get::<_, String>(0));
+        if rekeyed.is_err() {
+            // The error may quote the statement: say only what failed.
+            return Err(HistoryError::Corrupt(
+                "the history could not be re-encrypted".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Adds `entries` in one transaction, stored at `now_ms`. O(k) rows
@@ -243,6 +276,17 @@ impl HistoryDb {
     /// by triggers, so a history under its cap costs O(1); dropping k rows
     /// costs O(k), in chunks that let recording and searching in between.
     pub fn prune(&self, retention: Retention, now_ms: i64) -> Result<u64, HistoryError> {
+        self.prune_while(retention, now_ms, &|| true)
+    }
+
+    /// As [`HistoryDb::prune`], stopping between chunks once `open` no
+    /// longer holds: a vault locked meanwhile leaves the rest for later.
+    pub fn prune_while(
+        &self,
+        retention: Retention,
+        now_ms: i64,
+        open: &dyn Fn() -> bool,
+    ) -> Result<u64, HistoryError> {
         let mut removed = 0;
         if retention.max_days > 0 {
             let cutoff = now_ms.saturating_sub(i64::from(retention.max_days) * DAY_MS);
@@ -250,11 +294,12 @@ impl HistoryDb {
                 "DELETE FROM entries WHERE id IN (
                      SELECT id FROM entries INDEXED BY entries_at WHERE at < ?1 LIMIT ?2)",
                 cutoff,
+                open,
             )?;
         }
         let max = i64::try_from(retention.max_bytes).unwrap_or(i64::MAX);
         let mut chunk = Chunk::default();
-        loop {
+        while open() {
             let conn = self.lock();
             let started = Instant::now();
             let total: i64 = conn.query_row("SELECT bytes FROM stats", [], |r| r.get(0))?;
@@ -290,10 +335,18 @@ impl HistoryDb {
     /// the connection for one chunk at a time. With secure-delete on, each
     /// row's words leave the index too, which costs 1 to 30 ms a row on a
     /// large index, so chunks are sized by the time they take.
-    fn delete_chunks(&self, sql: &str, param: impl rusqlite::ToSql) -> Result<usize, HistoryError> {
+    fn delete_chunks(
+        &self,
+        sql: &str,
+        param: impl rusqlite::ToSql,
+        open: &dyn Fn() -> bool,
+    ) -> Result<usize, HistoryError> {
         let mut removed = 0;
         let mut chunk = Chunk::default();
         loop {
+            if !open() {
+                return Ok(removed);
+            }
             let conn = self.lock();
             let started = Instant::now();
             let n = conn
@@ -325,6 +378,7 @@ impl HistoryDb {
                 "DELETE FROM entries WHERE id IN (
                      SELECT id FROM entries INDEXED BY entries_host WHERE host = ?1 LIMIT ?2)",
                 host,
+                &|| true,
             );
             // Whatever happened, word-by-word deletion comes back on and the
             // index is merged, which drops the deleted rows' words. The
@@ -369,23 +423,32 @@ impl HistoryDb {
     }
 }
 
+/// `PRAGMA <pragma> = "x'<hex>'"` for a raw 256-bit key, in a buffer wiped
+/// when dropped.
+fn key_statement(pragma: &str, key: &SecretKey) -> Zeroizing<String> {
+    let mut statement = Zeroizing::new(String::with_capacity(84));
+    let _ = write!(statement, "PRAGMA {pragma} = \"x'");
+    for b in key.as_bytes() {
+        let _ = write!(statement, "{b:02x}");
+    }
+    statement.push_str("'\";");
+    statement
+}
+
 /// A connection to the database at `path`, keyed and set up. Only "not a
 /// database" means the wrong key.
 fn connect(path: &Path, key: &SecretKey) -> Result<Connection, HistoryError> {
     let conn = Connection::open(path)?;
     // The raw key, so SQLCipher runs no KDF of its own: the vault's
-    // Argon2id already guards it. The statement lives in a wiped
-    // buffer, and no error from it is passed on, since SQLite quotes
-    // the statement in some errors.
-    let mut statement = Zeroizing::new(String::with_capacity(80));
-    statement.push_str("PRAGMA key = \"x'");
-    for b in key.as_bytes() {
-        let _ = write!(statement, "{b:02x}");
-    }
-    statement.push_str("'\";");
+    // Argon2id already guards it. No error from it is passed on, since
+    // SQLite quotes the statement in some errors.
+    let statement = key_statement("key", key);
     if conn.execute_batch(&statement).is_err() {
         return Err(HistoryError::WrongKey);
     }
+    // SQLCipher 4's page format and KDF settings, pinned: a later SQLCipher
+    // with new defaults must still read the file, not set it aside.
+    conn.execute_batch("PRAGMA cipher_compatibility = 4;")?;
     // Only "not a database" means the wrong key; a busy or failing
     // disk is reported as itself.
     match conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {

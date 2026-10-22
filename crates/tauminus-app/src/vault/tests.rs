@@ -139,9 +139,14 @@ impl OpenVault for MemoryOpen {
             database: Zeroizing::new([1; 32]),
             sealing: Zeroizing::new([2; 32]),
             public: [3; 32],
+            previous: Vec::new(),
         };
         *slot = Some(keys.clone());
         Ok((keys, true))
+    }
+
+    fn forget_previous_history_keys(&mut self, _known: &[PreviousHistoryKeys]) -> bool {
+        false
     }
 
     fn save(&mut self) -> Result<(), VaultError> {

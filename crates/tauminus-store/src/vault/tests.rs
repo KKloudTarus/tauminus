@@ -194,7 +194,7 @@ fn changing_the_password_keeps_the_records() {
     let dir = Dir::new("change");
     let file = sample(&dir);
     let mut vault = file.open_with_password(b"correct horse").unwrap();
-    vault.change_password(b"battery staple").unwrap();
+    vault.change_password(b"battery staple", TEST_KDF).unwrap();
     vault.save(&file).unwrap();
     assert!(matches!(
         file.open_with_password(b"correct horse"),
@@ -215,7 +215,7 @@ fn changing_the_password_replaces_the_data_key() {
     vault
         .set_keychain_key(&SecretKey::random().unwrap(), SlotKind::Keychain)
         .unwrap();
-    vault.change_password(b"battery staple").unwrap();
+    vault.change_password(b"battery staple", TEST_KDF).unwrap();
     assert!(!vault.has_keychain_key());
     vault.save(&file).unwrap();
     let new = file.open_with_password(b"battery staple").unwrap();
@@ -241,7 +241,7 @@ fn a_save_never_replaces_another_windows_change() {
     let file = sample(&dir);
     let mut stale = file.open_with_password(b"correct horse").unwrap();
     let mut other = file.open_with_password(b"correct horse").unwrap();
-    other.change_password(b"battery staple").unwrap();
+    other.change_password(b"battery staple", TEST_KDF).unwrap();
     other.save(&file).unwrap();
     stale.put("id3", b"late".to_vec()).unwrap();
     assert!(matches!(stale.save(&file), Err(VaultError::Conflict)));
@@ -515,4 +515,20 @@ fn one_keychain_slot_at_a_time() {
         1
     );
     assert!(vault.set_keychain_key(&key, SlotKind::Password).is_err());
+}
+
+#[test]
+fn a_new_password_raises_low_costs_to_the_floor() {
+    let dir = Dir::new("raise");
+    let file = sample(&dir);
+    let mut vault = file.open_with_password(b"correct horse").unwrap();
+    let floor = Kdf {
+        memory_kib: TEST_KDF.memory_kib * 2,
+        iterations: TEST_KDF.iterations + 1,
+        parallelism: TEST_KDF.parallelism,
+    };
+    vault.change_password(b"battery staple", floor).unwrap();
+    vault.save(&file).unwrap();
+    let reopened = file.open_with_password(b"battery staple").unwrap();
+    assert_eq!(reopened.kdf, floor);
 }

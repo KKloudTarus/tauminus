@@ -265,8 +265,14 @@ pub trait OpenVault: Send {
     /// before it is used, or one that does not, under a fresh key.
     fn set_presence(&mut self, on: bool) -> Result<(), VaultError>;
     /// The history's keys, made on first use. `true` when they were just
-    /// made and the vault must be saved.
+    /// made and the vault must be saved. A password change replaces them,
+    /// keeping the old ones as `previous` until the history has moved.
     fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError>;
+    /// Drops the given generations of the history's earlier keys, once the
+    /// history no longer needs them; generations added since (a password
+    /// change while the history moved) stay. `true` when the vault must be
+    /// saved.
+    fn forget_previous_history_keys(&mut self, known: &[PreviousHistoryKeys]) -> bool;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
@@ -279,6 +285,24 @@ pub struct HistoryKeys {
     pub database: Zeroizing<[u8; 32]>,
     pub sealing: Zeroizing<[u8; 32]>,
     pub public: [u8; 32],
+    /// The keys before each password change since the history last moved
+    /// to the current ones, newest first: the database may still be under
+    /// one of them, and entries sealed while locked may be sealed to any.
+    pub previous: Vec<PreviousHistoryKeys>,
+}
+
+/// The history's keys before a password change. Wiped when dropped.
+#[derive(Clone)]
+pub struct PreviousHistoryKeys {
+    pub database: Zeroizing<[u8; 32]>,
+    pub sealing: Zeroizing<[u8; 32]>,
+}
+
+impl std::fmt::Debug for PreviousHistoryKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreviousHistoryKeys")
+            .finish_non_exhaustive()
+    }
 }
 
 impl std::fmt::Debug for HistoryKeys {
@@ -653,22 +677,31 @@ impl Vault {
         // Proves the user knows the current password, not only that the
         // vault was left unlocked.
         blocking(move || backend.unlock(&current).map(drop)).await?;
-        self.with_open(move |vault| {
-            // A step that fails partway leaves the open copy half changed.
-            vault.change_password(&next).map_err(|error| Failed {
-                error,
-                discard: true,
-            })?;
-            match saved(vault) {
-                Ok(()) => Ok(None),
-                Err(Failed {
-                    error: VaultError::KeychainUnavailable(reason),
-                    ..
-                }) => Ok(Some(reason)),
-                Err(failed) => Err(failed),
-            }
-        })
-        .await
+        let changed = self
+            .with_open(move |vault| {
+                // A step that fails partway leaves the open copy half changed.
+                vault.change_password(&next).map_err(|error| Failed {
+                    error,
+                    discard: true,
+                })?;
+                match saved(vault) {
+                    Ok(()) => Ok(None),
+                    Err(Failed {
+                        error: VaultError::KeychainUnavailable(reason),
+                        ..
+                    }) => Ok(Some(reason)),
+                    Err(failed) => Err(failed),
+                }
+            })
+            .await;
+        // The history's keys changed with the password: a new session makes
+        // the history's next use reopen it and move it to them.
+        if changed.is_ok() {
+            let mut state = self.state.lock().await;
+            state.sessions += 1;
+            state.publish();
+        }
+        changed
     }
 
     /// Turning the keychain on needs the master password again: from then
@@ -699,6 +732,21 @@ impl Vault {
                 saved(vault)?;
             }
             Ok(keys)
+        })
+        .await
+    }
+
+    /// Drops the history's keys from before the last password change: the
+    /// history has moved to the new ones.
+    pub async fn forget_previous_history_keys(
+        &self,
+        known: Vec<PreviousHistoryKeys>,
+    ) -> Result<(), VaultError> {
+        self.with_open(move |vault| {
+            if vault.forget_previous_history_keys(&known) {
+                saved(vault)?;
+            }
+            Ok(())
         })
         .await
     }
