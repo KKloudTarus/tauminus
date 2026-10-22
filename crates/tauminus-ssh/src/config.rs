@@ -223,8 +223,12 @@ fn parse_ssh_g(alias: &str, output: &str) -> ConfigHost {
             // forwarding the default one instead would expose every key.
             // `no` is also what `ssh -G` prints when nothing sets it.
             "forwardagent" if value.eq_ignore_ascii_case("yes") => host.forward_agent = Some(true),
+            // OpenSSH before 9.x prints a repeated name again; the first
+            // value is the one ssh sends.
             "setenv" => {
-                if let Some((name, value)) = value.split_once('=') {
+                if let Some((name, value)) = value.split_once('=')
+                    && !host.set_env.iter().any(|(n, _)| n == name)
+                {
                     host.set_env.push((name.to_owned(), value.to_owned()));
                 }
             }
