@@ -70,7 +70,7 @@ Release
 ### Exit criteria
 
 - [x] `vim`, `htop`, `tmux`, `less`, and `mc` render and respond correctly over local and SSH sessions (checked by hand on WebKitGTK, including mouse clicks in `mc` and resizing a split)
-- [ ] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md` (all three measured in CI: Linux and Windows meet every target; on the macOS runner p99 latency meets it with the DOM renderer but not with WebGL on the emulated GPU, and frame drops cannot be judged because its virtual display stays below 60 Hz even idle; needs a run on a real Mac)
+- [x] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md` (WebKitGTK, WKWebView and WebView2 on GitHub runners, latency read at p99; see docs/benchmarks.md)
 - [x] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine (Linux and macOS runners; Termius's Windows download returned 404)
 - [x] Integration tests run `russh` against OpenSSH in CI for every auth method and ProxyJump (key files, encrypted keys, user certificates, agent, password and keyboard-interactive through PAM, ProxyJump and ProxyCommand)
 - [x] `known_hosts` parser passes a corpus of real-world files, including hashed and `@cert-authority` lines (GitHub's published keys, a file hashed by `ssh-keygen -H`, and a hand-edited file, each also checked against `ssh-keygen -F`)
