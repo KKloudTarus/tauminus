@@ -65,6 +65,7 @@ def main(directory):
             "completed": scenario["completed"],
             "seconds": round((scenario["endedAt"] - scenario["startedAt"]) / 1000, 1),
             "droppedPercent": round(scenario["droppedShare"] * 100, 1),
+            "fps": round(scenario["frames"] / max(0.001, (scenario["endedAt"] - scenario["startedAt"]) / 1000), 1),
             "maxGapMs": round(scenario["maxGapMs"]),
             "latencyMs": scenario["latencyMs"],
         }
@@ -101,15 +102,15 @@ def main(directory):
         lines.append(f"- Termius on the same runner: {json.dumps(summary['termius'])}")
     lines += [
         "",
-        "| Scenario | Done | Time | Dropped frames | Latency p50 / p95 / p99 / max | Webview RSS before / peak / after | Band after |",
-        "|---|---|---|---|---|---|---|",
+        "| Scenario | Done | Time | Frames per s | Dropped frames | Latency p50 / p95 / p99 / max | Webview RSS before / peak / after | Band after |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for entry in summary["scenarios"]:
         latency = entry["latencyMs"]
         web = entry.get("webMiB")
         memory = f"{web['before']} / {web['peak']} / {web['after']} MiB" if web else "n/a"
         lines.append(
-            f"| {entry['name']} | {'yes' if entry['completed'] else 'no'} | {entry['seconds']} s "
+            f"| {entry['name']} | {'yes' if entry['completed'] else 'no'} | {entry['seconds']} s | {entry['fps']} "
             f"| {entry['droppedPercent']}% | {ms(latency['p50'])} / {ms(latency['p95'])} / {ms(latency.get('p99'))} / {ms(latency['max'])} ms (n={latency['n']}) "
             f"| {memory} | {entry.get('webSettleBandMiB', 'n/a')} MiB |"
         )

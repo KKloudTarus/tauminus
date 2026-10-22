@@ -9,6 +9,7 @@
  * the first tab into four panes and runs `cargo xtask flood` in them, the
  * same output on every OS:
  *
+ * 0. 10 s with nothing to parse, the display's own frame pace;
  * 1. `flood text 500` in one pane, about 500 MiB of 120-column lines;
  * 2. `flood yes 60` in three panes at once, three rounds 30 s apart, so the
  *    memory samples show whether the webview keeps growing run after run.
@@ -193,6 +194,20 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
   await sleep(1000);
 
   const results: ScenarioResult[] = [];
+  // The display's own pace with nothing to parse: the baseline the other
+  // scenarios' frame counts are read against. A virtual display may not
+  // keep 60 Hz even idle.
+  const idleUntilAt = performance.now() + 10_000;
+  results.push(
+    await scenario(
+      "idle for 10 s",
+      quiet,
+      floods[0]!,
+      () => {},
+      () => performance.now() > idleUntilAt,
+      12_000,
+    ),
+  );
   const doneIn = (pane: TerminalController) => /flood-done/.test(tail(pane));
   results.push(
     await scenario(
