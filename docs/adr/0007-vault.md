@@ -28,8 +28,10 @@ every record. The file stores that key only wrapped, once per slot:
   Service on Linux).
 
 Changing the password also replaces the data key, so an old copy of the
-file and the old password open nothing saved afterwards. A keychain that
-was on gets a new key. Turning the keychain on asks for the master password again,
+file and the old password open nothing saved afterwards. The history's
+keys are replaced with it (ADR 0008), so the same old copy opens nothing
+the history records afterwards either. The Argon2id costs are raised to
+at least the defaults. A keychain that was on gets a new key. Turning the keychain on asks for the master password again,
 since the vault then opens without it. Turning it off removes its slot and
 its entry; the data key stays until the next password change. The keychain is
 written only after the file is saved, so its entry always opens the file
@@ -116,6 +118,11 @@ POSIX `sh` (Windows OpenSSH) reports the failure.
   vault. The setup dialog says so.
 - The keychain slot is as strong as the user's OS login. The settings say so
   next to the switch.
+- Decrypted records, the history's keys, and history rows live in ordinary
+  memory while the vault is open, and can reach swap or a crash dump; the
+  SQLCipher key pages are not locked in memory where the OS limits it.
+  A connect that took an identity's password or key before a lock keeps
+  using it until that connect ends.
 - Unlocking with the keychain can ask for Touch ID, Windows Hello, or polkit
   first (ADR 0009). That check guards the app's own unlock; keys the OS
   guards with biometrics wait for signed builds and a tested Hello slot.

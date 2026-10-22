@@ -118,7 +118,7 @@ Session
 - [x] Vault tests: round trip, wrong password, tampered ciphertext, truncated file
 - [x] Secrets never appear in logs, crash reports, or history (test scans the store and log files)
 - [x] History search over 1 million recorded lines returns in under 100 ms (benchmark in CI)
-- [ ] Security review of vault and history storage
+- [x] Security review of vault and history storage ([record](security-review-v0.2.md))
 
 ## v0.3: Files, tunnels, and more protocols
 
