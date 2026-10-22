@@ -92,6 +92,12 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+      # v0.2 exit criterion: a search over a million recorded lines answers
+      # in under 100 ms. Release build, Linux only; it fails over budget.
+      - name: History search benchmark
+        if: runner.os == 'Linux'
+        run: cargo test -p tauminus-store --release --locked -- --ignored a_million_lines --nocapture
+
       - name: Check generated IPC bindings are committed
         if: runner.os == 'Linux'
         run: git diff --exit-code -- apps/desktop/src/ipc/bindings.ts
