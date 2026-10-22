@@ -100,10 +100,10 @@ History
 
 Vault
 
-- [ ] Vault file: Argon2id key derivation, ChaCha20-Poly1305 per record
-- [ ] Master password unlock, OS keychain unlock, auto-lock after idle time
+- [x] Vault file: Argon2id key derivation, ChaCha20-Poly1305 per record
+- [x] Master password unlock, OS keychain unlock, auto-lock after idle time
 - [ ] Biometric unlock: Touch ID (macOS), Windows Hello; Linux falls back to keychain plus polkit
-- [ ] Identities: reusable user, password, and key bundles
+- [x] Identities: reusable user, password, and key bundles
 - [ ] Key generation (Ed25519, ECDSA, RSA), import, export public key to a server
 
 Session
@@ -115,7 +115,7 @@ Session
 
 - [x] Prod guard rule tests: at least 200 commands (dangerous and safe), zero false negatives on the dangerous set, false positive rate recorded
 - [x] Wrapped and obfuscated forms caught: `sudo`, `env`, `bash -c`, `;`, `&&`, `|`, `$(...)`, backticks
-- [ ] Vault tests: round trip, wrong password, tampered ciphertext, truncated file
+- [x] Vault tests: round trip, wrong password, tampered ciphertext, truncated file
 - [ ] Secrets never appear in logs, crash reports, or history (test scans the store and log files)
 - [ ] History search over 1 million recorded lines returns in under 100 ms (benchmark in CI)
 - [ ] Security review of vault and history storage

@@ -219,6 +219,22 @@ connection. The agent signs; no key leaves the machine. Anyone with root on
 the server can use those signatures while connected, and the host editor
 says so.
 
+### Vault
+
+`vault.json` holds identities (a user, a password, a private key, its
+passphrase) encrypted with XChaCha20-Poly1305 under one random data key.
+The master password (Argon2id) and, if the user turns it on, a key in the OS
+keychain each wrap that data key. A host or group names an identity; the
+nearest one wins. `host_connect` asks the vault for its credentials and
+fails with `vault_locked` while it is locked. The identity's key and
+password are tried on the last hop only, before any prompt. Secrets go into
+the backend and never come back to the view. Details in
+[ADR 0007](adr/0007-vault.md).
+
+Costs: unlocking runs Argon2id once (64 MiB, about 0.3 s) off the async
+workers. Listing, saving, and connecting decrypt the identity records, O(n)
+for n ≤ 1000 identities, and a save rewrites the file.
+
 ### Saved hosts
 
 A host sets what it needs and inherits the rest from its group, then from
