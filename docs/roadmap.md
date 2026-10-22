@@ -47,7 +47,7 @@ SSH
 - [x] SSH transport over `russh` 0.64 with the `ring` backend
 - [x] Auth: password, keyboard-interactive, Ed25519/ECDSA/RSA-SHA2 keys with passphrase (asked only for a key the server accepts), OpenSSH user certificates; restarts after partial success
 - [x] System ssh-agent: Unix socket and the Windows OpenSSH named pipe
-- [ ] Pageant
+- [x] Pageant (0.75 and later, through its per-user pipe; the pipe's owner is checked)
 - [x] ProxyJump chains up to 8 hops, each with its own host key check
 - [x] ProxyCommand
 - [x] SOCKS5 and HTTP CONNECT proxy, without proxy authentication
@@ -70,8 +70,8 @@ Release
 ### Exit criteria
 
 - [x] `vim`, `htop`, `tmux`, `less`, and `mc` render and respond correctly over local and SSH sessions (checked by hand on WebKitGTK, including mouse clicks in `mc` and resizing a split)
-- [ ] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md` (WebKitGTK measured: dropped frames and p95 latency pass; the worst single keystroke, 61 ms, and RSS after `cat` over SSH, +78 MB, do not; WKWebView and WebView2 to do)
-- [ ] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine (Tauminus on Linux recorded; Termius side to do)
+- [ ] `cat` of a 500 MB file and `yes` for 60 s with 4 panes open: no dropped frames above 5 percent, UI input latency under 50 ms, webview RSS stable within 50 MB after the run. Measured on all three webviews and recorded in `docs/benchmarks.md` (all three measured in CI: Linux and Windows meet every target; on the macOS runner p99 latency meets it with the DOM renderer but not with WebGL on the emulated GPU, and frame drops cannot be judged because its virtual display stays below 60 Hz even idle; needs a run on a real Mac)
+- [x] Idle app with one local tab: RSS and cold start time recorded next to Termius on the same machine (Linux and macOS runners; Termius's Windows download returned 404)
 - [x] Integration tests run `russh` against OpenSSH in CI for every auth method and ProxyJump (key files, encrypted keys, user certificates, agent, password and keyboard-interactive through PAM, ProxyJump and ProxyCommand)
 - [x] `known_hosts` parser passes a corpus of real-world files, including hashed and `@cert-authority` lines (GitHub's published keys, a file hashed by `ssh-keygen -H`, and a hand-edited file, each also checked against `ssh-keygen -F`)
 - [x] `~/.ssh/config` import matches `ssh -G` output for a corpus of at least 20 configs (33 today)
