@@ -156,6 +156,20 @@ describe("TerminalController with TerminalView", () => {
       .toBe("ls -la");
   });
 
+  it("removes escapes from inside a bracketed paste before the shell sees it", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    // The shell turns bracketed paste on, as bash and zsh do.
+    controller.terminal.write("\u001b[?2004h");
+    await vi.waitFor(() => expect(controller.terminal.modes.bracketedPasteMode).toBe(true));
+    controller.terminal.paste("echo a\u001b[201~ rm -rf ~");
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
+      .toContain("\u001b[200~echo a[201~ rm -rf ~\u001b[201~");
+  });
+
   it("acknowledges output once xterm.js has parsed it", async () => {
     const { sessions, controller } = setup();
     await mount(controller);
