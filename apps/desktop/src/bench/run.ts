@@ -9,7 +9,8 @@
  * the first tab into four panes and runs `cargo xtask flood` in them, the
  * same output on every OS:
  *
- * 0. 10 s with nothing to parse, the display's own frame pace;
+ * 0. 10 s with the UI hidden, then 10 s with nothing to parse: the
+ *    display's own frame pace, and the app's cost on top of it;
  * 1. `flood text 500` in one pane, about 500 MiB of 120-column lines;
  * 2. `flood yes 60` in three panes at once, three rounds 30 s apart, so the
  *    memory samples show whether the webview keeps growing run after run.
@@ -197,6 +198,22 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
   // The display's own pace with nothing to parse: the baseline the other
   // scenarios' frame counts are read against. A virtual display may not
   // keep 60 Hz even idle.
+  // The page's pace with the whole UI hidden: nothing of Tauminus to paint.
+  // Against the idle run it splits the display's limit from the app's cost.
+  const root = document.getElementById("root");
+  if (root) root.style.visibility = "hidden";
+  const blankUntil = performance.now() + 10_000;
+  results.push(
+    await scenario(
+      "blank page for 10 s",
+      quiet,
+      floods[0]!,
+      () => {},
+      () => performance.now() > blankUntil,
+      12_000,
+    ),
+  );
+  if (root) root.style.visibility = "";
   const idleUntilAt = performance.now() + 10_000;
   results.push(
     await scenario(
