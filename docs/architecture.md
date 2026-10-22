@@ -232,11 +232,24 @@ one. `ssh_open` refuses one from the view, and saving a host may keep a
 stored ProxyCommand but not add or change it; saved hosts connect through
 `host_connect`, which reads the target from the store.
 
+### Prod guard
+
+On a guarded host, `CommandGuard` in the view holds back Enter, reads the
+line from the screen (from a marker set when the user started typing, and
+the whole wrapped line), and sends both to `guard_check`. The backend reads
+the host's policy from `HostBook` and runs `Policy::check` in the domain: a
+lexer that never fails splits the line into every simple command it may
+run, and the rules check each. Findings come back to a dialog over the
+pane; Enter goes on only if the user picks Run. Later input waits behind
+the check, so keystrokes stay in order. Details in
+[ADR 0006](adr/0006-prod-guard.md) and [the guide](prod-guard.md).
+
 ### Complexity
 
 | Operation | Time | Space |
 |---|---|---|
 | Registry lookup per write, resize, or ack | O(1) expected | O(s) for s sessions |
+| Guard check of a line of n characters, w words | O(n·d + w·64) for nesting d ≤ 8, plus O(n·m) per pattern of m characters | O(n) |
 | Batching a chunk of c bytes | O(c); full chunks pass through uncopied, others are copied into the buffer and once more into the batch | O(F) per session |
 | Flow control update | O(1) | O(1) |
 | Input queue, n bytes in m chunks | O(n + m) | O(n) until sent |

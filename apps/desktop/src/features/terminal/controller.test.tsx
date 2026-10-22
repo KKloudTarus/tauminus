@@ -471,3 +471,120 @@ describe("TerminalController with TerminalView", () => {
     },
   );
 });
+
+function screenText(controller: TerminalController): string {
+  return controller.terminal.buffer.active.getLine(0)?.translateToString(true) ?? "";
+}
+
+describe("TerminalController with the prod guard", () => {
+  const HOST: SessionSpec = {
+    kind: "host",
+    hostId: "db",
+    label: "db-prod",
+    target: {
+      destination: { user: "ops", host: "db", port: 22 },
+      route: { kind: "direct" },
+    },
+  };
+
+  function guarded() {
+    const checked: string[] = [];
+    let listener: (() => void) | undefined;
+    const source = {
+      on: true,
+      active: () => source.on,
+      subscribe: (next: () => void) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+      check: async (lines: string[]) => {
+        checked.push(...lines);
+        const line = lines.find((l) => l.includes("rm -rf"));
+        return {
+          findings: line
+            ? [{ rule: "recursive-delete", reason: "deletes files recursively", command: line }]
+            : [],
+          incomplete: false,
+        };
+      },
+      toggle: (on: boolean) => {
+        source.on = on;
+        listener?.();
+      },
+    };
+    const { sessions, controller } = setup({ spec: HOST, guard: source });
+    // The shell echoes what it is sent, as a remote one does.
+    sessions.session.write.mockImplementation(async (data) => {
+      controller.terminal.write(data === "\r" ? "\r\n$ " : data);
+    });
+    return { sessions, controller, source, checked };
+  }
+
+  it("asks before Enter runs a dangerous line, and sends it only on Run", async () => {
+    const { sessions, controller, checked } = guarded();
+    const view = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.focus();
+    await userEvent.keyboard("rm -rf /srv");
+    await expect.poll(() => screenText(controller)).toBe("rm -rf /srv");
+    await userEvent.keyboard("{Enter}");
+
+    const dialog = view.getByTestId("guard-dialog");
+    await expect.element(dialog).toBeVisible();
+    await expect.element(view.getByTestId("guard-text")).toHaveTextContent("rm -rf /srv");
+    await expect.element(view.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(checked).toEqual(["rm -rf /srv"]);
+    expect(sessions.session.write.mock.calls.map(([data]) => data)).not.toContain("\r");
+
+    // A reflexive Enter lands on Cancel.
+    await userEvent.keyboard("{Enter}");
+    await expect.element(dialog).not.toBeInTheDocument();
+    expect(sessions.session.write.mock.calls.map(([data]) => data)).not.toContain("\r");
+
+    controller.focus();
+    await userEvent.keyboard("{Enter}");
+    await view.getByRole("button", { name: "Run" }).click();
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
+      .toContain("\r");
+  });
+
+  it("shows the prod frame while the host is guarded", async () => {
+    const { controller, source } = guarded();
+    const view = await mount(controller);
+    await expect
+      .poll(() => view.getByTestId("prod-status").query()?.textContent)
+      .toBe("PROD · db-prod · commands are checked before they run");
+    source.toggle(false);
+    await expect.element(view.getByTestId("prod-status")).not.toBeInTheDocument();
+  });
+
+  it("asks before a multi-line paste", async () => {
+    const { sessions, controller } = guarded();
+    const view = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.terminal.paste("echo a\necho b\n");
+    await expect
+      .poll(() => view.getByRole("heading").query()?.textContent)
+      .toBe("Paste 2 lines into db-prod?");
+    await view.getByRole("button", { name: "Paste" }).click();
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
+      .toContain("echo a\recho b\r");
+  });
+
+  it("answers no to a pending question when disposed", async () => {
+    const { sessions, controller } = guarded();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.terminal.paste("a\nb\n");
+    await expect.poll(() => controller.getGuardRequest()).toBeDefined();
+    controller.dispose();
+    expect(controller.getGuardRequest()).toBeUndefined();
+  });
+});

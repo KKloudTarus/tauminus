@@ -11,6 +11,9 @@ import type { SessionClient } from "./sessions.ts";
 export {
   type GroupInput,
   type GroupView,
+  type GuardFinding,
+  type GuardSpec,
+  type GuardVerdict,
   type HostInput,
   type HostView,
   type HostsClient,

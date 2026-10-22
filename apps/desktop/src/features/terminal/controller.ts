@@ -21,6 +21,7 @@ import {
 } from "@/ipc/index.ts";
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
+import { CommandGuard, type GuardRequest, type GuardSource } from "./command-guard.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
@@ -91,6 +92,14 @@ export class TerminalController {
    * opens again.
    */
   #started = false;
+  /** Checks commands before they run on a guarded host. */
+  readonly #guard: CommandGuard | undefined;
+  readonly #guardSource: GuardSource | undefined;
+  /** Output parses so far, and who waits for the next; for the guard's echo wait. */
+  #parses = 0;
+  readonly #parseWaiters = new Set<() => void>();
+  /** The guard's question, while the user decides. */
+  #guardRequest: { request: GuardRequest; resolve: (run: boolean) => void } | undefined;
   /** Questions from the connect, oldest first; the view shows the first. */
   #prompts: { prompt: PromptKind; resolve: (answer: AnswerSpec) => void }[] = [];
   #disposed = false;
@@ -136,6 +145,8 @@ export class TerminalController {
       mac?: boolean;
       /** Shares parsing time with other panes; one per window by default. */
       output?: OutputScheduler;
+      /** The prod guard for the saved host behind this terminal. */
+      guard?: GuardSource;
     } = {},
   ) {
     this.#sessions = sessions;
@@ -195,7 +206,41 @@ export class TerminalController {
     this.terminal.parser.registerCsiHandler({ final: "b" }, (params) =>
       dropsRepeat(params, this.terminal.cols, this.terminal.rows),
     );
-    this.terminal.onData((data) => this.#input.push({ kind: "text", data: defusePaste(data) }));
+    this.#guardSource = options.guard;
+    this.#guard = options.guard
+      ? new CommandGuard(options.guard, {
+          send: (data) => this.#input.push({ kind: "text", data }),
+          screen: () => this.terminal.buffer.active,
+          mark: () => this.terminal.registerMarker(0),
+          ask: (request) => this.#askGuard(request),
+          parsed: () => this.#parses,
+          nextParse: (ms) =>
+            new Promise((resolve) => {
+              const timer = setTimeout(() => {
+                this.#parseWaiters.delete(done);
+                resolve(false);
+              }, ms);
+              const done = () => {
+                clearTimeout(timer);
+                resolve(true);
+              };
+              this.#parseWaiters.add(done);
+            }),
+        })
+      : undefined;
+    this.terminal.onWriteParsed(() => {
+      this.#parses += 1;
+      for (const waiter of this.#parseWaiters) waiter();
+      this.#parseWaiters.clear();
+    });
+    this.terminal.onData((raw) => {
+      const data = defusePaste(raw);
+      if (this.#guard) {
+        this.#guard.input(data);
+      } else {
+        this.#input.push({ kind: "text", data });
+      }
+    });
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
     );
@@ -223,6 +268,28 @@ export class TerminalController {
 
   /** The question waiting for the user, if any. For `useSyncExternalStore`. */
   getPrompt = (): PromptKind | undefined => this.#prompts[0]?.prompt;
+
+  /** Whether the prod guard checks this terminal's commands now. */
+  get guarded(): boolean {
+    return this.#guardSource?.active() ?? false;
+  }
+
+  /** For `useSyncExternalStore`: changes when the host's guard is turned on or off. */
+  subscribeGuard = (listener: Listener): (() => void) =>
+    this.#guardSource?.subscribe(listener) ?? (() => {});
+
+  /** The prod guard's question, if any. For `useSyncExternalStore`. */
+  getGuardRequest = (): GuardRequest | undefined => this.#guardRequest?.request;
+
+  /** Answers the question `getGuardRequest` returned; true runs it. */
+  answerGuard(run: boolean): void {
+    const pending = this.#guardRequest;
+    if (!pending) return;
+    this.#guardRequest = undefined;
+    pending.resolve(run);
+    this.#notify();
+    this.focus();
+  }
 
   /** Answers the question `getPrompt` returned. */
   answer(answer: AnswerSpec): void {
@@ -317,7 +384,7 @@ export class TerminalController {
 
   /** Focuses the terminal, unless a prompt is open: the prompt keeps focus. */
   focus(): void {
-    if (this.#prompts.length > 0) return;
+    if (this.#prompts.length > 0 || this.#guardRequest) return;
     this.terminal.focus();
   }
 
@@ -330,6 +397,9 @@ export class TerminalController {
     this.detach();
     clearTimeout(this.#ackRetry);
     this.#retireWebgl();
+    this.#guard?.dispose();
+    this.#guardRequest?.resolve(false);
+    this.#guardRequest = undefined;
     this.#input.close();
     this.#stopImeFix?.();
     this.#pin?.dispose();
@@ -399,6 +469,14 @@ export class TerminalController {
     if (this.#disposed) return Promise.resolve(CANCEL);
     return new Promise((resolve) => {
       this.#prompts.push({ prompt, resolve });
+      this.#notify();
+    });
+  }
+
+  #askGuard(request: GuardRequest): Promise<boolean> {
+    if (this.#disposed) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      this.#guardRequest = { request, resolve };
       this.#notify();
     });
   }

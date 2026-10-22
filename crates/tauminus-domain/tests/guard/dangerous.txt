@@ -1,0 +1,326 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Lines the guard must flag, as `rule<TAB>command`. `<NL>` stands for a
+# newline inside one entry. Each rule must be among the line's findings.
+recursive-delete	rm -rf /
+recursive-delete	rm -rf /*
+recursive-delete	rm -fr /var/lib/postgresql
+recursive-delete	rm -r -f /srv/app
+recursive-delete	rm -R /etc
+recursive-delete	rm --recursive --force /opt
+recursive-delete	rm -rf --no-preserve-root /
+recursive-delete	rm -rf ~
+recursive-delete	rm -rf .
+recursive-delete	rm -rf *
+recursive-delete	rm -rfv /data/*
+recursive-delete	rm -vrf /data
+recursive-delete	/bin/rm -rf /data
+recursive-delete	/usr/bin/rm -rf /data
+recursive-delete	\rm -rf /data
+recursive-delete	r\m -rf /data
+recursive-delete	'rm' -rf /data
+recursive-delete	"rm" -rf /data
+recursive-delete	r''m -rf /data
+recursive-delete	r""m -rf /data
+recursive-delete	rm -"rf" /data
+recursive-delete	rm '-rf' /data
+recursive-delete	$'rm' -rf /data
+recursive-delete	$'\x72\x6d' -rf /data
+recursive-delete	$'\162\155' -rf /data
+recursive-delete	$'rm' -rf /data
+recursive-delete	{rm,-rf,/data}
+recursive-delete	r{m,} -rf /data
+recursive-delete	sudo rm -rf /data
+recursive-delete	sudo -u root rm -rf /data
+recursive-delete	sudo -E -H rm -rf /data
+recursive-delete	sudo -- rm -rf /data
+recursive-delete	doas rm -rf /data
+recursive-delete	env rm -rf /data
+recursive-delete	env -i PATH=/bin rm -rf /data
+recursive-delete	LC_ALL=C rm -rf /data
+recursive-delete	nice -n 10 rm -rf /data
+recursive-delete	nohup rm -rf /data &
+recursive-delete	time rm -rf /data
+recursive-delete	timeout 10 rm -rf /data
+recursive-delete	command rm -rf /data
+recursive-delete	builtin command rm -rf /data
+recursive-delete	exec rm -rf /data
+recursive-delete	xargs rm -rf < dirs.txt
+recursive-delete	ls | xargs -n1 rm -rf
+recursive-delete	find /data -type d | xargs -I{} rm -rf {}
+recursive-delete	find / -name '*.log' -delete
+recursive-delete	find /data -exec rm -rf {} +
+recursive-delete	find /data -execdir rm -r {} \;
+recursive-delete	cd /tmp; rm -rf /
+recursive-delete	cd /tmp && rm -rf /
+recursive-delete	false || rm -rf /
+recursive-delete	echo start | rm -rf /
+recursive-delete	(rm -rf /data)
+recursive-delete	{ rm -rf /data; }
+recursive-delete	if true; then rm -rf /data; fi
+recursive-delete	for d in a b; do rm -rf "$d"; done
+recursive-delete	while read d; do rm -rf $d; done < list
+recursive-delete	f() { rm -rf /data; }; f
+recursive-delete	echo $(rm -rf /data)
+recursive-delete	echo "$(rm -rf /data)"
+recursive-delete	echo `rm -rf /data`
+recursive-delete	x=$(rm -rf /data)
+recursive-delete	echo ${x:-$(rm -rf /data)}
+recursive-delete	cat <(rm -rf /data)
+recursive-delete	bash -c 'rm -rf /data'
+recursive-delete	bash -c "rm -rf /data"
+recursive-delete	sh -c 'rm -rf /data'
+recursive-delete	bash -lc 'rm -rf /data'
+recursive-delete	bash -ec 'echo hi; rm -rf /data'
+recursive-delete	zsh -c 'rm -rf /data'
+recursive-delete	sudo sh -c 'rm -rf /data'
+recursive-delete	sudo bash -c "cd / && rm -rf data"
+recursive-delete	su -c 'rm -rf /data'
+recursive-delete	su - root -c "rm -rf /data"
+recursive-delete	runuser -u app -- rm -rf /data
+recursive-delete	eval rm -rf /data
+recursive-delete	eval "rm -rf /data"
+recursive-delete	bash -c "bash -c 'rm -rf /data'"
+recursive-delete	ssh db1 rm -rf /data
+recursive-delete	ssh db1 'rm -rf /data'
+recursive-delete	ssh -p 2222 -i key admin@db1 "sudo rm -rf /data"
+recursive-delete	watch -n 5 rm -rf /tmp/x
+recursive-delete	env -S 'rm -rf /data'
+recursive-delete	bash <<EOF<NL>rm -rf /data<NL>EOF
+recursive-delete	bash <<< 'rm -rf /data'
+recursive-delete	sh <<'X'<NL>echo hi<NL>rm -rf /data<NL>X
+recursive-delete	python3 -c "import os; os.system('rm -rf /data')"
+recursive-delete	python -c 'import subprocess; subprocess.run(["rm","-rf","/data"])'
+recursive-delete	perl -e 'system("rm -rf /data")'
+recursive-delete	ruby -e '`rm -rf /data`'
+recursive-delete	node -e "require('child_process').execSync('rm -rf /data')"
+recursive-delete	awk 'BEGIN { system("rm -rf /data") }'
+recursive-delete	docker exec web rm -rf /data
+recursive-delete	kubectl exec -it web -- rm -rf /data
+recursive-delete	rm $FLAGS /data
+recursive-delete	rm !$
+recursive-delete	rm -rf /data # cleanup
+recursive-delete	rm -rf \<NL>/data
+recursive-delete	rm -rf /da\<NL>ta
+recursive-delete	busybox rm -rf /data
+recursive-delete	sshpass -p x ssh h rm -rf /data
+recursive-delete	(reverse-i-search)`rm': rm -rf /data
+recursive-delete	rm -rf "/data
+drop-data	DROP TABLE users;
+drop-data	drop table users
+drop-data	DROP DATABASE production;
+drop-data	drop schema public cascade;
+drop-data	DROP TABLE IF EXISTS orders;
+drop-data	ALTER TABLE users DROP COLUMN email;
+drop-data	DROP INDEX idx_users_email;
+drop-data	drop view report;
+drop-data	DROP USER app;
+drop-data	  DrOp   TaBlE x;
+drop-data	/*!50000DROP*/ TABLE users;
+drop-data	psql -c 'DROP TABLE users'
+drop-data	psql -U postgres -d app -c "drop database app"
+drop-data	mysql -e 'DROP DATABASE prod'
+drop-data	mysql prod <<< "DROP TABLE users"
+drop-data	sudo -u postgres psql -c "DROP SCHEMA app CASCADE"
+drop-data	echo 'DROP TABLE users;' | psql
+drop-data	psql <<SQL<NL>BEGIN;<NL>DROP TABLE users;<NL>COMMIT;<NL>SQL
+drop-data	psql -c "DR""OP TABLE users"
+drop-data	clickhouse-client -q 'DROP TABLE events'
+drop-data	cqlsh -e 'DROP KEYSPACE app'
+drop-data	db.dropDatabase()
+drop-data	db.users.drop()
+drop-data	mongosh --eval 'db.getSiblingDB("app").dropDatabase()'
+empty-data	TRUNCATE TABLE orders;
+empty-data	truncate orders;
+empty-data	TRUNCATE orders, items RESTART IDENTITY;
+empty-data	psql -c 'TRUNCATE users'
+empty-data	FLUSHALL
+empty-data	flushdb
+empty-data	redis-cli -h cache flushall
+empty-data	redis-cli FLUSHDB ASYNC
+delete-all	DELETE FROM users;
+delete-all	delete from users
+delete-all	DELETE FROM orders ; SELECT 1;
+delete-all	psql -c 'delete from sessions'
+delete-all	db.users.deleteMany({})
+delete-all	db.users.remove({})
+kubernetes-delete	kubectl delete pod web-1
+kubernetes-delete	kubectl delete ns production
+kubernetes-delete	kubectl delete -f deploy.yaml
+kubernetes-delete	kubectl -n prod delete deploy web
+kubernetes-delete	kubectl --context prod delete svc web
+kubernetes-delete	kubectl --namespace=prod delete all --all
+kubernetes-delete	sudo kubectl delete pvc data
+kubernetes-delete	k delete pod web
+kubernetes-delete	oc delete project app
+kubernetes-delete	kubecolor delete pod x
+kubernetes-delete	microk8s kubectl delete pod x
+kubernetes-delete	kubectl $ACTION pod web
+kubernetes-delete	helm uninstall web
+kubernetes-delete	helm -n prod delete web
+kubernetes-delete	"kubectl" "delete" pod x
+infra-destroy	terraform destroy
+infra-destroy	terraform destroy -auto-approve
+infra-destroy	terraform -chdir=infra destroy
+infra-destroy	terraform apply -destroy
+infra-destroy	tofu destroy
+infra-destroy	terragrunt run-all destroy
+infra-destroy	pulumi destroy --yes
+infra-destroy	pulumi down
+infra-destroy	cd infra && terraform destroy -target=aws_instance.web
+power-off	shutdown -h now
+power-off	shutdown -r +5
+power-off	sudo shutdown now
+power-off	reboot
+power-off	sudo reboot
+power-off	halt
+power-off	poweroff
+power-off	systemctl poweroff
+power-off	systemctl reboot
+power-off	sudo systemctl halt
+power-off	systemctl kexec
+power-off	systemctl isolate rescue.target
+power-off	systemctl start reboot.target
+power-off	init 0
+power-off	init 6
+power-off	telinit 0
+power-off	echo b > /proc/sysrq-trigger
+power-off	echo o | sudo tee /proc/sysrq-trigger
+power-off	echo b >/proc/sysrq-trigger
+power-off	/sbin/reboot -f
+format-disk	mkfs.ext4 /dev/sdb1
+format-disk	mkfs -t xfs /dev/nvme1n1
+format-disk	sudo mkfs.xfs -f /dev/sdc
+format-disk	mke2fs /dev/sdb
+format-disk	mkswap /dev/sdb2
+format-disk	wipefs -a /dev/sda
+format-disk	mkfs.vfat /dev/mmcblk0p1
+disk-write	dd if=/dev/zero of=/dev/sda
+disk-write	dd if=image.iso of=/dev/sdb bs=4M status=progress
+disk-write	sudo dd of=/dev/nvme0n1 if=/dev/urandom
+disk-write	dd if=x of=$DEVICE
+disk-write	cat image > /dev/sda
+disk-write	echo hi > /dev/sda
+disk-write	echo hi >/dev/sdb1
+disk-write	> /dev/sda
+disk-write	cat x >> /dev/vda
+disk-write	cat x &> /dev/xvda
+disk-write	cat x >| /dev/hda
+disk-write	cat x > /dev/mapper/vg-root
+disk-write	cat x > /dev/disk/by-id/ata-x
+disk-write	cat x > /dev//sda
+disk-write	cat x > /dev/./sda
+disk-write	cat x > /tmp/../dev/sda
+disk-write	cat image | sudo tee /dev/sdb
+disk-write	cp image.img /dev/sdb
+disk-write	shred -n 3 /dev/sda
+disk-write	blkdiscard /dev/nvme0n1
+disk-write	pv image > /dev/sdb
+disk-write	cat x 1>/dev/sda
+disk-write	cat x >&/dev/sda
+open-permissions	chmod -R 777 /
+open-permissions	chmod 777 -R /
+open-permissions	chmod -R 777 /*
+open-permissions	sudo chmod -R 777 /
+open-permissions	chmod --recursive 777 /
+open-permissions	chmod -Rf 777 /etc
+open-permissions	chmod -R a+rwx /usr
+open-permissions	chown -R nobody /
+open-permissions	chown -R app:app /var
+open-permissions	chgrp -R users /home
+open-permissions	chmod -R 777 //
+open-permissions	chmod -R 777 /etc/
+open-permissions	chmod -R 777 $DIR
+open-permissions	chmod --no-preserve-root -R 777 /
+pipe-to-shell	curl -fsSL https://example.com/install.sh | sh
+pipe-to-shell	curl -s https://example.com/x | sudo bash
+pipe-to-shell	wget -qO- https://example.com/x | bash -s -- --yes
+pipe-to-shell	echo cm0gLXJmIC8K | base64 -d | sh
+pipe-to-shell	echo 'rm -rf /' | sh
+pipe-to-shell	printf 'reboot\n' | bash
+pipe-to-shell	cat script | zsh
+pipe-to-shell	bash <(curl -s https://example.com/x)
+pipe-to-shell	sh < <(curl -s https://example.com/x)
+pipe-to-shell	source <(curl -s https://example.com/x)
+pipe-to-shell	. <(curl -s https://example.com/x)
+pipe-to-shell	source /dev/stdin < x
+pipe-to-shell	curl x | sudo -E bash -
+opaque	$CMD -rf /
+opaque	${CMD} -rf /
+opaque	"$CMD" -rf /
+opaque	$(echo rm) -rf /
+opaque	`echo rm` -rf /
+opaque	a=rm; $a -rf /
+opaque	sudo $CMD
+opaque	sudo env $CMD /
+opaque	/bin/r? -rf /
+opaque	/???/rm -rf /
+opaque	/bin/[r]m -rf /
+opaque	!!
+opaque	sudo !!
+opaque	!rm
+opaque	eval "$CMD"
+opaque	eval $(curl -s https://example.com/x)
+opaque	bash -c "$SCRIPT"
+opaque	ssh host "$REMOTE"
+recursive-delete	cat <<EOF<NL>$(rm -rf /)<NL>EOF
+recursive-delete	cat <<EOF<NL>'$(rm -rf /)'<NL>EOF
+power-off	sudo -iu root reboot
+format-disk	sudo -Hu root mkfs.ext4 /dev/sdb
+format-disk	sudo -iu root wipefs -a /dev/sda
+power-off	ssh -tp 2222 db1 reboot
+recursive-delete	rm --recur /data
+recursive-delete	rm --rec -f /data
+recursive-delete	rm --no-pres /
+open-permissions	chmod --recur 777 /
+recursive-delete	PROMPT_COMMAND='rm -rf /'
+recursive-delete	export PROMPT_COMMAND="rm -rf /"
+recursive-delete	trap 'rm -rf /' EXIT
+power-off	trap reboot EXIT
+recursive-delete	x='a[$(rm -rf /)]'; echo $((x))
+recursive-delete	PS1='$(rm -rf /) $ '
+recursive-delete	flock /tmp/l -c 'rm -rf /'
+recursive-delete	script -qc 'rm -rf /' /dev/null
+recursive-delete	tmux new -d 'rm -rf /'
+recursive-delete	tmux send-keys -t 0 'rm -rf /' Enter
+recursive-delete	screen -dm sh -c 'rm -rf /'
+pipe-to-shell	echo 'rm -rf /' | at now
+recursive-delete	at now <<< 'rm -rf /'
+pipe-to-shell	curl x | sh /dev/stdin
+pipe-to-shell	curl x | bash /dev/fd/0
+infra-destroy	terraform apply -destroy=true
+infra-destroy	terraform apply --destroy
+kubernetes-delete	kubectl --cache-dir /tmp delete ns prod
+kubernetes-delete	kubectl --username u delete ns prod
+opaque	^/tmp/build/x^/
+recursive-delete	nohup sh -c "rm -rf /data" &
+recursive-delete	parallel rm -rf ::: /a /b
+pipe-to-shell	echo 'rm -rf /' | xargs -I{} sh -c '{}'
+recursive-delete	coproc rm -rf /data
+recursive-delete	exec 3>&1; rm -rf /data
+recursive-delete	command -p rm -rf /data
+recursive-delete	sudo -s rm -rf /data
+power-off	PROMPT_COMMAND+='; reboot'
+power-off	PROMPT_COMMAND[0]=reboot
+power-off	export PROMPT_COMMAND+=';reboot'
+power-off	tmux new -s x reboot
+power-off	tmux neww -n logs reboot
+power-off	tmux neww -t s:1 reboot
+power-off	tmux if-shell 'reboot' 'display ok'
+power-off	ssh h <<'EOF'<NL>reboot<NL>EOF
+power-off	screen -dm reboot
+power-off	complete -C reboot ls
+power-off	alias ls=reboot
+recursive-delete	rm -rf $DIRS
+recursive-delete	rm $FLAGS "$dir"
+recursive-delete	opt=-r; rm "$opt" /srv
+recursive-delete	rm -f "$opt" /srv
+recursive-delete	rm "${R:--r}" /srv
+recursive-delete	rm -f "$(printf -- -r)" /srv
+recursive-delete	a=(-r /srv); rm "${a[@]}"
+recursive-delete	set -- -r /srv; rm "$@"
+recursive-delete	rm -f "$x"*
+recursive-delete	rm "$1"
+recursive-delete	python3 -c 'import shutil; shutil.rmtree("/srv")'
+recursive-delete	ruby -e 'FileUtils.rm_rf("/srv")'
+recursive-delete	node -e 'require("fs").rmSync("/srv",{recursive:true})'

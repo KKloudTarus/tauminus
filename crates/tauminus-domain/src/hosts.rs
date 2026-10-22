@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::guard::{GuardSettings, PatternError, Policy};
 use crate::ssh::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
 
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
@@ -24,6 +25,9 @@ pub const MAX_GROUP_DEPTH: usize = 16;
 pub const MAX_HOSTS: usize = 10_000;
 pub const MAX_GROUPS: usize = 1_000;
 pub const MAX_TAGS: usize = 32;
+/// The tag that marks a production host: a red frame, and the guard on
+/// unless a setting turns it off.
+pub const PROD_TAG: &str = "prod";
 const MAX_ID: usize = 64;
 const MAX_LABEL: usize = 128;
 const MAX_TAG: usize = 32;
@@ -52,6 +56,8 @@ pub enum HostsError {
     TooMany,
     #[error("invalid connection settings: {0}")]
     Target(String),
+    #[error("prod guard: {0}")]
+    Guard(#[from] PatternError),
 }
 
 macro_rules! id_type {
@@ -226,6 +232,9 @@ pub struct Settings {
     pub methods: Option<Vec<AuthMethod>>,
     pub identity_files: Option<Vec<PathBuf>>,
     pub identities_only: Option<bool>,
+    /// Patterns add up from the host through every group; `enabled` is
+    /// the nearest one set.
+    pub guard: GuardSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -381,18 +390,37 @@ impl Inventory {
     pub fn remove_group(&mut self, id: &GroupId) -> Result<Group, HostsError> {
         let group = self
             .groups
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchGroup(id.clone()))?;
+        // Merged guard patterns must fit before anything changes.
+        let fits = |settings: &Settings| {
+            let mut guard = settings.guard.clone();
+            guard.inherit(&group.settings.guard)
+        };
+        for child in self
+            .groups
+            .values()
+            .filter(|g| g.parent.as_ref() == Some(id))
+        {
+            fits(&child.settings)?;
+        }
+        for host in self.hosts.values().filter(|h| h.group.as_ref() == Some(id)) {
+            fits(&host.settings)?;
+        }
+        let group = self
+            .groups
             .remove(id)
             .ok_or_else(|| HostsError::NoSuchGroup(id.clone()))?;
         for child in self.groups.values_mut() {
             if child.parent.as_ref() == Some(id) {
                 child.parent.clone_from(&group.parent);
-                inherit(&mut child.settings, &group.settings);
+                inherit(&mut child.settings, &group.settings)?;
             }
         }
         for host in self.hosts.values_mut() {
             if host.group.as_ref() == Some(id) {
                 host.group.clone_from(&group.parent);
-                inherit(&mut host.settings, &group.settings);
+                inherit(&mut host.settings, &group.settings)?;
             }
         }
         Ok(group)
@@ -447,6 +475,49 @@ impl Inventory {
                 .unwrap_or(defaults.identities_only),
         };
         SshTarget::new(destination, jumps, route, auth).map_err(|e| invalid(&e))
+    }
+
+    /// The prod guard for a host. It is on when the nearest level that
+    /// says so turns it on, or, when none does, when the host is tagged
+    /// `prod`. Patterns from every level apply. O(d·p) for p patterns.
+    pub fn guard_policy(&self, id: &HostId) -> Result<Policy, HostsError> {
+        let host = self
+            .hosts
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        let levels: Vec<&GuardSettings> = std::iter::once(&host.settings.guard)
+            .chain(
+                self.ancestry(host.group.as_ref())
+                    .map(|g| &g.settings.guard),
+            )
+            .collect();
+        let mut allow: Vec<_> = levels.iter().flat_map(|g| g.allow()).cloned().collect();
+        let mut deny: Vec<_> = levels.iter().flat_map(|g| g.deny()).cloned().collect();
+        for list in [&mut allow, &mut deny] {
+            list.sort();
+            list.dedup();
+        }
+        Ok(Policy {
+            active: self.guarded(id)?,
+            allow,
+            deny,
+        })
+    }
+
+    /// Whether the prod guard is on for a host, without collecting its
+    /// patterns. O(d).
+    pub fn guarded(&self, id: &HostId) -> Result<bool, HostsError> {
+        let host = self
+            .hosts
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        let enabled = std::iter::once(&host.settings.guard)
+            .chain(
+                self.ancestry(host.group.as_ref())
+                    .map(|g| &g.settings.guard),
+            )
+            .find_map(|g| g.enabled);
+        Ok(enabled.unwrap_or_else(|| host.tags.iter().any(|t| t.as_str() == PROD_TAG)))
     }
 
     /// Groups from `start` up to the root. Bounded by the depth invariant.
@@ -518,8 +589,9 @@ fn check_settings(settings: &Settings) -> Result<(), HostsError> {
     Ok(())
 }
 
-/// Fills what `child` leaves unset from `parent`; jumps and route move as one.
-fn inherit(child: &mut Settings, parent: &Settings) {
+/// Fills what `child` leaves unset from `parent`; jumps and route move as
+/// one, and guard patterns add up.
+fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), PatternError> {
     macro_rules! fill {
         ($($field:ident),*) => {
             $(if child.$field.is_none() {
@@ -532,6 +604,7 @@ fn inherit(child: &mut Settings, parent: &Settings) {
         child.jumps.clone_from(&parent.jumps);
         child.route.clone_from(&parent.route);
     }
+    child.guard.inherit(&parent.guard)
 }
 
 #[cfg(test)]

@@ -6,6 +6,8 @@
 // full rules and its tests cover them.
 
 import type {
+  GuardFinding,
+  GuardVerdict,
   GroupInput,
   GroupView,
   HostInput,
@@ -25,7 +27,7 @@ const CONFIG = [
 
 export function fakeHosts(): HostsClient {
   let groups: GroupView[] = [];
-  let hosts: Omit<HostView, "target" | "problem">[] = [];
+  let hosts: Omit<HostView, "target" | "problem" | "guarded">[] = [];
   let next = 1;
   const id = () => `id${next++}`;
 
@@ -45,6 +47,18 @@ export function fakeHosts(): HostsClient {
     return undefined;
   };
 
+  /** The nearest level that turns the guard on or off; else the `prod` tag. */
+  const guarded = (host: (typeof hosts)[number]) => {
+    let enabled = host.settings.guard?.enabled;
+    let group = groups.find((g) => g.id === host.group);
+    while (enabled == null && group) {
+      enabled = group.settings.guard?.enabled;
+      const parent = group.parent;
+      group = groups.find((g) => g.id === parent);
+    }
+    return enabled ?? host.tags.includes("prod");
+  };
+
   const view = (): HostsView => ({
     groups: structuredClone(groups),
     hosts: hosts.map((h) => ({
@@ -62,6 +76,7 @@ export function fakeHosts(): HostsClient {
         identitiesOnly: false,
       },
       problem: null,
+      guarded: guarded(h),
     })),
   });
 
@@ -106,6 +121,17 @@ export function fakeHosts(): HostsClient {
       return view();
     },
     configAliases: async () => CONFIG.length,
+    checkCommand: async (hostId, lines) => {
+      const host = hosts.find((h) => h.id === hostId);
+      if (!host) throw new Error(`no host ${hostId}`);
+      if (!guarded(host)) return { findings: [], incomplete: false };
+      const verdicts = lines.map(fakeVerdict);
+      const findings = verdicts.flatMap((v) => v.findings);
+      const unique = findings.filter(
+        (f, at) => findings.findIndex((g) => g.rule === f.rule && g.command === f.command) === at,
+      );
+      return { findings: unique, incomplete: verdicts[0]?.incomplete ?? false };
+    },
     importConfig: async () => {
       let group = groups.find((g) => g.name === "SSH config");
       if (!group) {
@@ -130,4 +156,33 @@ export function fakeHosts(): HostsClient {
       return { added, skipped, view: view() };
     },
   };
+}
+
+/**
+ * A stand-in for the backend's guard, enough to drive the dialog: flags
+ * `rm -r…`, `reboot`, and `drop table`; a trailing `\` or an odd number of
+ * single quotes makes the line incomplete.
+ */
+function fakeVerdict(line: string): GuardVerdict {
+  const joined = line.replaceAll("\\\n", "");
+  const findings: GuardFinding[] = [];
+  const rm = /\brm\s+-\w*r\w*(\s+\S+)*/.exec(joined);
+  if (rm)
+    findings.push({
+      rule: "recursive-delete",
+      reason: "deletes files recursively",
+      command: rm[0],
+    });
+  if (/\breboot\b/.test(joined)) {
+    findings.push({
+      rule: "power-off",
+      reason: "shuts down or reboots the machine",
+      command: "reboot",
+    });
+  }
+  if (/\bdrop\s+table\b/i.test(joined)) {
+    findings.push({ rule: "drop-data", reason: "drops a database object", command: joined.trim() });
+  }
+  const quotes = (joined.match(/'/g) ?? []).length;
+  return { findings, incomplete: joined.endsWith("\\") || quotes % 2 === 1 };
 }

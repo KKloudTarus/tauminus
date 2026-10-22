@@ -42,6 +42,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         hosts::ssh_config_aliases,
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
+        hosts::guard_check,
         links::open_link,
         clipboard::clipboard_read_text,
         clipboard::clipboard_write_text,

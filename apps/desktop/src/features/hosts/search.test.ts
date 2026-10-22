@@ -24,6 +24,7 @@ function host(label: string, address: string, tags: string[] = [], user = "me"):
       identitiesOnly: false,
     },
     problem: null,
+    guarded: false,
   };
 }
 

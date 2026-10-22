@@ -18,7 +18,7 @@ async function importConfig(page: Page) {
 
 async function newHost(
   page: Page,
-  fields: { name: string; address: string; user?: string; group?: string },
+  fields: { name: string; address: string; user?: string; group?: string; tags?: string },
 ) {
   await sidebar(page).getByRole("button", { name: "New host" }).click();
   const dialog = page.getByRole("dialog", { name: "New host" });
@@ -27,6 +27,7 @@ async function newHost(
   if (fields.user) await dialog.getByLabel("User (blank inherits)").fill(fields.user);
   if (fields.group)
     await dialog.getByRole("combobox", { name: "Group" }).selectOption({ label: fields.group });
+  if (fields.tags) await dialog.getByLabel("Tags (comma-separated)").fill(fields.tags);
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toHaveCount(0);
 }
@@ -134,4 +135,81 @@ test("the sidebar toggles and remembers its state", async ({ page }) => {
   await expect(sidebar(page)).toHaveCount(0);
   await page.keyboard.press("Control+Shift+H");
   await expect(sidebar(page)).toBeVisible();
+});
+
+async function connectProd(page: Page) {
+  await newHost(page, { name: "db", address: "prompt.test", user: "ops", tags: "prod" });
+  await sidebar(page)
+    .getByRole("button", { name: /^db ops@prompt\.test/ })
+    .click();
+  await page.getByRole("button", { name: "Trust once" }).click();
+  const password = page.getByRole("dialog", { name: "Password for ops@prompt.test" });
+  await password.getByLabel("Password", { exact: true }).fill("secret");
+  await password.getByLabel("Password", { exact: true }).press("Enter");
+  await expect(focusedScreen(page)).toContainText("Welcome to prompt.test");
+}
+
+test("marks a prod host's pane and tab, and asks before a dangerous command", async ({ page }) => {
+  await connectProd(page);
+  await expect(page.locator('section[data-pane-id][data-focused="true"]')).toHaveAttribute(
+    "data-guarded",
+    "true",
+  );
+  await expect(page.getByRole("tab", { name: /^PROD db/ })).toBeVisible();
+  await expect(page.getByTestId("prod-status")).toContainText("PROD · db");
+
+  await page.keyboard.type("rm -rf /srv");
+  await expect(focusedScreen(page)).toContainText("$ rm -rf /srv");
+  await page.keyboard.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Run this on db?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("guard-text")).toHaveText("rm -rf /srv");
+  await expect(dialog.getByTestId("guard-findings")).toContainText("Deletes files recursively");
+
+  // Enter lands on Cancel, so a reflex does not run it.
+  await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(focusedScreen(page)).not.toContainText("command not found");
+
+  await page.keyboard.press("Enter");
+  await dialog.getByRole("button", { name: "Run" }).click();
+  await expect(focusedScreen(page)).toContainText("rm: command not found");
+
+  // A harmless line runs without a question.
+  await page.keyboard.type("echo fine");
+  await page.keyboard.press("Enter");
+  await expect(focusedScreen(page)).toContainText(/^.*fine\s*\$/m);
+  await expect(page.getByRole("dialog", { name: /Run this/ })).toHaveCount(0);
+});
+
+test("asks before a multi-line paste into a prod host", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await connectProd(page);
+  await page.evaluate(() => navigator.clipboard.writeText("echo one\necho two\n"));
+  await page.keyboard.press("Control+Shift+V");
+  const dialog = page.getByRole("dialog", { name: "Paste 2 lines into db?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("guard-text")).toHaveText("echo one\necho two");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(focusedScreen(page)).not.toContainText("one");
+
+  await page.keyboard.press("Control+Shift+V");
+  await dialog.getByRole("button", { name: "Paste" }).click();
+  await expect(focusedScreen(page)).toContainText("two");
+});
+
+test("turning the guard off in the editor removes the frame", async ({ page }) => {
+  await connectProd(page);
+  await sidebar(page).getByRole("button", { name: "Edit db" }).click();
+  const editor = page.getByRole("dialog", { name: "Edit db" });
+  await editor.getByText("Prod guard").click();
+  await editor
+    .getByRole("combobox", { name: "Check commands before they run" })
+    .selectOption("off");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("prod-status")).toHaveCount(0);
+  await page.locator('section[data-pane-id][data-focused="true"]').click();
+  await page.keyboard.type("rm -rf /srv");
+  await page.keyboard.press("Enter");
+  await expect(focusedScreen(page)).toContainText("rm: command not found");
 });

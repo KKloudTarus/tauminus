@@ -21,6 +21,7 @@
     "allow-ssh-config-aliases",
     "allow-hosts-import-ssh-config",
     "allow-host-connect",
+    "allow-guard-check",
     "allow-open-link",
     "allow-clipboard-read-text",
     "allow-clipboard-write-text"

@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use tauminus_domain::{
-    Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Route, Settings,
-    SshTarget, UserName,
+    Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Policy, Route,
+    Settings, SshTarget, UserName,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -95,6 +95,12 @@ impl HostBook {
         local_user: &UserName,
     ) -> Result<SshTarget, HostsError> {
         self.inventory.lock().await.resolve(id, local_user)
+    }
+
+    /// The prod guard for a host, read from the list as it is now, so a
+    /// rule saved a moment ago applies to the next command. O(d·p).
+    pub async fn guard_policy(&self, id: &HostId) -> Result<Policy, HostsError> {
+        self.inventory.lock().await.guard_policy(id)
     }
 
     /// Adds the hosts `source` defines to the [`IMPORT_GROUP`] group, in one

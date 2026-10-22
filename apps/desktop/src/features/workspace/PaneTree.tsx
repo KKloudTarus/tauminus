@@ -78,6 +78,11 @@ function TerminalPane({
     () => controller?.title ?? "",
   );
 
+  const guarded = useSyncExternalStore(
+    (listener) => controller?.subscribeGuard(listener) ?? (() => {}),
+    () => controller?.guarded ?? false,
+  );
+
   useEffect(() => {
     if (focused) controller?.focus();
   }, [focused, controller]);
@@ -90,7 +95,14 @@ function TerminalPane({
       aria-label={title || "Terminal"}
       data-pane-id={paneId}
       data-focused={focused}
-      className={`flex h-full min-h-0 min-w-0 flex-col ${focused ? "ring-1 ring-inset ring-[var(--accent)]" : ""}`}
+      data-guarded={guarded}
+      className={`flex h-full min-h-0 min-w-0 flex-col ${
+        guarded
+          ? `ring-inset ring-[var(--prod)] ${focused ? "ring-2" : "ring-1"}`
+          : focused
+            ? "ring-1 ring-inset ring-[var(--accent)]"
+            : ""
+      }`}
       onPointerDown={() => workspace.focusPane(paneId)}
       onFocusCapture={() => {
         if (!focused) workspace.focusPane(paneId);

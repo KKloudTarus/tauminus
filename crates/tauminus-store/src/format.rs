@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    AuthMethod, Group, GroupId, Hop, Host, HostId, HostName, Inventory, Label, Route, Settings,
-    Tag, UserName,
+    AuthMethod, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Inventory, Label,
+    Pattern, Route, Settings, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
@@ -69,11 +69,32 @@ struct SettingsRecord {
     identity_files: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     identities_only: Option<bool>,
+    #[serde(default, skip_serializing_if = "GuardRecord::is_empty")]
+    guard: GuardRecord,
+}
+
+/// The prod guard's settings. Patterns are command globs.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GuardRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allow: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deny: Vec<String>,
+}
+
+impl GuardRecord {
+    fn is_empty(&self) -> bool {
+        self.enabled.is_none() && self.allow.is_empty() && self.deny.is_empty()
+    }
 }
 
 impl SettingsRecord {
     fn is_empty(&self) -> bool {
-        self.user.is_none()
+        self.guard.is_empty()
+            && self.user.is_none()
             && self.port.is_none()
             && self.jumps.is_none()
             && self.route.is_none()
@@ -218,7 +239,33 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         }),
         identity_files: s.identity_files.clone(),
         identities_only: s.identities_only,
+        guard: GuardRecord {
+            enabled: s.guard.enabled,
+            allow: s
+                .guard
+                .allow()
+                .iter()
+                .map(|p| p.as_str().to_owned())
+                .collect(),
+            deny: s
+                .guard
+                .deny()
+                .iter()
+                .map(|p| p.as_str().to_owned())
+                .collect(),
+        },
     }
+}
+
+fn guard(r: GuardRecord) -> Result<GuardSettings, String> {
+    let patterns = |list: Vec<String>| {
+        list.iter()
+            .map(|p| Pattern::parse(p))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("guard pattern: {e}"))
+    };
+    GuardSettings::new(r.enabled, patterns(r.allow)?, patterns(r.deny)?)
+        .map_err(|e| format!("guard: {e}"))
 }
 
 fn settings(r: SettingsRecord) -> Result<Settings, String> {
@@ -273,5 +320,6 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         }),
         identity_files: r.identity_files,
         identities_only: r.identities_only,
+        guard: guard(r.guard)?,
     })
 }

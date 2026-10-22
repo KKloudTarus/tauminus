@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import type { GuardSource } from "@/features/terminal/command-guard.ts";
 import type { GroupInput, HostInput, HostView, HostsClient, HostsView } from "@/ipc/index.ts";
 
 export interface HostsState {
@@ -33,6 +34,7 @@ export class HostsStore {
     notice: undefined,
   };
   #groupNames = new Map<string, string>();
+  #guarded = new Map<string, boolean>();
 
   constructor(client: HostsClient) {
     this.#client = client;
@@ -59,6 +61,23 @@ export class HostsStore {
     } catch (error) {
       this.#set({ ...this.#state, status: "failed", error: messageOf(error) });
     }
+  }
+
+  /**
+   * The prod guard for a terminal connected to `hostId`. It follows the
+   * host's tags and settings as they change. A host deleted while connected
+   * keeps the guard it last had.
+   */
+  guardFor(hostId: string): GuardSource {
+    let last = this.#guarded.get(hostId) ?? false;
+    return {
+      active: () => {
+        last = this.#guarded.get(hostId) ?? last;
+        return last;
+      },
+      subscribe: this.subscribe,
+      check: (lines) => this.#client.checkCommand(hostId, lines),
+    };
   }
 
   /** The host's group name, or "" when it has none. */
@@ -103,6 +122,7 @@ export class HostsStore {
 
   #setView(view: HostsView, extra: Partial<HostsState> = {}): void {
     this.#groupNames = new Map(view.groups.map((g) => [g.id, g.name]));
+    this.#guarded = new Map(view.hosts.map((h) => [h.id, h.guarded]));
     this.#set({ ...this.#state, ...extra, view });
   }
 

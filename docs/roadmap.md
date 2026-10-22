@@ -84,12 +84,12 @@ Goal: the reason to switch from Termius.
 
 Prod guard
 
-- [ ] `prod` tag: red frame, tab label, status bar color
-- [ ] Shell command parser (`brush-parser`, `tree-sitter-bash` for partial input)
-- [ ] Default rules: `rm -rf`, `DROP`/`TRUNCATE`, `kubectl delete`, `terraform destroy`, `shutdown`, `reboot`, `mkfs`, `dd of=/dev/`, `> /dev/sd*`, `chmod -R 777 /`
-- [ ] Rules editable per host and group, with allow and deny lists
-- [ ] Confirmation dialog shows the exact command and host name; default button is cancel
-- [ ] Multi-line paste into a `prod` host needs confirmation
+- [x] `prod` tag: red frame, tab label, status bar color
+- [x] Shell command parser that reads partial input (a hand-written lexer; see [ADR 0006](adr/0006-prod-guard.md))
+- [x] Default rules: `rm -rf`, `DROP`/`TRUNCATE`, `kubectl delete`, `terraform destroy`, `shutdown`, `reboot`, `mkfs`, `dd of=/dev/`, `> /dev/sd*`, `chmod -R 777 /`
+- [x] Rules editable per host and group, with allow and deny lists
+- [x] Confirmation dialog shows the exact command and host name; default button is cancel
+- [x] Multi-line paste into a `prod` host needs confirmation
 
 History
 
@@ -113,8 +113,8 @@ Session
 
 ### Exit criteria
 
-- [ ] Prod guard rule tests: at least 200 commands (dangerous and safe), zero false negatives on the dangerous set, false positive rate recorded
-- [ ] Wrapped and obfuscated forms caught: `sudo`, `env`, `bash -c`, `;`, `&&`, `|`, `$(...)`, backticks
+- [x] Prod guard rule tests: at least 200 commands (dangerous and safe), zero false negatives on the dangerous set, false positive rate recorded
+- [x] Wrapped and obfuscated forms caught: `sudo`, `env`, `bash -c`, `;`, `&&`, `|`, `$(...)`, backticks
 - [ ] Vault tests: round trip, wrong password, tampered ciphertext, truncated file
 - [ ] Secrets never appear in logs, crash reports, or history (test scans the store and log files)
 - [ ] History search over 1 million recorded lines returns in under 100 ms (benchmark in CI)
