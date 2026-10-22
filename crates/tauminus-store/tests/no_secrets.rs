@@ -150,7 +150,19 @@ async fn no_secret_reaches_a_file_or_a_log() {
     history.record(entry).await.unwrap();
     assert!(vault.unlock(secret("not the password")).await.is_err());
     vault.unlock_with_keychain().await.unwrap();
-    assert_eq!(history.search(all).await.unwrap().len(), 2);
+    let hits = history.search(all).await.unwrap();
+    assert_eq!(hits.len(), 2);
+    // What the history keeps, decrypted: the password in the command is
+    // hidden before it is stored, sealed or not.
+    for hit in &hits {
+        assert!(
+            !hit.command.contains("command-secret-6"),
+            "a password reached the history: {}",
+            hit.command
+        );
+        let output = history.output(hit.id).await.unwrap().unwrap_or_default();
+        assert!(!output.contains("command-secret-6"));
+    }
     let keys = vault.history_keys().await.unwrap();
     let hex = |bytes: &[u8]| {
         bytes.iter().fold(String::new(), |mut out, b| {
