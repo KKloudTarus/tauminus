@@ -233,6 +233,84 @@ impl Default for AuthOptions {
     }
 }
 
+/// Most environment variables one host or group may set.
+pub const MAX_ENV: usize = 32;
+const MAX_ENV_NAME: usize = 64;
+const MAX_ENV_VALUE: usize = 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum EnvError {
+    #[error(
+        "variable name {0:?} must be 1 to 64 letters, digits, or '_', not starting with a digit"
+    )]
+    Name(String),
+    #[error("the value of {0} must be at most 1024 characters with no control characters but tab")]
+    Value(String),
+    #[error("at most {MAX_ENV} environment variables")]
+    TooMany,
+}
+
+/// An environment variable sent before the shell starts, as OpenSSH
+/// `SetEnv` does. The server keeps only names its `AcceptEnv` allows.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnvVar {
+    name: String,
+    value: String,
+}
+
+impl EnvVar {
+    /// O(n) in the name and value.
+    pub fn parse(name: &str, value: &str) -> Result<Self, EnvError> {
+        let mut chars = name.chars();
+        let name_ok = name.len() <= MAX_ENV_NAME
+            && chars
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !name_ok {
+            return Err(EnvError::Name(name.to_owned()));
+        }
+        let value_ok = value.chars().count() <= MAX_ENV_VALUE
+            && !value.chars().any(|c| c.is_control() && c != '\t');
+        if !value_ok {
+            return Err(EnvError::Value(name.to_owned()));
+        }
+        Ok(Self {
+            name: name.to_owned(),
+            value: value.to_owned(),
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn value(&self) -> &str {
+        &self.value
+    }
+}
+
+/// Sorts by name and keeps the first of each name. Fails past [`MAX_ENV`].
+/// O(v log v).
+pub fn env_list(mut vars: Vec<EnvVar>) -> Result<Vec<EnvVar>, EnvError> {
+    vars.sort_by(|a, b| a.name.cmp(&b.name));
+    vars.dedup_by(|later, earlier| later.name == earlier.name);
+    if vars.len() > MAX_ENV {
+        return Err(EnvError::TooMany);
+    }
+    Ok(vars)
+}
+
+/// What the session asks of the server once connected.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionOptions {
+    /// Lets the server use the local ssh-agent, as `ssh -A`. Anyone with
+    /// root on the server can use the agent's keys while connected.
+    pub forward_agent: bool,
+    /// Sorted by name, one per name.
+    pub env: Vec<EnvVar>,
+}
+
 /// A complete connection: jump hosts in order, then the target.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshTarget {
@@ -240,6 +318,8 @@ pub struct SshTarget {
     pub jumps: Vec<Endpoint>,
     pub route: Route,
     pub auth: AuthOptions,
+    /// Applies to the last hop only; jump hosts get neither.
+    pub session: SessionOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -275,6 +355,7 @@ impl SshTarget {
             jumps,
             route,
             auth,
+            session: SessionOptions::default(),
         })
     }
 

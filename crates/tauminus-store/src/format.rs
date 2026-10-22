@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    AuthMethod, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Inventory, Label,
-    Pattern, Route, Settings, Tag, UserName,
+    AuthMethod, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Inventory,
+    Label, Pattern, Route, Settings, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
@@ -71,6 +71,17 @@ struct SettingsRecord {
     identities_only: Option<bool>,
     #[serde(default, skip_serializing_if = "GuardRecord::is_empty")]
     guard: GuardRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    forward_agent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    env: Vec<EnvRecord>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvRecord {
+    name: String,
+    value: String,
 }
 
 /// The prod guard's settings. Patterns are command globs.
@@ -94,6 +105,8 @@ impl GuardRecord {
 impl SettingsRecord {
     fn is_empty(&self) -> bool {
         self.guard.is_empty()
+            && self.forward_agent.is_none()
+            && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
             && self.jumps.is_none()
@@ -254,7 +267,30 @@ fn settings_record(s: &Settings) -> SettingsRecord {
                 .map(|p| p.as_str().to_owned())
                 .collect(),
         },
+        forward_agent: s.forward_agent,
+        env: s
+            .env
+            .iter()
+            .map(|v| EnvRecord {
+                name: v.name().to_owned(),
+                value: v.value().to_owned(),
+            })
+            .collect(),
     }
+}
+
+/// The variables as saved: valid, and no name twice.
+fn env(records: &[EnvRecord]) -> Result<Vec<EnvVar>, String> {
+    let vars = records
+        .iter()
+        .map(|v| EnvVar::parse(&v.name, &v.value))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("environment: {e}"))?;
+    let sorted = tauminus_domain::env_list(vars).map_err(|e| format!("environment: {e}"))?;
+    if sorted.len() < records.len() {
+        return Err("environment: a variable is listed twice".into());
+    }
+    Ok(sorted)
 }
 
 fn guard(r: GuardRecord) -> Result<GuardSettings, String> {
@@ -321,5 +357,7 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         identity_files: r.identity_files,
         identities_only: r.identities_only,
         guard: guard(r.guard)?,
+        forward_agent: r.forward_agent,
+        env: env(&r.env)?,
     })
 }

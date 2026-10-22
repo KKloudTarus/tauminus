@@ -27,7 +27,8 @@ pub use hosts::{
 pub use output::{OutputBatcher, ReadyBatches};
 pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
 pub use ssh::{
-    AuthMethod, AuthOptions, Endpoint, HostName, NameError, ProxyCommandError, Route, SshTarget,
-    TargetError, UserName, expand_proxy_command,
+    AuthMethod, AuthOptions, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,
+    ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, UserName, env_list,
+    expand_proxy_command,
 };
 pub use terminal::{TerminalSize, TerminalSizeError};

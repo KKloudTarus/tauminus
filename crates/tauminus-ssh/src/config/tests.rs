@@ -207,6 +207,27 @@ fn ssh_g_output_is_read() {
     assert_eq!(host.proxy_jump.as_deref(), Some("ops@bastion:2200,edge"));
     assert_eq!(host.proxy_command, None);
     assert!(host.identities_only);
+    assert_eq!(host.forward_agent, None);
+    assert_eq!(host.set_env, []);
+    let host = parse_ssh_g(
+        "fa",
+        "forwardagent yes\nsetenv LANG=C\nsetenv TEAM=db ops\n",
+    );
+    assert_eq!(host.forward_agent, Some(true));
+    assert_eq!(
+        host.set_env,
+        [
+            ("LANG".into(), "C".into()),
+            ("TEAM".into(), "db ops".into())
+        ]
+    );
+    // `ssh -G` prints `no` when nothing sets it.
+    assert_eq!(parse_ssh_g("x", "forwardagent no\n").forward_agent, None);
+    // A restricted agent's socket is not the default agent.
+    assert_eq!(
+        parse_ssh_g("x", "forwardagent /run/a.sock\n").forward_agent,
+        None
+    );
 }
 
 /// The built-in resolver against `ssh -G -F`, the reference, on a corpus of
@@ -308,6 +329,22 @@ mod corpus {
                 "ipv6 hostname",
                 "Host six\n  HostName 2001:db8::10\n  Port 2208\n".into(),
             ),
+            (
+                "forward agent, first wins",
+                "Host fa\n  ForwardAgent yes\nHost *\n  ForwardAgent no\nHost fb\n".into(),
+            ),
+            ("forward agent off", "Host fno\n  ForwardAgent no\n".into()),
+            (
+                "forward agent with a socket path",
+                "Host fpath\n  ForwardAgent ~/.ssh/deploy.sock\n".into(),
+            ),
+            ("forward agent true", "Host ftrue\n  ForwardAgent true\n".into()),
+            ("forward agent false", "Host ffalse\n  ForwardAgent false\n".into()),
+            ("setenv repeats a name", "Host serep\n  SetEnv A=1 A=2\n".into()),
+            (
+                "setenv, first line wins",
+                "Host se\n  SetEnv LANG=C \"TEAM=db ops\"\n  SetEnv LATER=x\n".into(),
+            ),
         ]
     }
 
@@ -366,4 +403,22 @@ mod corpus {
         }
         assert!(checked >= 30, "{checked} aliases compared");
     }
+}
+
+#[test]
+fn a_match_block_setting_forwarding_is_reported_not_guessed() {
+    let dir = Dir::new();
+    let file = dir.write(
+        "config",
+        "Match host qm\n  ForwardAgent no\nHost *\n  ForwardAgent yes\nHost qm\n",
+    );
+    let host = parse::resolve(&read(&file, &dir.0), "qm");
+    assert!(host.problem.is_some(), "{host:?}");
+    let plain = dir.write(
+        "plain",
+        "Match host qm\n  User x\nHost qm\n  ForwardAgent yes\n",
+    );
+    let host = parse::resolve(&read(&plain, &dir.0), "qm");
+    assert_eq!(host.problem, None);
+    assert_eq!(host.forward_agent, Some(true));
 }

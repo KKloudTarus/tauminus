@@ -7,11 +7,13 @@
 //! (direct TCP, `ProxyCommand`, SOCKS5, or HTTP CONNECT), each later one
 //! through a `direct-tcpip` channel of the hop before it, as OpenSSH
 //! `ProxyJump` does. Every hop verifies its host key and authenticates on its
-//! own. The last hop opens a shell with a PTY.
+//! own. The last hop opens a shell with a PTY, after sending the host's
+//! environment variables and, when asked, a request to forward the agent.
 
 mod auth;
 mod bridge;
 mod config;
+mod forward;
 mod host_keys;
 pub mod known_hosts;
 mod transport;
@@ -110,7 +112,10 @@ impl RusshConnector {
             let known = self.host_keys.load().await?;
             let config = Arc::new(client_config(&known, hop));
             let reached = Arc::new(Notify::new());
+            let last = index + 1 == hops.len();
             let handler = Client {
+                forward: (last && target.session.forward_agent)
+                    .then(|| forward::AgentForward::new(self.agent.clone())),
                 host: hop.host.to_string(),
                 port: hop.port,
                 known,
@@ -150,6 +155,17 @@ impl RusshConnector {
             )
             .await
             .map_err(protocol)?;
+        // Like OpenSSH, without asking for a reply: a server refusing a
+        // name, as `AcceptEnv` makes most do, is not an error.
+        for var in &target.session.env {
+            channel
+                .set_env(false, var.name(), var.value())
+                .await
+                .map_err(protocol)?;
+        }
+        if target.session.forward_agent {
+            channel.agent_forward(false).await.map_err(protocol)?;
+        }
         channel.request_shell(true).await.map_err(protocol)?;
         Ok(bridge::spawn(channel, connections))
     }
@@ -249,8 +265,12 @@ fn protocol(error: impl std::fmt::Display) -> ConnectError {
     ConnectError::Protocol(error.to_string())
 }
 
-/// The russh client handler for one hop: it only decides about host keys.
+/// The russh client handler for one hop: it decides about host keys, and on
+/// the last hop serves forwarded agent channels when the host allows it.
 pub(crate) struct Client {
+    /// Set only on the last hop of a host that forwards the agent; any
+    /// other agent channel a server opens is refused.
+    forward: Option<forward::AgentForward>,
     host: String,
     port: u16,
     known: Arc<KnownHosts>,
@@ -308,6 +328,37 @@ impl client::Handler for Client {
             result = check => result.map(|()| true).map_err(HandlerError::HostKey),
             _ = self.alive.changed() => Err(HandlerError::HostKey(ConnectError::Cancelled)),
         }
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let slot = self
+            .forward
+            .as_ref()
+            .and_then(forward::AgentForward::reserve);
+        match (&self.forward, slot) {
+            (Some(forward), Some(slot)) => {
+                reply.accept().await;
+                forward.relay(channel, slot);
+            }
+            (Some(_), None) => {
+                tracing::warn!(host = %self.host, "refusing an agent channel past the limit");
+                reply
+                    .reject(russh::ChannelOpenFailure::ResourceShortage)
+                    .await;
+            }
+            (None, _) => {
+                tracing::warn!(host = %self.host, "refusing an agent channel the host did not get");
+                reply
+                    .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                    .await;
+            }
+        }
+        Ok(())
     }
 }
 

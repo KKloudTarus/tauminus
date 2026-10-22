@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use tauminus_domain::{
-    Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Policy, Route,
-    Settings, SshTarget, UserName,
+    EnvVar, Group, GroupId, Hop, Host, HostId, HostName, HostsError, Inventory, Label, Policy,
+    Route, Settings, SshTarget, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -196,6 +196,13 @@ fn host_from_config(id: HostId, entry: ConfigHost, group: &GroupId) -> Result<Ho
     if entry.identities_only {
         settings.identities_only = Some(true);
     }
+    settings.forward_agent = entry.forward_agent;
+    let vars = entry
+        .set_env
+        .iter()
+        .map(|(name, value)| EnvVar::parse(name, value))
+        .collect::<Result<Vec<_>, _>>()?;
+    settings.env = env_list(vars)?;
     Ok(host)
 }
 

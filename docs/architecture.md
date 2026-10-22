@@ -203,6 +203,22 @@ while the view is paused, on top of the pump's 832 KiB. Prompts are bounded
 too: 3 passphrase tries per key, 3 passwords, 10 keyboard-interactive rounds,
 4 passes over the method list after partial successes.
 
+### Session options
+
+A host or group may forward the agent (`ssh -A`) and send environment
+variables (`SetEnv`); importing `~/.ssh/config` reads both. Forwarding is the
+nearest level's choice; variables add up from the root group down, and a
+nearer level's value for a name wins. Both apply to the last hop only.
+Variables go out without asking for a reply, as OpenSSH sends them, so a
+name the server's `AcceptEnv` refuses is dropped, not an error.
+
+The agent request goes out only for a host that forwards it, and the client
+refuses any agent channel a server opens otherwise. Each accepted channel is
+relayed to the local agent on its own task, with at most 16 open per
+connection. The agent signs; no key leaves the machine. Anyone with root on
+the server can use those signatures while connected, and the host editor
+says so.
+
 ### Saved hosts
 
 A host sets what it needs and inherits the rest from its group, then from

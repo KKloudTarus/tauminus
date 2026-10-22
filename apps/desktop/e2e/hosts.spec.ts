@@ -213,3 +213,26 @@ test("turning the guard off in the editor removes the frame", async ({ page }) =
   await page.keyboard.press("Enter");
   await expect(focusedScreen(page)).toContainText("rm: command not found");
 });
+
+test("sets agent forwarding and environment variables, with a warning", async ({ page }) => {
+  await newHost(page, { name: "app", address: "app.internal" });
+  await sidebar(page).getByRole("button", { name: "Edit app" }).click();
+  let editor = page.getByRole("dialog", { name: "Edit app" });
+  await editor.getByText("Session").click();
+  await editor.getByRole("combobox", { name: "Forward the SSH agent (ssh -A)" }).selectOption("on");
+  await expect(editor).toContainText("Anyone with root on the server can use your agent");
+  await editor.getByLabel(/Environment variables/).fill("LANG=C.UTF-8\nNOT A PAIR");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await expect(editor.getByRole("alert")).toHaveText('"NOT A PAIR" is not NAME=value');
+  await editor.getByLabel(/Environment variables/).fill("LANG=C.UTF-8\nTEAM=ops");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await expect(editor).toHaveCount(0);
+
+  await sidebar(page).getByRole("button", { name: "Edit app" }).click();
+  editor = page.getByRole("dialog", { name: "Edit app" });
+  await editor.getByText("Session").click();
+  await expect(
+    editor.getByRole("combobox", { name: "Forward the SSH agent (ssh -A)" }),
+  ).toHaveValue("on");
+  await expect(editor.getByLabel(/Environment variables/)).toHaveValue("LANG=C.UTF-8\nTEAM=ops");
+});

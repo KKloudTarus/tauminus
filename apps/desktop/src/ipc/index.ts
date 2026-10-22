@@ -10,6 +10,7 @@ import type { SessionClient } from "./sessions.ts";
 
 export {
   type GroupInput,
+  type EnvSpec,
   type GroupView,
   type GuardFinding,
   type GuardSpec,

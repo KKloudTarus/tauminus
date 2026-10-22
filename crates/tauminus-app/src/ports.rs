@@ -257,6 +257,10 @@ pub struct ConfigHost {
     pub proxy_command: Option<String>,
     pub identity_files: Vec<std::path::PathBuf>,
     pub identities_only: bool,
+    /// `ForwardAgent`; a socket path counts as yes.
+    pub forward_agent: Option<bool>,
+    /// `SetEnv`, as `NAME=value` pairs in order.
+    pub set_env: Vec<(String, String)>,
     /// Why this alias could not be read, for example OpenSSH rejecting the
     /// config. Such an entry is reported, not imported.
     pub problem: Option<String>,

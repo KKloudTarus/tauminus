@@ -3,7 +3,7 @@
 
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import type { GroupView, GuardSpec, HostView, SettingsSpec } from "@/ipc/index.ts";
+import type { EnvSpec, GroupView, GuardSpec, HostView, SettingsSpec } from "@/ipc/index.ts";
 
 import { type HostsStore, messageOf } from "./hosts-store.ts";
 
@@ -84,6 +84,43 @@ export function withGuard(base: SettingsSpec, fields: GuardFieldsState): Setting
   };
   const empty = guard.enabled === null && guard.allow?.length === 0 && guard.deny?.length === 0;
   return { ...base, guard: empty ? null : guard };
+}
+
+export interface SessionFieldsState {
+  forwardAgent: GuardChoice;
+  /** One `NAME=value` per line. */
+  env: string;
+}
+
+export function sessionFields(settings: SettingsSpec | undefined): SessionFieldsState {
+  const agent = settings?.forwardAgent;
+  return {
+    forwardAgent: agent == null ? "inherit" : agent ? "on" : "off",
+    env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
+  };
+}
+
+/**
+ * The session fields over `base`. Returns an error message for a line that
+ * is not `NAME=value`; the backend checks names and values.
+ */
+export function withSession(base: SettingsSpec, fields: SessionFieldsState): SettingsSpec | string {
+  const env: EnvSpec[] = [];
+  // Values keep their spaces; only line endings and blank lines go.
+  const entries = fields.env
+    .split("\n")
+    .map((line) => line.replace(/\r$/u, ""))
+    .filter((line) => line.trim() !== "");
+  for (const line of entries) {
+    const at = line.indexOf("=");
+    if (at <= 0) return `"${line}" is not NAME=value`;
+    env.push({ name: line.slice(0, at).trim(), value: line.slice(at + 1) });
+  }
+  return {
+    ...base,
+    forwardAgent: fields.forwardAgent === "inherit" ? null : fields.forwardAgent === "on",
+    env: env.length > 0 ? env : null,
+  };
 }
 
 function describeRoute(route: NonNullable<SettingsSpec["route"]>): string {
@@ -187,6 +224,7 @@ function HostForm({
     host?.settings.identityFiles?.join(", ") ?? "",
   );
   const [guard, setGuard] = useState(() => guardFields(host?.settings.guard));
+  const [session, setSession] = useState(() => sessionFields(host?.settings));
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -194,6 +232,11 @@ function HostForm({
     event.preventDefault();
     if (port(portText) === null) {
       setError("Port must be a whole number");
+      return;
+    }
+    const withOptions = withSession(host?.settings ?? {}, session);
+    if (typeof withOptions === "string") {
+      setError(withOptions);
       return;
     }
     setSaving(true);
@@ -205,7 +248,7 @@ function HostForm({
         group: group || null,
         tags: list(tags) ?? [],
         settings: withGuard(
-          withEdits(host?.settings ?? {}, {
+          withEdits(withOptions, {
             user,
             port: portText,
             jumps,
@@ -318,6 +361,11 @@ function HostForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <SessionFields
+        value={session}
+        onChange={setSession}
+        inherited={host?.forwardsAgent ?? false}
+      />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
     </Form>
   );
@@ -341,6 +389,7 @@ function GroupForm({
   const [portText, setPortText] = useState(group?.settings.port?.toString() ?? "");
   const [jumps, setJumps] = useState(group?.settings.jumps?.join(", ") ?? "");
   const [guard, setGuard] = useState(() => guardFields(group?.settings.guard));
+  const [session, setSession] = useState(() => sessionFields(group?.settings));
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
   const excluded = group ? descendants(view.groups, group.id) : new Set<string>();
@@ -351,16 +400,18 @@ function GroupForm({
       setError("Port must be a whole number");
       return;
     }
+    const withOptions = withSession(group?.settings ?? {}, session);
+    if (typeof withOptions === "string") {
+      setError(withOptions);
+      return;
+    }
     setSaving(true);
     try {
       await store.saveGroup({
         id: group?.id ?? null,
         name,
         parent: parent || null,
-        settings: withGuard(
-          withEdits(group?.settings ?? {}, { user, port: portText, jumps }),
-          guard,
-        ),
+        settings: withGuard(withEdits(withOptions, { user, port: portText, jumps }), guard),
       });
       onDone();
     } catch (failure) {
@@ -426,8 +477,62 @@ function GroupForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <SessionFields value={session} onChange={setSession} />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit from the parent group" />
     </Form>
+  );
+}
+
+/** Agent forwarding and environment variables. */
+function SessionFields({
+  value,
+  onChange,
+  inherited = false,
+}: {
+  value: SessionFieldsState;
+  onChange: (next: SessionFieldsState) => void;
+  /** Forwarding is on through a group. */
+  inherited?: boolean;
+}) {
+  const forwards = value.forwardAgent === "on" || (value.forwardAgent === "inherit" && inherited);
+  const set = (patch: Partial<SessionFieldsState>) => onChange({ ...value, ...patch });
+  return (
+    <details className="mb-3 rounded border border-current/15 px-3 py-2">
+      <summary className="cursor-pointer select-none">Session</summary>
+      <div className="mt-2">
+        <Field label="Forward the SSH agent (ssh -A)">
+          <select
+            value={value.forwardAgent}
+            onChange={(e) => set({ forwardAgent: guardChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">Inherit (off by default)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </Field>
+        {forwards && (
+          <p className="mb-3 text-xs text-red-600 dark:text-red-400">
+            {value.forwardAgent === "inherit" ? "A group forwards the agent. " : ""}
+            Anyone with root on the server can use your agent&apos;s keys while you are connected.
+          </p>
+        )}
+        <Field label="Environment variables (one per line, as LANG=C.UTF-8)">
+          <textarea
+            value={value.env}
+            onChange={(e) => set({ env: e.target.value })}
+            rows={2}
+            placeholder="LC_ALL=C.UTF-8"
+            spellCheck={false}
+            className={`${FIELD} font-mono`}
+          />
+        </Field>
+        <p className="text-xs opacity-60">
+          The server keeps only the names its AcceptEnv allows. Values are saved in the host list as
+          plain text: keep secrets out of them.
+        </p>
+      </div>
+    </details>
   );
 }
 

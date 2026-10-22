@@ -6,7 +6,14 @@ import { render } from "vitest-browser-react";
 
 import { fakeHosts } from "@/ipc/fake-hosts.ts";
 
-import { EditorDialog, guardFields, withEdits, withGuard } from "./HostEditor.tsx";
+import {
+  EditorDialog,
+  guardFields,
+  sessionFields,
+  withEdits,
+  withGuard,
+  withSession,
+} from "./HostEditor.tsx";
 import { HostsStore } from "./hosts-store.ts";
 
 describe("withEdits", () => {
@@ -40,6 +47,37 @@ describe("withGuard", () => {
       allow: ["a"],
       deny: [],
     });
+  });
+});
+
+describe("withSession", () => {
+  it("round-trips agent forwarding and the environment", () => {
+    const settings = {
+      forwardAgent: true,
+      env: [
+        { name: "LANG", value: "C.UTF-8" },
+        { name: "MOTD", value: "a=b c" },
+      ],
+    };
+    expect(withSession({ user: "u" }, sessionFields(settings))).toEqual({ user: "u", ...settings });
+    expect(withSession(settings, sessionFields({}))).toEqual({ forwardAgent: null, env: null });
+  });
+
+  it("keeps spaces at the end of a value and takes CRLF lines", () => {
+    const result = withSession({}, { forwardAgent: "inherit", env: "X=a \r\nY=b=c\r\n" });
+    expect(result).toMatchObject({
+      env: [
+        { name: "X", value: "a " },
+        { name: "Y", value: "b=c" },
+      ],
+    });
+  });
+
+  it("reports a line that is not NAME=value", () => {
+    expect(withSession({}, { forwardAgent: "inherit", env: "LANG" })).toBe(
+      '"LANG" is not NAME=value',
+    );
+    expect(withSession({}, { forwardAgent: "inherit", env: "=x" })).toMatch(/not NAME=value/);
   });
 });
 

@@ -16,6 +16,7 @@ use thiserror::Error;
 
 use crate::guard::{GuardSettings, PatternError, Policy};
 use crate::ssh::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
+use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
 /// bound the cost of resolving a host.
@@ -58,6 +59,8 @@ pub enum HostsError {
     Target(String),
     #[error("prod guard: {0}")]
     Guard(#[from] PatternError),
+    #[error("environment: {0}")]
+    Env(#[from] EnvError),
 }
 
 macro_rules! id_type {
@@ -235,6 +238,11 @@ pub struct Settings {
     /// Patterns add up from the host through every group; `enabled` is
     /// the nearest one set.
     pub guard: GuardSettings,
+    /// `ssh -A` for this host; `None` inherits.
+    pub forward_agent: Option<bool>,
+    /// Variables sent before the shell starts, sorted by name, one per name.
+    /// A host's value for a name wins over its groups'.
+    pub env: Vec<EnvVar>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,11 +400,8 @@ impl Inventory {
             .groups
             .get(id)
             .ok_or_else(|| HostsError::NoSuchGroup(id.clone()))?;
-        // Merged guard patterns must fit before anything changes.
-        let fits = |settings: &Settings| {
-            let mut guard = settings.guard.clone();
-            guard.inherit(&group.settings.guard)
-        };
+        // Merged patterns and variables must fit before anything changes.
+        let fits = |settings: &Settings| inherit(&mut settings.clone(), &group.settings);
         for child in self
             .groups
             .values()
@@ -432,6 +437,18 @@ impl Inventory {
     /// one choice, how to reach the server, so both come from the nearest
     /// level that sets either. O(d) for d ≤ `MAX_GROUP_DEPTH`.
     pub fn resolve(&self, id: &HostId, local_user: &UserName) -> Result<SshTarget, HostsError> {
+        let mut target = self.resolve_route(id, local_user)?;
+        target.session = self.session(id)?;
+        Ok(target)
+    }
+
+    /// [`Inventory::resolve`] without the session options: what the host
+    /// list shows. O(d).
+    pub fn resolve_route(
+        &self,
+        id: &HostId,
+        local_user: &UserName,
+    ) -> Result<SshTarget, HostsError> {
         let host = self
             .hosts
             .get(id)
@@ -475,6 +492,48 @@ impl Inventory {
                 .unwrap_or(defaults.identities_only),
         };
         SshTarget::new(destination, jumps, route, auth).map_err(|e| invalid(&e))
+    }
+
+    /// Agent forwarding and the environment for a host. Forwarding is the
+    /// nearest level's; variables add up from the root group down, a
+    /// nearer level's value for a name winning. More than [`MAX_ENV`] in
+    /// all is an error, as for one level. O(d·v) for v ≤ 32 per level.
+    pub fn session(&self, id: &HostId) -> Result<SessionOptions, HostsError> {
+        let chain = self.chain(id)?;
+        let mut env: BTreeMap<&str, &EnvVar> = BTreeMap::new();
+        for settings in chain.iter().rev() {
+            for var in &settings.env {
+                env.insert(var.name(), var);
+            }
+        }
+        if env.len() > MAX_ENV {
+            return Err(EnvError::TooMany.into());
+        }
+        Ok(SessionOptions {
+            forward_agent: chain.iter().find_map(|s| s.forward_agent).unwrap_or(false),
+            env: env.into_values().cloned().collect(),
+        })
+    }
+
+    /// Whether a host forwards the agent, by its own setting or the nearest
+    /// group's. O(d).
+    pub fn forwards_agent(&self, id: &HostId) -> Result<bool, HostsError> {
+        Ok(self
+            .chain(id)?
+            .iter()
+            .find_map(|s| s.forward_agent)
+            .unwrap_or(false))
+    }
+
+    /// A host's settings, then each group's up to the root.
+    fn chain(&self, id: &HostId) -> Result<Vec<&Settings>, HostsError> {
+        let host = self
+            .hosts
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        Ok(std::iter::once(&host.settings)
+            .chain(self.ancestry(host.group.as_ref()).map(|g| &g.settings))
+            .collect())
     }
 
     /// The prod guard for a host. It is on when the nearest level that
@@ -573,8 +632,18 @@ impl Inventory {
 }
 
 /// Settings no level may hold: port 0, `ProxyCommand` together with jump
-/// hosts, or more jumps than a connect allows.
+/// hosts, more jumps than a connect allows, or an environment list that is
+/// unsorted, repeats a name, or is too long.
 fn check_settings(settings: &Settings) -> Result<(), HostsError> {
+    if settings.env.len() > MAX_ENV {
+        return Err(EnvError::TooMany.into());
+    }
+    // Sorted by name, one per name, as `env_list` leaves them. O(v).
+    if !settings.env.windows(2).all(|w| w[0].name() < w[1].name()) {
+        return Err(HostsError::Target(
+            "environment variables must be sorted and unique".into(),
+        ));
+    }
     let invalid = |message: &str| Err(HostsError::Target(message.to_owned()));
     if settings.port == Some(0) {
         return invalid("port must be between 1 and 65535");
@@ -591,7 +660,7 @@ fn check_settings(settings: &Settings) -> Result<(), HostsError> {
 
 /// Fills what `child` leaves unset from `parent`; jumps and route move as
 /// one, and guard patterns add up.
-fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), PatternError> {
+fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
     macro_rules! fill {
         ($($field:ident),*) => {
             $(if child.$field.is_none() {
@@ -599,12 +668,24 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), PatternError> 
             })*
         };
     }
-    fill!(user, port, methods, identity_files, identities_only);
+    fill!(
+        user,
+        port,
+        methods,
+        identity_files,
+        identities_only,
+        forward_agent
+    );
+    let mut env = child.env.clone();
+    env.extend(parent.env.iter().cloned());
+    // `env_list` keeps the child's value for a name both set.
+    child.env = env_list(env)?;
     if child.jumps.is_none() && child.route.is_none() {
         child.jumps.clone_from(&parent.jumps);
         child.route.clone_from(&parent.route);
     }
-    child.guard.inherit(&parent.guard)
+    child.guard.inherit(&parent.guard)?;
+    Ok(())
 }
 
 #[cfg(test)]
