@@ -56,7 +56,8 @@ if [ "$(uname)" = Darwin ] && [ "$label" = tauminus ]; then
 fi
 rss=0
 for p in $pids; do
-  case $(ps -o comm= -p "$p" 2> /dev/null) in
+  name=$(ps -o comm= -p "$p" 2> /dev/null || true)
+  case $name in
     *bash | *sh | *zsh | *fish | "") ;;
     *) rss=$((rss + $(ps -o rss= -p "$p" 2> /dev/null || echo 0))) ;;
   esac

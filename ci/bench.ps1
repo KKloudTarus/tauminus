@@ -46,6 +46,8 @@ function Get-Tree([int] $Root) {
   $tree
 }
 
+# Absolute: the app's shells start in the home directory, not here.
+$Tools = (Resolve-Path $Tools).Path
 $env:PATH = "$Tools;$env:PATH"
 $env:TAUMINUS_BENCH_OUT = $report
 Set-Content -Path (Join-Path $Out 'launched_ms') -Value (Now-Ms)
