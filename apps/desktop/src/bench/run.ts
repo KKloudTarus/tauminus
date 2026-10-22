@@ -186,7 +186,10 @@ export async function runBenchmark(shell: AppShell): Promise<void> {
   // Every shell prints its prompt before anything is typed.
   await waitFor(() => panes.every((pane) => tail(pane).trim() !== ""), 30_000);
   await sleep(3000);
-  note(quiet, `four panes, ${quiet.terminal.cols} x ${quiet.terminal.rows}`);
+  note(
+    quiet,
+    `four panes, ${quiet.terminal.cols} x ${quiet.terminal.rows}; focus ${document.hasFocus()}, ${document.visibilityState}`,
+  );
   await sleep(1000);
 
   const results: ScenarioResult[] = [];
