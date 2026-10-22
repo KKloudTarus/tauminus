@@ -17,6 +17,37 @@ fn vault_errors_map_to_stable_codes() {
         code(VaultError::Corrupt("x".into())),
         ErrorCode::StoreFailed
     );
+    for (error, expected) in [
+        (PresenceError::Cancelled, ErrorCode::Cancelled),
+        (PresenceError::TimedOut, ErrorCode::Cancelled),
+        (PresenceError::Denied, ErrorCode::AuthFailed),
+        (
+            PresenceError::Unavailable("x".into()),
+            ErrorCode::Unavailable,
+        ),
+    ] {
+        assert_eq!(code(VaultError::Presence(error)), expected);
+    }
+}
+
+#[test]
+fn the_status_says_why_the_presence_check_cannot_run() {
+    let status = VaultStatusSpec::from(VaultStatus {
+        exists: true,
+        unlocked: false,
+        keychain: KeychainState::On { presence: true },
+        presence: tauminus_app::vault::PresenceState {
+            name: "Touch ID".into(),
+            available: Err("no sensor".into()),
+        },
+        idle: Duration::from_mins(15),
+    });
+    assert!(matches!(
+        status.keychain,
+        KeychainSpec::On { presence: true }
+    ));
+    assert_eq!(status.presence.name, "Touch ID");
+    assert_eq!(status.presence.unavailable.as_deref(), Some("no sensor"));
 }
 
 #[test]

@@ -35,6 +35,8 @@ export function fakeVault(): FakeVault {
   let password: string | undefined;
   let unlocked = false;
   let keychain = false;
+  // The fake OS confirms every presence check.
+  let presence = false;
   let idleMinutes = 15;
   let next = 1;
   let identities: Stored[] = [];
@@ -49,7 +51,8 @@ export function fakeVault(): FakeVault {
       return {
         exists: password !== undefined,
         unlocked,
-        keychain: keychain ? { kind: "on" } : { kind: "off" },
+        keychain: keychain ? { kind: "on", presence } : { kind: "off" },
+        presence: { name: "Touch ID", unavailable: null },
         idleMinutes,
       };
     },
@@ -88,6 +91,12 @@ export function fakeVault(): FakeVault {
       if (on && given !== password) fail("wrong_password", "the password is wrong");
       open();
       keychain = on;
+      presence = false;
+    },
+    async setPresence(on) {
+      open();
+      if (!keychain) fail("invalid_argument", "turn on unlocking with the keychain first");
+      presence = on;
     },
     async identities() {
       open();

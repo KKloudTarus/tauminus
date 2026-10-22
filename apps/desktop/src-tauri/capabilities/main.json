@@ -34,6 +34,7 @@
     "allow-vault-set-idle",
     "allow-vault-change-password",
     "allow-vault-set-keychain",
+    "allow-vault-set-presence",
     "allow-identities-list",
     "allow-identity-save",
     "allow-identity-delete",

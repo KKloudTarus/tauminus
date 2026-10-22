@@ -55,6 +55,87 @@ pub enum VaultError {
     /// Another window saved the vault; this one locked to reload it.
     #[error("the vault changed in another window; unlock it again to reload")]
     Conflict,
+    /// The OS did not confirm the user is present; the password still
+    /// unlocks.
+    #[error("{0}; the master password still unlocks the vault")]
+    Presence(PresenceError),
+}
+
+/// Why the OS did not confirm the user is present.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PresenceError {
+    #[error("the system did not confirm it is you")]
+    Denied,
+    #[error("the system check was cancelled")]
+    Cancelled,
+    #[error("the system check got no answer in time")]
+    TimedOut,
+    #[error("this system cannot confirm it is you: {0}")]
+    Unavailable(String),
+}
+
+/// Asks the OS to confirm the user is at the machine before the keychain's
+/// key is used: Touch ID or the login password on macOS, Windows Hello,
+/// polkit on Linux. It guards the app's own unlock; a program running as
+/// the user can still read the keychain entry.
+pub trait Presence: Send + Sync + 'static {
+    /// What the check is called here, for the settings.
+    fn name(&self) -> String;
+    /// `Err` with the reason when this system cannot ask.
+    fn available(&self) -> Result<(), String>;
+    /// Asks, saying what for, and blocks until the user answers, gives up,
+    /// or [`PRESENCE_TIMEOUT`] passes. Asks afresh every time: no earlier
+    /// answer is reused.
+    fn confirm(&self, purpose: Purpose) -> Result<(), PresenceError>;
+}
+
+/// What a presence check is asked for, so the OS's prompt says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    Unlock,
+    /// Turning the check on or off.
+    Change,
+}
+
+impl Purpose {
+    /// The prompt's reason, as the OS shows it.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Unlock => "unlock the Tauminus vault",
+            Self::Change => "change how the Tauminus vault unlocks",
+        }
+    }
+}
+
+/// The longest a presence prompt waits for the user.
+pub const PRESENCE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// No presence check on this system.
+#[derive(Debug, Default)]
+pub struct NoPresence;
+
+impl Presence for NoPresence {
+    fn name(&self) -> String {
+        "presence check".into()
+    }
+
+    fn available(&self) -> Result<(), String> {
+        Err("not built for this system".into())
+    }
+
+    fn confirm(&self, _purpose: Purpose) -> Result<(), PresenceError> {
+        Err(PresenceError::Unavailable(
+            "not built for this system".into(),
+        ))
+    }
+}
+
+/// Whether the OS can confirm presence, and what it is called.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresenceState {
+    pub name: String,
+    /// `Err` with the reason when it cannot.
+    pub available: Result<(), String>,
 }
 
 /// Whether the OS keychain can unlock the vault.
@@ -63,7 +144,10 @@ pub enum KeychainState {
     /// No keychain on this system, with the reason.
     Unavailable(String),
     Off,
-    On,
+    /// On; with `presence`, the OS confirms the user is present first.
+    On {
+        presence: bool,
+    },
 }
 
 /// A reusable login: user, password, and key, any of which may be absent.
@@ -156,7 +240,9 @@ pub trait VaultBackend: Send + Sync + 'static {
     fn exists(&self) -> bool;
     fn create(&self, password: &Secret) -> Result<Box<dyn OpenVault>, VaultError>;
     fn unlock(&self, password: &Secret) -> Result<Box<dyn OpenVault>, VaultError>;
-    fn unlock_with_keychain(&self) -> Result<Box<dyn OpenVault>, VaultError>;
+    /// Opens with the keychain's key through a slot that asks for the
+    /// presence check, or one that does not: the caller ran the check.
+    fn unlock_with_keychain(&self, presence: bool) -> Result<Box<dyn OpenVault>, VaultError>;
     fn keychain(&self) -> KeychainState;
     fn new_id(&self) -> String;
     /// The history's public key, read without unlocking; `None` before the
@@ -175,6 +261,9 @@ pub trait OpenVault: Send {
     fn change_password(&mut self, password: &Secret) -> Result<(), VaultError>;
     /// Stores a fresh key in the keychain and a slot for it, or removes both.
     fn set_keychain(&mut self, on: bool) -> Result<(), VaultError>;
+    /// Replaces the keychain slot with one that asks for the presence check
+    /// before it is used, or one that does not, under a fresh key.
+    fn set_presence(&mut self, on: bool) -> Result<(), VaultError>;
     /// The history's keys, made on first use. `true` when they were just
     /// made and the vault must be saved.
     fn history_keys(&mut self) -> Result<(HistoryKeys, bool), VaultError>;
@@ -204,6 +293,7 @@ pub struct VaultStatus {
     pub exists: bool,
     pub unlocked: bool,
     pub keychain: KeychainState,
+    pub presence: PresenceState,
     pub idle: Duration,
 }
 
@@ -229,6 +319,9 @@ struct State {
 /// the identities, i ≤ 1000.
 pub struct Vault {
     backend: Arc<dyn VaultBackend>,
+    presence: Arc<dyn Presence>,
+    /// One presence prompt at a time.
+    asking: Mutex<()>,
     state: Mutex<State>,
     /// One Argon2id run at a time: each takes the file's memory cost (64 MiB
     /// by default), so parallel unlocks must not add up.
@@ -245,8 +338,19 @@ impl Vault {
     /// The vault, locked, with a task that locks it after `idle` unused.
     /// The task stops when the vault is dropped.
     pub fn new(backend: Arc<dyn VaultBackend>, idle: Duration) -> Arc<Self> {
+        Self::with_presence(backend, idle, Arc::new(NoPresence))
+    }
+
+    /// As [`Vault::new`], with the OS's presence check for keychain unlock.
+    pub fn with_presence(
+        backend: Arc<dyn VaultBackend>,
+        idle: Duration,
+        presence: Arc<dyn Presence>,
+    ) -> Arc<Self> {
         let vault = Arc::new(Self {
             backend,
+            presence,
+            asking: Mutex::new(()),
             state: Mutex::new(State {
                 open: None,
                 unlocked: watch::Sender::new(false),
@@ -283,15 +387,27 @@ impl Vault {
 
     pub async fn status(&self) -> VaultStatus {
         let backend = Arc::clone(&self.backend);
-        let (exists, keychain) = blocking(move || Ok((backend.exists(), backend.keychain())))
-            .await
-            .unwrap_or_else(|e| (false, KeychainState::Unavailable(e.to_string())));
+        let presence = Arc::clone(&self.presence);
+        let (exists, keychain, available) =
+            blocking(move || Ok((backend.exists(), backend.keychain(), presence.available())))
+                .await
+                .unwrap_or_else(|e| {
+                    (
+                        false,
+                        KeychainState::Unavailable(e.to_string()),
+                        Err(e.to_string()),
+                    )
+                });
         let mut state = self.state.lock().await;
         state.expire();
         VaultStatus {
             exists,
             unlocked: state.open.is_some(),
             keychain,
+            presence: PresenceState {
+                name: self.presence.name(),
+                available,
+            },
             idle: state.idle,
         }
     }
@@ -315,12 +431,56 @@ impl Vault {
         Ok(())
     }
 
+    /// Unlocks with the keychain's key, after the OS confirms the user is
+    /// present when the slot asks for it. The slot's kind is read from the
+    /// file, and only a slot of that kind opens: a file edited after the
+    /// check opens nothing.
     pub async fn unlock_with_keychain(&self) -> Result<(), VaultError> {
-        let backend = Arc::clone(&self.backend);
         let locks = self.state.lock().await.locks;
-        let opened = blocking(move || backend.unlock_with_keychain()).await?;
+        let backend = Arc::clone(&self.backend);
+        let presence = matches!(
+            blocking(move || Ok(backend.keychain())).await?,
+            KeychainState::On { presence: true }
+        );
+        if presence {
+            self.confirm(Purpose::Unlock).await?;
+        }
+        let backend = Arc::clone(&self.backend);
+        let opened = blocking(move || backend.unlock_with_keychain(presence)).await?;
         self.keep(opened, locks).await;
         Ok(())
+    }
+
+    /// Makes unlocking with the keychain ask the OS to confirm the user is
+    /// present, or stop asking. Either way the OS asks once now: turning it
+    /// on shows it works, and turning it off takes the same proof.
+    pub async fn set_presence(&self, on: bool) -> Result<(), VaultError> {
+        if !self.is_open().await {
+            return Err(VaultError::Locked);
+        }
+        // Nothing to change without a keychain slot: say so before asking.
+        let backend = Arc::clone(&self.backend);
+        if !matches!(
+            blocking(move || Ok(backend.keychain())).await?,
+            KeychainState::On { .. }
+        ) {
+            return Err(VaultError::Invalid(
+                "turn on unlocking with the keychain first".into(),
+            ));
+        }
+        self.confirm(Purpose::Change).await?;
+        self.with_open(move |vault| {
+            vault.set_presence(on)?;
+            saved(vault)
+        })
+        .await
+    }
+
+    /// Asks the OS to confirm the user is present, one prompt at a time.
+    async fn confirm(&self, purpose: Purpose) -> Result<(), VaultError> {
+        let _one = self.asking.lock().await;
+        let presence = Arc::clone(&self.presence);
+        blocking(move || presence.confirm(purpose).map_err(VaultError::Presence)).await
     }
 
     /// Drops the decrypted contents. Safe to call when locked.

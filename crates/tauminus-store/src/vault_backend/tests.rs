@@ -108,14 +108,14 @@ fn the_keychain_holds_a_key_only_while_turned_on() {
     let mut open = backend.create(&secret("correct horse")).unwrap();
     assert_eq!(backend.keychain(), KeychainState::Off);
     assert!(matches!(
-        backend.unlock_with_keychain(),
+        backend.unlock_with_keychain(false),
         Err(VaultError::KeychainUnavailable(_))
     ));
     open.set_keychain(true).unwrap();
     open.save().unwrap();
-    assert_eq!(backend.keychain(), KeychainState::On);
+    assert_eq!(backend.keychain(), KeychainState::On { presence: false });
     assert_eq!(keys.entries.lock().unwrap().len(), 1);
-    let mut open = backend.unlock_with_keychain().unwrap();
+    let mut open = backend.unlock_with_keychain(false).unwrap();
     open.set_keychain(false).unwrap();
     open.save().unwrap();
     assert!(keys.entries.lock().unwrap().is_empty());
@@ -127,7 +127,7 @@ fn the_keychain_holds_a_key_only_while_turned_on() {
         .unwrap()
         .insert(key_name(&backend.file.vault_id().unwrap()), vec![7; 32]);
     assert!(matches!(
-        backend.unlock_with_keychain(),
+        backend.unlock_with_keychain(false),
         Err(VaultError::KeychainUnavailable(_))
     ));
 }
@@ -144,8 +144,8 @@ fn a_new_password_gives_the_keychain_a_new_key() {
     open.change_password(&secret("battery staple")).unwrap();
     open.save().unwrap();
     assert_ne!(keys.entries.lock().unwrap()[&name], before);
-    assert_eq!(backend.keychain(), KeychainState::On);
-    assert!(backend.unlock_with_keychain().is_ok());
+    assert_eq!(backend.keychain(), KeychainState::On { presence: false });
+    assert!(backend.unlock_with_keychain(false).is_ok());
     assert!(backend.unlock(&secret("battery staple")).is_ok());
 }
 
@@ -207,7 +207,7 @@ fn a_failed_save_leaves_the_keychain_able_to_open_the_file() {
     std::fs::set_permissions(&dir.0, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(failed.is_err());
     assert_eq!(*keys.entries.lock().unwrap(), before);
-    assert!(backend.unlock_with_keychain().is_ok());
+    assert!(backend.unlock_with_keychain(false).is_ok());
     assert!(backend.unlock(&secret("correct horse")).is_ok());
 }
 
@@ -280,4 +280,91 @@ fn history_keys_are_made_once_and_never_silently_replaced() {
     assert!(!made);
     assert_eq!(*first.database, *again.database);
     assert_eq!(backend.history_public(), Some(first.public));
+}
+
+#[test]
+fn presence_swaps_the_keychain_key_and_slot() {
+    let keys = Arc::new(MemoryKeys::default());
+    let (_dir, backend) = backend(Arc::clone(&keys));
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    assert!(open.set_presence(true).is_err(), "needs the keychain on");
+    open.set_keychain(true).unwrap();
+    open.save().unwrap();
+    let plain = keys
+        .entries
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .unwrap();
+    open.set_presence(true).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::On { presence: true });
+    let fresh = keys
+        .entries
+        .lock()
+        .unwrap()
+        .values()
+        .next()
+        .cloned()
+        .unwrap();
+    assert_ne!(plain, fresh, "a fresh key");
+    assert!(backend.unlock_with_keychain(false).is_err());
+    let mut open = backend.unlock_with_keychain(true).unwrap();
+    // A new password keeps the slot's kind.
+    open.change_password(&secret("battery staple")).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::On { presence: true });
+    let mut open = backend.unlock_with_keychain(true).unwrap();
+    open.set_presence(false).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::On { presence: false });
+    assert!(backend.unlock_with_keychain(false).is_ok());
+}
+
+#[test]
+fn turning_the_keychain_off_drops_a_presence_slot_too() {
+    let keys = Arc::new(MemoryKeys::default());
+    let (_dir, backend) = backend(Arc::clone(&keys));
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    open.set_keychain(true).unwrap();
+    open.set_presence(true).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::On { presence: true });
+    let mut open = backend.unlock(&secret("correct horse")).unwrap();
+    open.set_keychain(false).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::Off);
+    assert_eq!(backend.file.keychain_slot().unwrap(), None);
+    assert!(keys.entries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn turning_the_keychain_on_again_keeps_the_presence_check() {
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    open.set_keychain(true).unwrap();
+    open.set_presence(true).unwrap();
+    open.set_keychain(true).unwrap();
+    open.save().unwrap();
+    assert_eq!(backend.keychain(), KeychainState::On { presence: true });
+}
+
+#[test]
+fn a_presence_key_the_keychain_refuses_leaves_no_slot() {
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    open.set_keychain(true).unwrap();
+    open.save().unwrap();
+    let refusing =
+        FileVaultBackend::new(backend.file.clone(), Arc::new(RefusingKeys)).with_kdf(TEST_KDF);
+    let mut open = refusing.unlock(&secret("correct horse")).unwrap();
+    open.set_presence(true).unwrap();
+    assert!(matches!(
+        open.save(),
+        Err(VaultError::KeychainUnavailable(_))
+    ));
+    assert_eq!(refusing.keychain(), KeychainState::Off);
+    assert!(refusing.unlock(&secret("correct horse")).is_ok());
 }

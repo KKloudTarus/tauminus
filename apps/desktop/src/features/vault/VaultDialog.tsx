@@ -72,7 +72,19 @@ export function VaultDialog({ store, tools, onClose, onUnlocked }: VaultDialogPr
       ) : !status.exists ? (
         <SetUp store={store} onDone={onUnlocked} />
       ) : !status.unlocked ? (
-        <Unlock store={store} keychain={status.keychain.kind === "on"} onDone={onUnlocked} />
+        <Unlock
+          store={store}
+          keychain={
+            status.keychain.kind !== "on" ||
+            // The check cannot run here: only the password unlocks.
+            (status.keychain.presence && status.presence.unavailable !== null)
+              ? undefined
+              : status.keychain.presence
+                ? `Unlock with ${status.presence.name}`
+                : "Unlock with the system keychain"
+          }
+          onDone={onUnlocked}
+        />
       ) : (
         <Unlocked store={store} identities={state.identities} tools={tools} />
       )}
@@ -147,11 +159,14 @@ function Unlock({
   onDone,
 }: {
   store: VaultStore;
-  keychain: boolean;
+  /** The keychain button's label, when the keychain unlocks the vault. */
+  keychain: string | undefined;
   onDone: (() => void) | undefined;
 }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>();
+  // A system prompt is open: one at a time.
+  const [asking, setAsking] = useState(false);
   const first = useRef<HTMLInputElement>(null);
   useInitialFocus(first);
   const unlocked = () => {
@@ -183,15 +198,18 @@ function Unlock({
         {keychain && (
           <button
             type="button"
+            disabled={asking}
             onClick={() => {
+              setAsking(true);
               store
                 .unlockWithKeychain()
                 .then(unlocked)
-                .catch((failure: unknown) => setError(messageOf(failure)));
+                .catch((failure: unknown) => setError(messageOf(failure)))
+                .finally(() => setAsking(false));
             }}
             className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
           >
-            Unlock with the system keychain
+            {keychain}
           </button>
         )}
       </div>
@@ -590,6 +608,8 @@ function Settings({
   const [changed, setChanged] = useState<string | undefined>();
   const [enabling, setEnabling] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState("");
+  // A system prompt for the presence setting is open: one at a time.
+  const [asking, setAsking] = useState(false);
   const keychain = status.keychain;
   const report = (failure: unknown) => setError(messageOf(failure));
   // Each action starts with no message left over from the one before.
@@ -679,6 +699,33 @@ function Settings({
             ? `Unavailable: ${keychain.reason}`
             : "Anyone who can open your keychain can then open the vault."}
         </p>
+        {keychain.kind === "on" && (
+          <>
+            <label className="mb-1 flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={keychain.presence}
+                disabled={asking || status.presence.unavailable !== null}
+                onChange={(e) => {
+                  begin();
+                  setAsking(true);
+                  store
+                    .setPresence(e.target.checked)
+                    .catch(report)
+                    .finally(() => setAsking(false));
+                }}
+              />
+              <span>Ask for {status.presence.name} before the keychain unlocks the vault</span>
+            </label>
+            <p className="mb-3 text-xs opacity-60">
+              {status.presence.unavailable === null
+                ? `${status.presence.name} confirms it is you before Tauminus uses its keychain key. Other programs running as you can still read that key.`
+                : keychain.presence
+                  ? `Unavailable: ${status.presence.unavailable}. Turn the keychain off to remove this check; the master password still unlocks.`
+                  : `Unavailable: ${status.presence.unavailable}`}
+            </p>
+          </>
+        )}
         <form
           onSubmit={(event) => {
             event.preventDefault();

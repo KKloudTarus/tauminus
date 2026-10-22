@@ -108,6 +108,10 @@ export class VaultStore {
     return this.#thenRefresh(this.#client.setKeychain(on, password));
   }
 
+  setPresence(on: boolean): Promise<void> {
+    return this.#thenRefresh(this.#client.setPresence(on));
+  }
+
   changePassword(current: string, next: string): Promise<string | null> {
     return this.#thenRefresh(this.#client.changePassword(current, next));
   }
@@ -188,6 +192,7 @@ function sameState(a: VaultState, b: VaultState): boolean {
     x.unlocked === y.unlocked &&
     x.idleMinutes === y.idleMinutes &&
     JSON.stringify(x.keychain) === JSON.stringify(y.keychain) &&
+    JSON.stringify(x.presence) === JSON.stringify(y.presence) &&
     a.identities.length === b.identities.length &&
     a.identities.every((identity, n) => sameIdentity(identity, b.identities[n]))
   );

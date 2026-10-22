@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Tauminus contributors
+SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD polkit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/software/polkit/policyconfig-1.dtd">
+<!-- Installed to /usr/share/polkit-1/actions by the .deb and .rpm packages. -->
+<policyconfig>
+  <vendor>Tauminus</vendor>
+  <vendor_url>https://github.com/KKloudTarus/tauminus</vendor_url>
+  <action id="io.github.kkloudtarus.tauminus.unlock-vault">
+    <description>Unlock the Tauminus vault with the keychain</description>
+    <message>Confirm it is you to unlock the Tauminus vault</message>
+    <!-- The user's own password, every time; only at the local, active seat. -->
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+  <action id="io.github.kkloudtarus.tauminus.change-unlock-check">
+    <description>Change whether unlocking the Tauminus vault asks for this</description>
+    <message>Confirm it is you to change how the Tauminus vault unlocks</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+</policyconfig>

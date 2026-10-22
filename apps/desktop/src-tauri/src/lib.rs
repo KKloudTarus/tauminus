@@ -59,6 +59,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         vault::vault_set_idle,
         vault::vault_change_password,
         vault::vault_set_keychain,
+        vault::vault_set_presence,
         vault::identities_list,
         vault::identity_save,
         vault::identity_delete,
@@ -111,8 +112,21 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         VaultFile::new(config_dir.join("vault.json")),
         Arc::new(OsKeychain::new()),
     );
+    let presence = Arc::new(tauminus_presence::OsPresence::new());
+    // Windows Hello's prompt opens over the app's window.
+    #[cfg(windows)]
+    if let Some(hwnd) = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+    {
+        presence.set_window(hwnd.0 as isize);
+    }
     let vault = tauri::async_runtime::block_on(async {
-        Vault::new(Arc::new(backend), tauminus_app::vault::DEFAULT_IDLE)
+        Vault::with_presence(
+            Arc::new(backend),
+            tauminus_app::vault::DEFAULT_IDLE,
+            presence,
+        )
     });
     let history = tauri::async_runtime::block_on(tauminus_app::history::History::new(
         Arc::new(FileHistoryBackend::new(&config_dir)),

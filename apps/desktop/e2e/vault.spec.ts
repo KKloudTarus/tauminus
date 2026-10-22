@@ -181,3 +181,20 @@ test("removing the key wins over a generate choice", async ({ page }) => {
   await edit.getByRole("button", { name: "Save" }).click();
   await expect(list).toContainText("nothing stored");
 });
+
+test("the keychain can ask for Touch ID first, and says what that guards", async ({ page }) => {
+  await createVault(page);
+  await vault(page).getByText("Settings").click();
+  const ask = vault(page).getByLabel("Ask for Touch ID before the keychain unlocks the vault");
+  // Only once the keychain unlocks the vault.
+  await expect(ask).toHaveCount(0);
+  await vault(page).getByLabel("Let the system keychain unlock the vault").check();
+  await vault(page).getByLabel("Master password, to turn this on").fill("correct horse");
+  await vault(page).getByRole("button", { name: "Turn on" }).click();
+  await ask.check();
+  await expect(ask).toBeChecked();
+  await expect(vault(page)).toContainText("Other programs running as you can still read that key.");
+  await vault(page).getByRole("button", { name: "Lock now" }).click();
+  await vault(page).getByRole("button", { name: "Unlock with Touch ID" }).click();
+  await expect(vault(page).getByRole("heading", { name: "Identities" })).toBeVisible();
+});

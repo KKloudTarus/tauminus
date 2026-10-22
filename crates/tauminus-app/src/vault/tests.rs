@@ -12,6 +12,9 @@ pub(crate) struct Memory {
     password: StdMutex<Option<String>>,
     identities: Arc<StdMutex<Vec<Identity>>>,
     keychain: StdMutex<bool>,
+    /// The keychain slot asks for the presence check, as its kind does in
+    /// the file: asked for the other kind, it opens nothing.
+    presence: StdMutex<bool>,
     next: AtomicUsize,
     /// Saves fail with this, as on a full disk or another window's write.
     failing: StdMutex<Option<VaultError>>,
@@ -51,9 +54,12 @@ impl VaultBackend for Arc<Memory> {
         }
     }
 
-    fn unlock_with_keychain(&self) -> Result<Box<dyn OpenVault>, VaultError> {
+    fn unlock_with_keychain(&self, presence: bool) -> Result<Box<dyn OpenVault>, VaultError> {
         if !*self.keychain.lock().unwrap() {
             return Err(VaultError::KeychainUnavailable("off".into()));
+        }
+        if *self.presence.lock().unwrap() != presence {
+            return Err(VaultError::WrongKey);
         }
         Ok(Box::new(MemoryOpen {
             owner: Arc::clone(self),
@@ -63,7 +69,9 @@ impl VaultBackend for Arc<Memory> {
 
     fn keychain(&self) -> KeychainState {
         if *self.keychain.lock().unwrap() {
-            KeychainState::On
+            KeychainState::On {
+                presence: *self.presence.lock().unwrap(),
+            }
         } else {
             KeychainState::Off
         }
@@ -110,6 +118,15 @@ impl OpenVault for MemoryOpen {
 
     fn set_keychain(&mut self, on: bool) -> Result<(), VaultError> {
         *self.owner.keychain.lock().unwrap() = on;
+        *self.owner.presence.lock().unwrap() = false;
+        Ok(())
+    }
+
+    fn set_presence(&mut self, on: bool) -> Result<(), VaultError> {
+        if !*self.owner.keychain.lock().unwrap() {
+            return Err(VaultError::Invalid("keychain off".into()));
+        }
+        *self.owner.presence.lock().unwrap() = on;
         Ok(())
     }
 
@@ -343,7 +360,10 @@ async fn the_keychain_unlocks_once_turned_on() {
         .unwrap();
     vault.lock().await;
     vault.unlock_with_keychain().await.unwrap();
-    assert_eq!(vault.status().await.keychain, KeychainState::On);
+    assert_eq!(
+        vault.status().await.keychain,
+        KeychainState::On { presence: false }
+    );
 }
 
 #[tokio::test]
@@ -599,4 +619,165 @@ async fn each_unlock_is_a_new_session() {
     assert_eq!(vault.session().await, None);
     vault.unlock(secret("correct horse")).await.unwrap();
     assert_ne!(vault.session().await.unwrap(), first);
+}
+
+/// The OS's answer to every presence prompt, and how many were shown.
+struct Answer {
+    answer: StdMutex<Result<(), PresenceError>>,
+    asked: AtomicUsize,
+}
+
+impl Answer {
+    fn new(answer: Result<(), PresenceError>) -> Arc<Self> {
+        Arc::new(Self {
+            answer: StdMutex::new(answer),
+            asked: AtomicUsize::new(0),
+        })
+    }
+
+    fn set(&self, answer: Result<(), PresenceError>) {
+        *self.answer.lock().unwrap() = answer;
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(Ordering::Relaxed)
+    }
+}
+
+impl Presence for Arc<Answer> {
+    fn name(&self) -> String {
+        "Touch ID".into()
+    }
+
+    fn available(&self) -> Result<(), String> {
+        match &*self.answer.lock().unwrap() {
+            Err(PresenceError::Unavailable(reason)) => Err(reason.clone()),
+            _ => Ok(()),
+        }
+    }
+
+    fn confirm(&self, _purpose: Purpose) -> Result<(), PresenceError> {
+        self.asked.fetch_add(1, Ordering::Relaxed);
+        self.answer.lock().unwrap().clone()
+    }
+}
+
+async fn presence_vault(answer: &Arc<Answer>) -> (Arc<Memory>, Arc<Vault>) {
+    let memory = Arc::new(Memory::default());
+    let vault = Vault::with_presence(
+        Arc::new(Arc::clone(&memory)),
+        DEFAULT_IDLE,
+        Arc::new(Arc::clone(answer)),
+    );
+    vault.create(secret("correct horse")).await.unwrap();
+    vault
+        .set_keychain(true, Some(secret("correct horse")))
+        .await
+        .unwrap();
+    (memory, vault)
+}
+
+#[tokio::test]
+async fn a_presence_slot_unlocks_only_after_the_os_confirms() {
+    let answer = Answer::new(Ok(()));
+    let (_, vault) = presence_vault(&answer).await;
+    vault.set_presence(true).await.unwrap();
+    assert_eq!(answer.asked(), 1, "turning it on asks once");
+    assert_eq!(
+        vault.status().await.keychain,
+        KeychainState::On { presence: true }
+    );
+    vault.lock().await;
+
+    answer.set(Err(PresenceError::Denied));
+    assert_eq!(
+        vault.unlock_with_keychain().await,
+        Err(VaultError::Presence(PresenceError::Denied))
+    );
+    assert!(!vault.status().await.unlocked);
+    answer.set(Err(PresenceError::Cancelled));
+    assert!(vault.unlock_with_keychain().await.is_err());
+    assert!(!vault.status().await.unlocked);
+
+    answer.set(Ok(()));
+    vault.unlock_with_keychain().await.unwrap();
+    assert!(vault.status().await.unlocked);
+    vault.lock().await;
+    vault.unlock_with_keychain().await.unwrap();
+    assert_eq!(answer.asked(), 5, "every unlock asks afresh");
+    // The password needs no check.
+    vault.lock().await;
+    answer.set(Err(PresenceError::Unavailable("no sensor".into())));
+    vault.unlock(secret("correct horse")).await.unwrap();
+    assert_eq!(answer.asked(), 5);
+}
+
+#[tokio::test]
+async fn a_plain_slot_asks_nothing() {
+    let answer = Answer::new(Ok(()));
+    let (_, vault) = presence_vault(&answer).await;
+    vault.lock().await;
+    vault.unlock_with_keychain().await.unwrap();
+    assert_eq!(answer.asked(), 0);
+}
+
+#[tokio::test]
+async fn turning_presence_on_or_off_takes_the_check() {
+    let answer = Answer::new(Err(PresenceError::Unavailable("no agent".into())));
+    let (memory, vault) = presence_vault(&answer).await;
+    assert!(matches!(
+        vault.set_presence(true).await,
+        Err(VaultError::Presence(PresenceError::Unavailable(_)))
+    ));
+    assert!(!*memory.presence.lock().unwrap(), "nothing changed");
+    answer.set(Ok(()));
+    vault.set_presence(true).await.unwrap();
+    answer.set(Err(PresenceError::Denied));
+    assert!(vault.set_presence(false).await.is_err());
+    assert!(*memory.presence.lock().unwrap(), "still on");
+    vault.lock().await;
+    assert_eq!(vault.set_presence(false).await, Err(VaultError::Locked));
+}
+
+#[tokio::test]
+async fn the_status_names_the_check_and_whether_it_works() {
+    let answer = Answer::new(Err(PresenceError::Unavailable("no sensor".into())));
+    let (_, vault) = presence_vault(&answer).await;
+    let status = vault.status().await;
+    assert_eq!(status.presence.name, "Touch ID");
+    assert_eq!(status.presence.available, Err("no sensor".into()));
+}
+
+#[tokio::test]
+async fn without_the_check_the_keychain_can_still_be_turned_off() {
+    let answer = Answer::new(Ok(()));
+    let (memory, vault) = presence_vault(&answer).await;
+    vault.set_presence(true).await.unwrap();
+    // The check stops working: a removed sensor, a missing polkit action.
+    answer.set(Err(PresenceError::Unavailable("no sensor".into())));
+    vault.lock().await;
+    assert!(vault.unlock_with_keychain().await.is_err());
+    vault.unlock(secret("correct horse")).await.unwrap();
+    assert!(vault.set_presence(false).await.is_err());
+    // The way out needs no check.
+    vault.set_keychain(false, None).await.unwrap();
+    assert_eq!(vault.status().await.keychain, KeychainState::Off);
+    assert!(!*memory.presence.lock().unwrap());
+}
+
+#[tokio::test]
+async fn turning_presence_on_without_the_keychain_asks_nothing() {
+    let answer = Answer::new(Ok(()));
+    let memory = Arc::new(Memory::default());
+    let vault = Vault::with_presence(
+        Arc::new(Arc::clone(&memory)),
+        DEFAULT_IDLE,
+        Arc::new(Arc::clone(&answer)),
+    );
+    vault.create(secret("correct horse")).await.unwrap();
+    assert!(matches!(
+        vault.set_presence(true).await,
+        Err(VaultError::Invalid(_))
+    ));
+    assert_eq!(answer.asked(), 0);
 }

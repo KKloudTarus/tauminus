@@ -82,6 +82,12 @@ export const commands = {
 	 *  the master password again.
 	 */
 	vaultSetKeychain: (on: boolean, password: string | null) => typedError<null, CommandError>(__TAURI_INVOKE("vault_set_keychain", { on, password })),
+	/**
+	 *  Makes unlocking with the keychain ask the OS to confirm the user is
+	 *  present (Touch ID, Windows Hello, polkit), or stop asking. The OS asks
+	 *  once now, either way; the check runs here, not in the view.
+	 */
+	vaultSetPresence: (on: boolean) => typedError<null, CommandError>(__TAURI_INVOKE("vault_set_presence", { on })),
 	identitiesList: () => typedError<IdentityView[], CommandError>(__TAURI_INVOKE("identities_list")),
 	/**  Adds or edits an identity. Returns its id. */
 	identitySave: (identity: IdentityEdit) => typedError<string, CommandError>(__TAURI_INVOKE("identity_save", { identity })),
@@ -308,7 +314,21 @@ export type ImportResult = {
 /**  A key Tauminus generates for an identity. */
 export type KeyKindSpec = "ed25519" | "ecdsa-p256" | "ecdsa-p384" | "ecdsa-p521" | "rsa3072" | "rsa4096";
 
-export type KeychainSpec = { kind: "unavailable"; reason: string } | { kind: "off" } | { kind: "on" };
+export type KeychainSpec = { kind: "unavailable"; reason: string } | { kind: "off" } | 
+/**
+ *  With `presence`, the OS confirms the user is present before the
+ *  keychain's key is used.
+ */
+{ kind: "on"; presence: boolean };
+
+/**
+ *  The OS's presence check: what it is called, and why it cannot run
+ *  here, when it cannot.
+ */
+export type PresenceSpec = {
+	name: string,
+	unavailable: string | null,
+};
 
 export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
 
@@ -383,6 +403,7 @@ export type VaultStatusSpec = {
 	exists: boolean,
 	unlocked: boolean,
 	keychain: KeychainSpec,
+	presence: PresenceSpec,
 	/**  Minutes unused before the vault locks itself. */
 	idleMinutes: number,
 };
