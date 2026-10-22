@@ -36,6 +36,7 @@ jobs:
       matrix:
         os: [ubuntu-22.04, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -115,6 +116,14 @@ jobs:
           defaults read "$PWD/termius-volume/Termius.app/Contents/Info" CFBundleShortVersionString
           bash ci/idle.sh termius Termius bench-out termius-volume/Termius.app/Contents/MacOS/Termius
           { echo; echo "Idle on this runner:"; cat bench-out/idle-*.json; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench-${{ matrix.os }}
+          path: bench-out
+          if-no-files-found: ignore
 
       - name: Print the raw results
         if: always()

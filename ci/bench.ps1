@@ -53,7 +53,7 @@ $env:TAUMINUS_BENCH_OUT = $report
 Set-Content -Path (Join-Path $Out 'launched_ms') -Value (Now-Ms)
 $process = Start-Process -FilePath $App -PassThru -RedirectStandardError (Join-Path $Out 'app.log')
 
-$deadline = (Get-Date).AddMinutes(20)
+$deadline = (Get-Date).AddMinutes(45)
 while (-not ((Test-Path $report) -and (Get-Item $report).Length -gt 0) -and (Get-Date) -lt $deadline -and -not $process.HasExited) {
   $tree = Get-Tree $process.Id
   $appKiB = [math]::Round((($tree | Where-Object { $_.ProcessId -eq $process.Id }).WorkingSetSize | Measure-Object -Sum).Sum / 1024)
@@ -62,7 +62,17 @@ while (-not ((Test-Path $report) -and (Get-Item $report).Length -gt 0) -and (Get
   Start-Sleep -Seconds 1
 }
 
+if (-not ((Test-Path $report) -and (Get-Item $report).Length -gt 0)) {
+  # What the screen showed when the run gave up.
+  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+  $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+  $bitmap = [System.Drawing.Bitmap]::new($bounds.Width, $bounds.Height)
+  [System.Drawing.Graphics]::FromImage($bitmap).CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+  $bitmap.Save((Join-Path $Out 'screen.png'))
+}
 foreach ($p in (Get-Tree $process.Id)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction Ignore }
+'== notes from the run'
+Get-Content -ErrorAction Ignore "$report.log"
 if (-not ((Test-Path $report) -and (Get-Item $report).Length -gt 0)) {
   Get-Content -ErrorAction Ignore (Join-Path $Out 'app.log') | Select-Object -Last 50
   throw 'the benchmark wrote no report'
