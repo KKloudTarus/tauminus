@@ -13,6 +13,8 @@ import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RecordedCommand } from "@/features/terminal/recorder.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
+import { Broadcast, typedByUser } from "@/features/workspace/broadcast.ts";
+import { type PaneId, paneIds } from "@/features/workspace/layout.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
@@ -37,6 +39,11 @@ import type {
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
 const KEYMAP_STORAGE_KEY = "tauminus.keymap";
+/** How long keys typed after a broadcast line wait for a prompt to show. */
+const HOLD_MS = 500;
+/** Enter, Ctrl+C, or Ctrl+D: the end of a secret typed at a prompt. */
+// oxlint-disable-next-line no-control-regex -- these keys are controls
+const ENDS_SECRET = /[\r\n\u0003\u0004]/u;
 const SIDEBAR_STORAGE_KEY = "tauminus.sidebar";
 
 export const ACTION_LABELS: Record<Action, string> = {
@@ -67,6 +74,9 @@ export const ACTION_LABELS: Record<Action, string> = {
   "forwards.open": "Port forwarding",
   "files.open": "Files on this host (SFTP)",
   "snippets.open": "Snippets",
+  "broadcast.toggle": "Broadcast input: add or remove this pane",
+  "broadcast.tab": "Broadcast input to every pane in this tab",
+  "broadcast.off": "Stop broadcasting input",
 };
 
 interface ShellState {
@@ -76,8 +86,13 @@ interface ShellState {
   historyOpen: boolean;
   forwardsOpen: boolean;
   snippetsOpen: boolean;
-  /** A snippet waiting for its placeholders to be filled in, if any. */
-  snippetToFill: SnippetView | undefined;
+  /**
+   * A snippet waiting for its placeholders to be filled in, and the saved
+   * hosts to run it on, if it runs on hosts rather than the focused pane.
+   */
+  snippetToFill: { snippet: SnippetView; hosts: readonly string[] | undefined } | undefined;
+  /** A snippet waiting for the hosts to run it on. */
+  snippetHosts: SnippetView | undefined;
   /** The host whose files are open, if any. */
   files: { host: HostView; store: FilesStore } | undefined;
   sidebarOpen: boolean;
@@ -99,6 +114,21 @@ export class AppShell {
   readonly forwards: ForwardsStore | undefined;
   /** Saved snippets, when this window has a backend for them. */
   readonly snippets: SnippetsStore | undefined;
+  /** The panes that type together. */
+  readonly broadcast = new Broadcast();
+  /** Settles once a host pane's session is up and its startup snippets typed. */
+  readonly #ready = new WeakMap<
+    TerminalController,
+    { promise: Promise<boolean>; done: (ran: boolean) => void; settled: boolean }
+  >();
+  /** When broadcast last said it held a secret back, so it says so once per secret. */
+  #heldBackAt = 0;
+  /** Panes where the user is typing a secret, until Enter or Ctrl+C. */
+  readonly #secret = new Set<PaneId>();
+  /** Keys a source typed just after sending a line, waiting to be judged. */
+  readonly #held = new Map<PaneId, { keys: string[]; timer: ReturnType<typeof setTimeout> }>();
+  /** False from each start of a host pane's session until its startup snippets are typed. */
+  readonly #startupTyped = new WeakMap<TerminalController, boolean>();
   /** A connect waiting for the vault to unlock. */
   #afterUnlock: (() => void) | undefined;
   readonly keymap: Keymap;
@@ -152,13 +182,14 @@ export class AppShell {
       forwardsOpen: false,
       snippetsOpen: false,
       snippetToFill: undefined,
+      snippetHosts: undefined,
       files: undefined,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
     };
     applyTheme(options.root, this.#state.theme);
 
-    this.workspace = new Workspace<TerminalController, SessionSpec>((_paneId, spec) => {
+    this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
       const controller = new TerminalController(options.sessions, {
         ...(options.renderer ? { renderer: options.renderer } : {}),
@@ -177,8 +208,19 @@ export class AppShell {
           : {}),
       });
       controller.setKeyHandler((event) => this.handleKey(event));
+      controller.setInputListener((data) => this.#broadcastFrom(paneId, data));
       if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
       return controller;
+    });
+    // A closed pane leaves the broadcast. Read from the layout, which
+    // changes before the pane is disposed. O(P), P ≤ 64.
+    this.workspace.subscribe(() => {
+      if (this.broadcast.getSnapshot().size === 0) return;
+      const open = new Set(this.workspace.getSnapshot().tabs.flatMap((t) => paneIds(t.root)));
+      for (const pane of this.broadcast.getSnapshot()) {
+        if (!open.has(pane)) this.broadcast.remove(pane);
+      }
+      for (const pane of this.#secret) if (!open.has(pane)) this.#secret.delete(pane);
     });
   }
 
@@ -261,16 +303,33 @@ export class AppShell {
     if (!open) this.#focusActivePane();
   }
 
-  /** Runs a snippet in the focused pane, asking first for its placeholders. */
-  chooseSnippet(id: string): void {
+  /**
+   * Runs a snippet in the focused pane, or on `hosts` when given, asking
+   * first for its placeholders.
+   */
+  chooseSnippet(id: string, hosts?: readonly string[]): void {
     const snippet = this.snippets?.find(id);
     if (!snippet) return;
+    const closed = { ...this.#state, snippetsOpen: false, snippetHosts: undefined };
     if (snippet.variables.length > 0) {
-      this.#set({ ...this.#state, snippetsOpen: false, snippetToFill: snippet });
+      this.#set({ ...closed, snippetToFill: { snippet, hosts } });
       return;
     }
-    this.#set({ ...this.#state, snippetsOpen: false });
-    void this.runSnippet(id, {});
+    this.#set(closed);
+    void this.runSnippet(id, {}, hosts);
+  }
+
+  /** Asks which saved hosts to run a snippet on. */
+  chooseSnippetHosts(id: string): void {
+    const snippet = this.snippets?.find(id);
+    if (!snippet) return;
+    this.#set({ ...this.#state, snippetsOpen: false, snippetHosts: snippet });
+  }
+
+  closeSnippetHosts(): void {
+    if (this.#state.snippetHosts === undefined) return;
+    this.#set({ ...this.#state, snippetHosts: undefined });
+    this.#focusActivePane();
   }
 
   closeSnippetForm(): void {
@@ -283,11 +342,19 @@ export class AppShell {
    * Types a snippet into the focused pane as keys, through the prod guard
    * on a guarded host, which asks before it runs.
    */
-  async runSnippet(id: string, values: Record<string, string>): Promise<void> {
+  async runSnippet(
+    id: string,
+    values: Record<string, string>,
+    hosts?: readonly string[],
+  ): Promise<void> {
     const snippets = this.snippets;
     const controller = this.#activeController();
     this.closeSnippetForm();
     if (!snippets) return;
+    if (hosts) {
+      await this.#runOnHosts(snippets, id, values, hosts);
+      return;
+    }
     if (!controller) {
       this.hosts.notify("Open a terminal to run a snippet in");
       return;
@@ -301,20 +368,231 @@ export class AppShell {
   }
 
   /**
+   * Opens `hosts` in a new tab, one pane each, broadcasting together, and
+   * types the snippet into each once its session is up and its startup
+   * snippets typed. A host that cannot connect is left out and named.
+   */
+  async #runOnHosts(
+    snippets: SnippetsStore,
+    id: string,
+    values: Record<string, string>,
+    hosts: readonly string[],
+  ): Promise<void> {
+    let text: string;
+    try {
+      text = await snippets.client.command(id, values);
+    } catch (error) {
+      this.hosts.notify(`Snippet: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const saved = this.hosts.getSnapshot().view.hosts;
+    const specs: SessionSpec[] = [];
+    const unable: string[] = [];
+    for (const hostId of hosts) {
+      const host = saved.find((h) => h.id === hostId);
+      if (!host?.target) {
+        unable.push(`${host?.label ?? hostId} (${host?.problem ?? "cannot connect"})`);
+        continue;
+      }
+      specs.push({ kind: "host", hostId: host.id, label: host.label, target: host.target });
+    }
+    const panes = this.#openGrid(specs);
+    for (const spec of specs.slice(panes.length)) {
+      if (spec.kind === "host") unable.push(`${spec.label} (no room for more panes)`);
+    }
+    // One notice: each would replace the one before.
+    if (unable.length > 0) this.hosts.notify(`Not run on ${unable.join(", ")}`);
+    this.broadcast.set(panes);
+    for (const pane of panes) {
+      const controller = this.workspace.terminal(pane);
+      if (!controller) continue;
+      void this.#ready.get(controller)?.promise.then((up) => {
+        if (up) controller.type(text);
+        else
+          this.hosts.notify(`${controller.defaultTitle}: did not connect; the snippet did not run`);
+      });
+    }
+    this.#focusActivePane();
+  }
+
+  /**
+   * One new tab with a pane per spec, in a grid of about √n columns.
+   * Stops at the pane limit. Returns the panes opened.
+   */
+  #openGrid(specs: readonly SessionSpec[]): PaneId[] {
+    const [first, ...rest] = specs;
+    if (!first || !this.workspace.newTab(first)) return [];
+    try {
+      return this.#fillGrid(specs.length, rest);
+    } finally {
+      // A grid opened at once has equal panes; halving each split would not.
+      this.workspace.balance();
+    }
+  }
+
+  /** The panes after the first, row then columns; see {@link #openGrid}. */
+  #fillGrid(count: number, rest: readonly SessionSpec[]): PaneId[] {
+    const focused = () => this.workspace.activeTab?.focused;
+    const opened: PaneId[] = [];
+    const head = focused();
+    if (head) opened.push(head);
+    const columns = Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / columns);
+    const heads = head ? [head] : [];
+    let next = 0;
+    // The first row, left to right.
+    for (let c = 1; c < columns && next < rest.length; c += 1) {
+      if (!this.workspace.split("row", rest[next])) return opened;
+      next += 1;
+      const pane = focused();
+      if (pane) {
+        opened.push(pane);
+        heads.push(pane);
+      }
+    }
+    // Then down each column.
+    for (const top of heads) {
+      this.workspace.focusPane(top);
+      for (let r = 1; r < rows && next < rest.length; r += 1) {
+        if (!this.workspace.split("column", rest[next])) return opened;
+        next += 1;
+        const pane = focused();
+        if (pane) opened.push(pane);
+      }
+    }
+    if (head) this.workspace.focusPane(head);
+    return opened;
+  }
+
+  /**
+   * Sends what the user typed in `from` to the other panes of its tab it
+   * broadcasts with. For half a second after a line is sent, keys wait:
+   * a password typed ahead of its prompt must be judged once the prompt
+   * shows. Ctrl+C never waits, and drops what did.
+   */
+  #broadcastFrom(from: PaneId, data: string): void {
+    if (!typedByUser(data)) return;
+    const held = this.#held.get(from);
+    if (data === "\u0003") {
+      if (held) {
+        clearTimeout(held.timer);
+        this.#held.delete(from);
+      }
+    } else if (held) {
+      held.keys.push(data);
+      return;
+    }
+    this.#deliver(from, data);
+  }
+
+  /**
+   * One key to every member in `from`'s tab: through each pane's prod
+   * guard, Ctrl+C at once. A pane still connecting, or not done typing its
+   * startup snippets, is skipped. A secret, once the user starts typing it
+   * at a password prompt and until Enter or Ctrl+C, goes only to members
+   * asking for one too; a prompt that echoes `*` stops matching after one
+   * key, so the decision holds for the whole secret.
+   */
+  #deliver(from: PaneId, data: string): void {
+    const tab = this.workspace.getSnapshot().tabs.find((t) => paneIds(t.root).includes(from));
+    const inTab = new Set(tab ? paneIds(tab.root) : []);
+    const targets = this.broadcast.targets(from).filter((pane) => inTab.has(pane));
+    if (targets.length === 0) return;
+    const interrupt = data === "\u0003";
+    const ends = ENDS_SECRET.test(data);
+    const source = this.workspace.terminal(from);
+    const secret = !interrupt && (this.#secret.has(from) || source?.atSecretPrompt === true);
+    for (const pane of targets) {
+      const controller = this.workspace.terminal(pane);
+      if (!controller) {
+        this.broadcast.remove(pane);
+      } else if (interrupt) {
+        this.#secret.delete(pane);
+        controller.interrupt();
+      } else if (!this.#takesKeys(controller)) {
+        continue;
+      } else if (secret && !(this.#secret.has(pane) || controller.atSecretPrompt)) {
+        this.#secretHeldBack(controller);
+      } else {
+        if (secret && !ends) this.#secret.add(pane);
+        if (ends) this.#secret.delete(pane);
+        controller.typeShared(data);
+      }
+    }
+    if (secret && !ends) this.#secret.add(from);
+    if (ends || interrupt) this.#secret.delete(from);
+    // A line went out: what comes next may be a password for a prompt not
+    // drawn yet.
+    if (!secret && /[\r\n]/u.test(data)) this.#hold(from);
+  }
+
+  /** Holds `from`'s keys for {@link HOLD_MS}, then sends them as the screen is then. */
+  #hold(from: PaneId): void {
+    const held = {
+      keys: [] as string[],
+      timer: setTimeout(() => {
+        this.#held.delete(from);
+        const [next, ...rest] = held.keys;
+        if (next === undefined) return;
+        this.#deliver(from, next);
+        for (const key of rest) this.#broadcastFrom(from, key);
+      }, HOLD_MS),
+    };
+    this.#held.set(from, held);
+  }
+
+  /**
+   * A pane takes broadcast keys while its session runs, once that start's
+   * startup snippets were typed: keys sent while it connects would wait and
+   * arrive before them.
+   */
+  #takesKeys(controller: TerminalController): boolean {
+    return (
+      controller.getStatus().kind === "running" && this.#startupTyped.get(controller) !== false
+    );
+  }
+
+  /** Says once per secret which pane did not get it. */
+  #secretHeldBack(controller: TerminalController): void {
+    const now = Date.now();
+    if (now - this.#heldBackAt < 2000) return;
+    this.#heldBackAt = now;
+    this.hosts.notify(
+      `Broadcast held a secret back from ${controller.title || "a pane"}: it is not asking for one`,
+    );
+  }
+
+  /**
    * Types a host's startup snippets each time its session comes up,
    * including after a reconnect. A host with none costs no call.
    */
   #startupOn(controller: TerminalController, hostId: string): void {
+    const { promise, done } = deferred<boolean>();
+    const ready = { promise, done, settled: false };
+    void promise.then(() => {
+      ready.settled = true;
+    });
+    this.#ready.set(controller, ready);
     const snippets = this.snippets;
-    if (!snippets) return;
     let was = controller.getStatus().kind;
     controller.subscribe(() => {
       const now = controller.getStatus().kind;
       const started = now === "running" && was !== "running";
       was = now;
+      // A session that ends before it ever came up never gets its keys:
+      // a retry an hour later is not the moment the user ran them for.
+      if (!ready.settled && (now === "failed" || now === "exited")) {
+        done(false);
+        return;
+      }
       if (!started) return;
       const host = this.hosts.getSnapshot().view.hosts.find((h) => h.id === hostId);
-      if (!host || host.startup.length === 0) return;
+      if (!snippets || !host || host.startup.length === 0) {
+        this.#startupTyped.set(controller, true);
+        done(true);
+        return;
+      }
+      this.#startupTyped.set(controller, false);
       snippets.client
         .startup(hostId)
         .then(({ text, skipped }) => {
@@ -328,7 +606,11 @@ export class AppShell {
           this.hosts.notify(
             `${host.label}: startup snippets did not run: ${error instanceof Error ? error.message : String(error)}`,
           ),
-        );
+        )
+        .finally(() => {
+          this.#startupTyped.set(controller, true);
+          done(true);
+        });
     });
   }
 
@@ -414,6 +696,19 @@ export class AppShell {
       case "snippets.open":
         this.setSnippetsOpen(true);
         return;
+      case "broadcast.toggle": {
+        const pane = this.workspace.activeTab?.focused;
+        if (pane) this.broadcast.toggle(pane);
+        break;
+      }
+      case "broadcast.tab": {
+        const tab = this.workspace.activeTab;
+        if (tab) this.broadcast.set(paneIds(tab.root));
+        break;
+      }
+      case "broadcast.off":
+        this.broadcast.clear();
+        break;
       case "files.open": {
         const spec = this.workspace.focusedSpec();
         const host =
@@ -563,6 +858,18 @@ export class AppShell {
     for (const listener of this.#listeners) listener();
   }
 }
+
+/** A promise and what settles it. */
+function deferred<T>(): { promise: Promise<T>; done: (value: T) => void } {
+  let done: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    done = resolve;
+  });
+  // The executor runs at once, so `done` is set here.
+  return { promise, done: done ?? noop };
+}
+
+function noop(): void {}
 
 function readOverrides(storage: Storage | undefined): unknown {
   try {

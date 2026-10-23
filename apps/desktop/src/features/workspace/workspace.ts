@@ -6,6 +6,7 @@ import {
   type LayoutNode,
   type PaneId,
   type Side,
+  balanced,
   closePane,
   countPanes,
   neighbor,
@@ -163,16 +164,16 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
   }
 
   /**
-   * Splits the active tab's focused pane, opening what that pane was opened
-   * with. The new pane gets focus. Returns false at the per-tab or total pane
-   * limit.
+   * Splits the active tab's focused pane, opening `spec`, or what that pane
+   * was opened with. The new pane gets focus. Returns false at the per-tab
+   * or total pane limit.
    */
-  split(direction: Direction): boolean {
+  split(direction: Direction, spec?: S): boolean {
     const tab = this.activeTab;
     if (!tab || countPanes(tab.root) >= MAX_PANES_PER_TAB || this.#terminals.size >= MAX_PANES) {
       return false;
     }
-    const paneId = this.#newPane(this.#terminals.get(tab.focused)?.spec);
+    const paneId = this.#newPane(spec ?? this.#terminals.get(tab.focused)?.spec);
     const root = splitPane(tab.root, tab.focused, direction, paneId, this.#id("split"));
     this.#replaceTab({ ...tab, root, focused: paneId });
     return true;
@@ -216,6 +217,12 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
     if (!tab) return;
     const next = neighbor(tab.root, tab.focused, side);
     if (next) this.focusPane(next);
+  }
+
+  /** Gives every pane of a split in the active tab the same share. */
+  balance(): void {
+    const tab = this.activeTab;
+    if (tab) this.#replaceTab({ ...tab, root: balanced(tab.root) });
   }
 
   resize(tabId: string, splitId: string, sizes: readonly number[]): void {

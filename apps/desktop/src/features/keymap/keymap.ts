@@ -42,7 +42,10 @@ export type Action =
   | "history.open"
   | "forwards.open"
   | "files.open"
-  | "snippets.open";
+  | "snippets.open"
+  | "broadcast.toggle"
+  | "broadcast.tab"
+  | "broadcast.off";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -72,6 +75,9 @@ export const ACTIONS: readonly Action[] = [
   "forwards.open",
   "files.open",
   "snippets.open",
+  "broadcast.toggle",
+  "broadcast.tab",
+  "broadcast.off",
 ];
 
 export type Platform = "mac" | "other";
@@ -107,6 +113,9 @@ const OTHER: Bindings = {
   "forwards.open": [],
   "files.open": [],
   "snippets.open": [],
+  "broadcast.toggle": [],
+  "broadcast.tab": [],
+  "broadcast.off": [],
 };
 
 const MAC: Bindings = {
@@ -138,6 +147,9 @@ const MAC: Bindings = {
   "forwards.open": [],
   "files.open": [],
   "snippets.open": [],
+  "broadcast.toggle": [],
+  "broadcast.tab": [],
+  "broadcast.off": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

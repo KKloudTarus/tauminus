@@ -105,6 +105,16 @@ export function closePane(root: LayoutNode, target: PaneId): LayoutNode | null {
   return replaced ?? root;
 }
 
+/** Every split's children the same size, as a grid opened at once wants. O(n). */
+export function balanced(root: LayoutNode): LayoutNode {
+  if (root.kind === "pane") return root;
+  return {
+    ...root,
+    children: root.children.map(balanced),
+    sizes: root.children.map(() => TOTAL / root.children.length),
+  };
+}
+
 /** Sets a split's sizes, normalized to sum to 100. Unknown ids leave the tree as is. */
 export function resizeSplit(
   root: LayoutNode,

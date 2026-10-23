@@ -9,6 +9,7 @@ import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
+import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
 import { SnippetsDialog } from "@/features/snippets/SnippetsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
@@ -24,8 +25,16 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen, snippetsOpen, snippetToFill, files } =
-    useSyncExternalStore(shell.subscribe, shell.getState);
+  const {
+    sidebarOpen,
+    vaultOpen,
+    historyOpen,
+    forwardsOpen,
+    snippetsOpen,
+    snippetToFill,
+    snippetHosts,
+    files,
+  } = useSyncExternalStore(shell.subscribe, shell.getState);
   const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
   const snippetList = useSyncExternalStore(
     shell.snippets?.subscribe ?? noSubscribe,
@@ -46,6 +55,7 @@ export function App({ shell }: { shell: AppShell }) {
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
   const openFiles = useCallback((host: HostView) => shell.openFiles(host), [shell]);
   const chooseSnippet = useCallback((id: string) => shell.chooseSnippet(id), [shell]);
+  const chooseSnippetHosts = useCallback((id: string) => shell.chooseSnippetHosts(id), [shell]);
 
   // Typing and clicking keep an open vault from locking. Capture phase: the
   // terminal handles its keys before they would bubble here.
@@ -78,6 +88,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.forwardsOpen ||
         state.snippetsOpen ||
         state.snippetToFill !== undefined ||
+        state.snippetHosts !== undefined ||
         state.files !== undefined;
       if (!event.defaultPrevented && !modal) {
         shell.handleKey(event);
@@ -116,6 +127,7 @@ export function App({ shell }: { shell: AppShell }) {
             <PaneTree
               key={active.id}
               workspace={workspace}
+              broadcast={shell.broadcast}
               tab={active}
               onUnlockVault={(retry) => shell.unlockVaultThen(retry)}
             />
@@ -178,13 +190,24 @@ export function App({ shell }: { shell: AppShell }) {
         <SnippetsDialog
           store={shell.snippets}
           onRun={chooseSnippet}
+          onRunOnHosts={chooseSnippetHosts}
           onClose={() => shell.setSnippetsOpen(false)}
+        />
+      )}
+      {snippetHosts && (
+        <SnippetHosts
+          snippet={snippetHosts}
+          hosts={savedHosts}
+          onRun={(hosts) => shell.chooseSnippet(snippetHosts.id, hosts)}
+          onClose={() => shell.closeSnippetHosts()}
         />
       )}
       {snippetToFill && (
         <SnippetForm
-          snippet={snippetToFill}
-          onRun={(values) => void shell.runSnippet(snippetToFill.id, values)}
+          snippet={snippetToFill.snippet}
+          onRun={(values) =>
+            void shell.runSnippet(snippetToFill.snippet.id, values, snippetToFill.hosts)
+          }
           onClose={() => shell.closeSnippetForm()}
         />
       )}

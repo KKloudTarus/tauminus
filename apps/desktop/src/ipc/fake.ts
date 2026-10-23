@@ -17,11 +17,17 @@ import {
 const encoder = new TextEncoder();
 const PROMPT = "$ ";
 
-/** Lines it understands: `echo <text>`, `title <text>`, `exit [code]`, `size`. */
+/**
+ * Lines it understands: `echo <text>`, `title <text>`, `exit [code]`,
+ * `size`, and `sudo`, which reads a password without echo. Ctrl+C drops
+ * the line.
+ */
 class FakeShell implements TerminalSession {
   readonly id: number;
   readonly #events: SessionEvents;
   #line = "";
+  /** Reading a password after `sudo`: keys do not echo. */
+  #secret = false;
   #size: GridSize;
   #ended = false;
 
@@ -35,10 +41,18 @@ class FakeShell implements TerminalSession {
   async write(data: string): Promise<void> {
     for (const char of data) {
       if (this.#ended) return;
-      if (char === "\r") {
+      if (char === "\r" && this.#secret) {
+        this.#secret = false;
+        this.#line = "";
+        this.#print(`\r\nsudo: ok\r\n${PROMPT}`);
+      } else if (char === "\r") {
         this.#print("\r\n");
         this.#run(this.#line.trim());
         this.#line = "";
+      } else if (char === "\u0003") {
+        // As a shell does: drop the line and show a new prompt.
+        this.#line = "";
+        this.#print(`^C\r\n${PROMPT}`);
       } else if (char === "\u007f") {
         if (this.#line.length > 0) {
           this.#line = this.#line.slice(0, -1);
@@ -46,7 +60,7 @@ class FakeShell implements TerminalSession {
         }
       } else if (char >= " ") {
         this.#line += char;
-        this.#print(char);
+        if (!this.#secret) this.#print(char);
       }
     }
   }
@@ -69,6 +83,10 @@ class FakeShell implements TerminalSession {
     switch (command) {
       case "":
         break;
+      case "sudo":
+        this.#secret = true;
+        this.#print("[sudo] password for me: ");
+        return;
       case "echo":
         this.#print(`${argument}\r\n`);
         break;

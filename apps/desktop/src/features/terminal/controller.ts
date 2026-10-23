@@ -21,13 +21,18 @@ import {
 } from "@/ipc/index.ts";
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
-import { CommandGuard, type GuardRequest, type GuardSource } from "./command-guard.ts";
+import {
+  CommandGuard,
+  type GuardRequest,
+  type GuardSource,
+  atSecretPrompt,
+} from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type Lane, type OutputScheduler, outputScheduler } from "./output-scheduler.ts";
-import { defusePaste } from "./paste.ts";
+import { asPaste, defusePaste, pastedText } from "./paste.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { dropsRepeat } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
@@ -74,6 +79,9 @@ export class TerminalController {
   readonly #listeners = new Set<Listener>();
   readonly #openLink: ((url: string) => void) | undefined;
   readonly #mac: boolean;
+  #onInput: ((data: string) => void) | undefined;
+  /** Set while a pointer event is being handled, so its keys stay here. */
+  #fromPointer = false;
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
@@ -256,10 +264,48 @@ export class TerminalController {
       this.#recorder?.shellMark(data);
       return false;
     });
-    this.terminal.onData((raw) => this.type(defusePaste(raw)));
+    this.terminal.onData((raw) => {
+      const data = defusePaste(raw);
+      // Wheel scrolling and Alt+click send arrow keys worked out from this
+      // pane's screen; they mean nothing in another.
+      if (!this.#fromPointer) this.#onInput?.(data);
+      if (data === "\u0003") this.interrupt();
+      else this.type(data);
+    });
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
     );
+  }
+
+  /** Hears what the user types here, for broadcast input. */
+  setInputListener(listener: ((data: string) => void) | undefined): void {
+    this.#onInput = listener;
+  }
+
+  /** Whether the shell is asking for a password or another secret now. */
+  get atSecretPrompt(): boolean {
+    return atSecretPrompt(this.terminal.buffer.active);
+  }
+
+  /**
+   * Types keys another pane's user typed: a paste is bracketed or not as
+   * this pane's shell asked, whatever the other one did.
+   */
+  typeShared(data: string): void {
+    const pasted = pastedText(data);
+    this.type(
+      pasted === undefined ? data : asPaste(pasted, this.terminal.modes.bracketedPasteMode),
+    );
+  }
+
+  /** Ctrl+C at once, ahead of input the prod guard holds for a check. */
+  interrupt(): void {
+    if (this.#guard) {
+      this.#guard.interrupt();
+    } else {
+      this.#recorder?.input("\u0003");
+      this.#input.push({ kind: "text", data: "\u0003" });
+    }
   }
 
   /**
@@ -372,6 +418,29 @@ export class TerminalController {
     }
   }
 
+  /**
+   * Marks the keys a pointer event makes, so they are not broadcast: only
+   * while that event is dispatched. Capture sets the flag before xterm.js
+   * turns the event into keys, and bubbling clears it after, so text an
+   * IME commits on its own timer just before a click is still broadcast.
+   * A timer clears it too, in case xterm.js stops the event.
+   */
+  #watchPointer(): void {
+    const element = this.terminal.element;
+    if (!element) return;
+    const set = () => {
+      this.#fromPointer = true;
+      setTimeout(clear, 0);
+    };
+    const clear = () => {
+      this.#fromPointer = false;
+    };
+    for (const type of ["wheel", "mousedown", "mouseup", "click"]) {
+      element.addEventListener(type, set, { capture: true, passive: true });
+      element.addEventListener(type, clear, { passive: true });
+    }
+  }
+
   /** Shows the terminal in `host`. Opens the session on the first call. */
   attach(host: HTMLElement): void {
     if (this.#disposed) {
@@ -386,6 +455,7 @@ export class TerminalController {
       host.append(this.terminal.element);
     } else {
       this.terminal.open(host);
+      this.#watchPointer();
       const { textarea } = this.terminal;
       if (textarea) {
         this.#stopImeFix = startUnannouncedCompositions(textarea);
