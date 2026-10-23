@@ -83,6 +83,25 @@ const COMMENT_AND_RUN = "\u001b#";
  */
 export const SECRET_PROMPT =
   /(?:\b(?:password|passphrase|pass phrase|passcode|passwort|pin|token|secret|otp|one-time code|verification code|authenticator code|mfa code|2fa code|unseal key|api key|access key|secret key|private key|credential)s?\b|mot de passe|contraseña|senha|mật khẩu|パスワード|密码).{0,120}[:>?](?:\s*\([^)]{0,80}\))?[\s*•●]*$/iu;
+/**
+ * sudo's prompt and its translations, and OpenSSH's two: the prompts that
+ * say whose login they ask for, the only ones the vault fills. The
+ * backend decides with the same rules and checks the user and machine
+ * against the session's login (`tauminus_domain::password_prompt`); this
+ * keeps the pane from asking about every line. A bare `Password:` says
+ * nothing of whose password it wants, so it gets nothing.
+ */
+const SUDO_PROMPT =
+  /^\[sudo\] (?:password|passwort|kennwort|mot de passe|contraseña|senha|mật khẩu|パスワード|密码) ?(?:for|für|de|para|pour|cho|の|，)? ?[A-Za-z0-9._][A-Za-z0-9._-]*\s?[:：]\s*$/iu;
+const SSH_PROMPT =
+  /^(?:[A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9.\-:[\]%]+'s password|\([A-Za-z0-9._][A-Za-z0-9._-]*@[A-Za-z0-9.\-:[\]%]+\) password)\s?:\s*$/iu;
+
+/** Whether `line`, the end of the cursor's line, asks for a login password. */
+export function isPasswordPrompt(line: string): boolean {
+  const text = line.trimStart();
+  return SUDO_PROMPT.test(text) || SSH_PROMPT.test(text);
+}
+
 /** Whether the cursor's line asks for a secret, whose keys are not a command. */
 export function atSecretPrompt(screen: Screen): boolean {
   // The pattern ends the line and spans at most about 140 characters, so

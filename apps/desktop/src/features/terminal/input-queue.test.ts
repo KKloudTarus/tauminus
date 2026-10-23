@@ -7,7 +7,7 @@ import { InputQueue, type InputSink, binaryStringToBytes } from "./input-queue.t
 
 /** A sink whose calls resolve only when the test says so. */
 class ManualSink implements InputSink {
-  calls: { kind: "text" | "bytes"; data: string | number[] }[] = [];
+  calls: { kind: "text" | "bytes" | "secret"; data: string | number[] }[] = [];
   #resolvers: (() => void)[] = [];
   failNext = false;
 
@@ -17,6 +17,10 @@ class ManualSink implements InputSink {
 
   writeBytes(data: Uint8Array): Promise<void> {
     return this.#record({ kind: "bytes", data: [...data] });
+  }
+
+  fillPassword(seen: number): Promise<void> {
+    return this.#record({ kind: "secret", data: String(seen) });
   }
 
   #record(call: (typeof this.calls)[number]): Promise<void> {
@@ -107,5 +111,27 @@ describe("binaryStringToBytes", () => {
 
   it("returns an empty array for an empty string", () => {
     expect(binaryStringToBytes("")).toHaveLength(0);
+  });
+
+  it("sends a fill in turn with the keys around it, never merged, and says how it went", async () => {
+    const sink = new ManualSink();
+    const queue = new InputQueue(sink, vi.fn<(error: unknown) => void>());
+    const outcomes: string[] = [];
+    queue.push(text("a"));
+    queue.push({ kind: "secret", seen: 7, done: (e) => outcomes.push(e ? "failed" : "ok") });
+    queue.push(text("b"));
+    queue.push(text("c"));
+    await sink.complete();
+    await sink.complete();
+    await sink.complete();
+    expect(sink.calls).toEqual([text("a"), { kind: "secret", data: "7" }, text("bc")]);
+    expect(outcomes).toEqual(["ok"]);
+    // Dropped before it went: it hears that too.
+    sink.failNext = false;
+    queue.push(text("x"));
+    queue.push({ kind: "secret", seen: 9, done: (e) => outcomes.push(e ? "dropped" : "ok") });
+    queue.clear();
+    await sink.complete();
+    expect(outcomes).toEqual(["ok", "dropped"]);
   });
 });

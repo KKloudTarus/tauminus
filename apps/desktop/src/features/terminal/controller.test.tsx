@@ -1061,6 +1061,162 @@ describe("TerminalController with the prod guard", () => {
   });
 });
 
+/** An SSH pane whose session's saved host has a login password. */
+async function withFill(
+  offer: { identity: string | null; login: string } | null = {
+    identity: "deploy",
+    login: "ops@db.example",
+  },
+  early = "",
+) {
+  const { sessions, controller } = setup({ spec: sshTo("db.example") });
+  const fillOffer = vi.fn<NonNullable<TerminalSession["fillOffer"]>>(async () => offer);
+  const fillPassword = vi.fn<NonNullable<TerminalSession["fillPassword"]>>(async () => {});
+  Object.assign(sessions.session, { fillOffer, fillPassword });
+  await mount(controller);
+  const show = (text: string) => sessions.events.onOutput(new TextEncoder().encode(text));
+  // Output may come before `open` returns: the banner, the motd.
+  if (early) show(early);
+  sessions.resolveOpen();
+  await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+  return { sessions, controller, fillOffer, fillPassword, show };
+}
+
+const OFFER = { kind: "offer", identity: "deploy", login: "ops@db.example" } as const;
+
+describe("TerminalController filling a password from the vault", () => {
+  it("offers at a password prompt and types it with all the output it saw", async () => {
+    const banner = "Welcome to db.example\r\n";
+    const { controller, fillPassword, show } = await withFill(undefined, banner);
+    show("$ sudo ls\r\n[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    expect(await controller.fillPassword()).toBe("filled");
+    const seen = banner.length + "$ sudo ls\r\n[sudo] password for ops: ".length;
+    expect(fillPassword).toHaveBeenCalledWith(seen);
+    // Typed once: the same prompt is not offered again.
+    expect(controller.getFill()).toBeUndefined();
+    expect(await controller.fillPassword()).toBe("none");
+  });
+
+  it("offers again at a prompt asked again, even one that looks the same", async () => {
+    const { controller, show } = await withFill();
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    expect(await controller.fillPassword()).toBe("filled");
+    show("\r\nSorry, try again.\r\n[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+  });
+
+  it("offers nothing for a passphrase, a code, a new password, or a question", async () => {
+    const { controller, fillOffer, show } = await withFill();
+    for (const prompt of [
+      "Enter passphrase for key '/home/ops/.ssh/id_ed25519': ",
+      "\r\nOne-time password (OATH) for `ops': ",
+      "\r\nNew password: ",
+      "\r\nPassword: ",
+      "\r\nYour password has expired. Change it now? [y/N]? ",
+    ]) {
+      show(prompt);
+      // oxlint-disable-next-line no-await-in-loop -- one prompt after another
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    expect(fillOffer).not.toHaveBeenCalled();
+    expect(controller.getFill()).toBeUndefined();
+  });
+
+  it("takes the offer back once anything is typed on the line, broadcast keys too", async () => {
+    const { controller, show } = await withFill();
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    controller.typeShared("abc");
+    await vi.waitFor(() => expect(controller.getFill()).toBeUndefined());
+    expect(await controller.fillPassword()).toBe("none");
+  });
+
+  it("offers nothing on a session that is not a saved host's", async () => {
+    const { controller, show } = await withFill(null);
+    show("[sudo] password for ops: ");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(controller.getFill()).toBeUndefined();
+  });
+
+  it("with scrollback full, offers a repeated prompt and warns of no echo after an answer", async () => {
+    const { controller, show, fillPassword, sessions } = await withFill();
+    show(`${Array.from({ length: 10_100 }, (_, i) => `line ${i}`).join("\r\n")}\r\n`);
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    expect(await controller.fillPassword()).toBe("filled");
+    expect(fillPassword).toHaveBeenCalledTimes(1);
+    // The user's Enter; the command's output lands where the prompt was.
+    sessions.events.onOutput(new TextEncoder().encode("\r\nfile1 file2\r\nops@db:~$ "));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(controller.getFill()).toBeUndefined();
+    show("sudo ls\r\n[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+  });
+
+  it("offers again when the backend saw output the pane had not", async () => {
+    const { controller, show, fillPassword } = await withFill();
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    fillPassword.mockRejectedValueOnce(
+      new SessionCommandError({ code: "cancelled", message: "the session showed more" }),
+    );
+    expect(await controller.fillPassword()).toBe("failed");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    expect(await controller.fillPassword()).toBe("filled");
+  });
+
+  it("says when the vault must be unlocked, and why else nothing was typed", async () => {
+    const { controller, fillPassword, show } = await withFill({
+      identity: null,
+      login: "ops@db.example",
+    });
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()?.kind).toBe("offer"));
+    fillPassword.mockRejectedValueOnce(
+      new SessionCommandError({ code: "vault_locked", message: "the vault is locked" }),
+    );
+    expect(await controller.fillPassword()).toBe("locked");
+    fillPassword.mockRejectedValueOnce(
+      new SessionCommandError({
+        code: "invalid_argument",
+        message: "the host was edited since this session opened",
+      }),
+    );
+    expect(await controller.fillPassword()).toBe("failed");
+    expect(controller.getFill()).toMatchObject({
+      kind: "failed",
+      message: "the host was edited since this session opened",
+    });
+    // The line changes: the message goes.
+    show("\r\n$ ");
+    await vi.waitFor(() => expect(controller.getFill()).toBeUndefined());
+  });
+
+  it("warns when the host shows what was typed, until the line changes", async () => {
+    const { controller, show, fillPassword } = await withFill();
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    // A host that echoes, quickly: what the vault typed comes back at once.
+    fillPassword.mockImplementationOnce(async () => show("hunter2"));
+    expect(await controller.fillPassword()).toBe("filled");
+    await vi.waitFor(() => expect(controller.getFill()?.kind).toBe("echoed"));
+    show("\u0015\r\n$ ");
+    await vi.waitFor(() => expect(controller.getFill()).toBeUndefined());
+  });
+
+  it("does not warn when the prompt shows a star for each key", async () => {
+    const { controller, show, fillPassword } = await withFill();
+    show("[sudo] password for ops: ");
+    await vi.waitFor(() => expect(controller.getFill()).toEqual(OFFER));
+    fillPassword.mockImplementationOnce(async () => show("*******"));
+    expect(await controller.fillPassword()).toBe("filled");
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(controller.getFill()).toBeUndefined();
+  });
+});
+
 describe("mostUrgent", () => {
   it("takes the most urgent of a tab's panes", () => {
     expect(mostUrgent([])).toBe("idle");

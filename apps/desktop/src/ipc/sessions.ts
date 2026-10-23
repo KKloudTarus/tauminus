@@ -74,6 +74,18 @@ export interface TerminalSession {
   /** Checks the link still answers; a dead one ends the session as lost. */
   probe(): Promise<void>;
   close(): Promise<void>;
+  /**
+   * Whether the session's saved host has a login password the vault may
+   * type, and the identity's name (`null` while the vault is locked);
+   * `null` when it has none. Sessions without a saved host lack it.
+   */
+  fillOffer?(): Promise<{ identity: string | null; login: string } | null>;
+  /**
+   * Types that password, without Enter, if the session showed nothing
+   * past the `seen` bytes of output the view has parsed (else it fails
+   * as `cancelled`). The view never sees the password.
+   */
+  fillPassword?(seen: number): Promise<void>;
 }
 
 /** Opens terminal sessions. Components depend on this, never on Tauri. */
@@ -138,6 +150,8 @@ export const tauriSessions: SessionClient = {
       acknowledge: (bytes) => done(commands.sessionAcknowledge(id, bytes)),
       probe: () => done(commands.sessionProbe(id)),
       close: () => done(commands.sessionClose(id)),
+      fillOffer: () => unwrap(commands.sessionFillOffer(id)),
+      fillPassword: (seen) => done(commands.sessionFillPassword(id, seen)),
     };
   },
 };

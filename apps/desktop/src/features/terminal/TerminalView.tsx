@@ -23,6 +23,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
   const guardRequest = useSyncExternalStore(controller.subscribe, controller.getGuardRequest);
   const guarded = useSyncExternalStore(controller.subscribeGuard, () => controller.guarded);
   const recording = useSyncExternalStore(controller.subscribe, controller.getRecording);
+  const fill = useSyncExternalStore(controller.subscribe, controller.getFill);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -83,6 +84,38 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
             Could not start the shell: {status.message}
           </output>
         ))}
+      {(fill?.kind === "echoed" || fill?.kind === "failed") && (
+        <p
+          role="alert"
+          data-testid={fill.kind === "echoed" ? "password-echoed" : "password-failed"}
+          className="absolute right-3 bottom-2 max-w-[70%] rounded bg-amber-500 px-2 py-1 text-xs text-black shadow"
+        >
+          {fill.kind === "echoed"
+            ? "The host showed what was typed: it may not have asked for a password. Ctrl+U clears the line before Enter."
+            : `No password typed: ${fill.message}`}
+        </p>
+      )}
+      {fill?.kind === "offer" && (
+        <button
+          type="button"
+          tabIndex={-1}
+          data-testid="password-fill"
+          title={`Types the vault password for ${fill.login}, without Enter`}
+          className="absolute right-3 bottom-2 rounded border border-current/20 bg-background px-2 py-1 text-xs shadow hover:bg-current/10"
+          onClick={() => {
+            void controller.fillPassword().then((outcome) => {
+              if (outcome === "locked") {
+                onUnlockVault?.(() => void controller.fillPassword());
+              }
+            });
+            controller.focus();
+          }}
+        >
+          {fill.identity === null
+            ? `Type the vault password for ${fill.login}`
+            : `Type the password of ${fill.identity} (${fill.login})`}
+        </button>
+      )}
       {recording && (
         <output
           data-testid="recording-status"

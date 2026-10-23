@@ -97,6 +97,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "recordings.open": "Recordings: play back recorded sessions",
   "triggers.open": "Highlight sets and triggers",
   "captures.open": "Captured lines: what trigger rules kept",
+  "terminal.fillPassword": "Type this host's password at its prompt",
 };
 
 interface ShellState {
@@ -385,6 +386,15 @@ export class AppShell {
     if (!this.forwards) return;
     this.setForwardsOpen(true);
     void this.forwards.toggle(hostId, ruleId);
+  }
+
+  /** The focused pane types its host's password, after an unlock if need be. */
+  #fillPassword(): void {
+    const controller = this.#activeController();
+    if (!controller) return;
+    void controller.fillPassword().then((outcome) => {
+      if (outcome === "locked") this.unlockVaultThen(() => void controller.fillPassword());
+    });
   }
 
   setCapturesOpen(open: boolean): void {
@@ -1124,6 +1134,9 @@ export class AppShell {
         return;
       case "captures.open":
         this.setCapturesOpen(true);
+        return;
+      case "terminal.fillPassword":
+        this.#fillPassword();
         return;
       case "broadcast.off":
         this.broadcast.clear();

@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-export type InputChunk = { kind: "text"; data: string } | { kind: "bytes"; data: Uint8Array };
+export type InputChunk =
+  | { kind: "text"; data: string }
+  | { kind: "bytes"; data: Uint8Array }
+  /**
+   * The saved host's password, which the backend types: in turn with the
+   * keys around it, never merged. `done` hears how it went.
+   */
+  | { kind: "secret"; seen: number; done: (error?: unknown) => void };
 
 export interface InputSink {
   writeText(data: string): Promise<void>;
   writeBytes(data: Uint8Array): Promise<void>;
+  fillPassword(seen: number): Promise<void>;
 }
 
 /**
@@ -36,7 +44,11 @@ export class InputQueue {
   }
 
   push(chunk: InputChunk): void {
-    if (this.#closed || chunk.data.length === 0) {
+    if (this.#closed) {
+      if (chunk.kind === "secret") chunk.done(new Error("the pane is closed"));
+      return;
+    }
+    if (chunk.kind !== "secret" && chunk.data.length === 0) {
       return;
     }
     this.#pending.push(chunk);
@@ -47,13 +59,19 @@ export class InputQueue {
 
   /** Drops queued input; later pushes still go out. */
   clear(): void {
-    this.#pending = [];
-    this.#head = 0;
+    this.#drop();
   }
 
   /** Drops queued input; later pushes are ignored. */
   close(): void {
     this.#closed = true;
+    this.#drop();
+  }
+
+  #drop(): void {
+    for (const chunk of this.#pending.slice(this.#head)) {
+      if (chunk.kind === "secret") chunk.done(new Error("dropped"));
+    }
     this.#pending = [];
     this.#head = 0;
   }
@@ -66,6 +84,16 @@ export class InputQueue {
     this.#inFlight = true;
     try {
       for (let next = this.#takeMerged(); next; next = this.#takeMerged()) {
+        if (next.kind === "secret") {
+          try {
+            // oxlint-disable-next-line no-await-in-loop -- sequential by design: order matters
+            await this.#sink.fillPassword(next.seen);
+            next.done();
+          } catch (error) {
+            next.done(error);
+          }
+          continue;
+        }
         try {
           // oxlint-disable-next-line no-await-in-loop -- sequential by design: order matters
           await (next.kind === "text"
@@ -85,6 +113,10 @@ export class InputQueue {
     const first = this.#pending[this.#head];
     if (!first) {
       return undefined;
+    }
+    if (first.kind === "secret") {
+      this.#head += 1;
+      return first;
     }
     let end = this.#head + 1;
     while (end < this.#pending.length && this.#pending[end]?.kind === first.kind) {
