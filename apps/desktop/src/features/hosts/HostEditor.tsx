@@ -122,6 +122,8 @@ export interface SessionFieldsState {
   history: GuardChoice;
   /** The shell's character set, or `inherit`. */
   encoding: EncodingSpec | "inherit";
+  /** A tmux session name; `inherit`, or `off` to turn a group's off. */
+  tmux: string;
   /** One `NAME=value` per line. */
   env: string;
 }
@@ -133,6 +135,7 @@ export function sessionFields(settings: SettingsSpec | undefined): SessionFields
     forwardAgent: agent == null ? "inherit" : agent ? "on" : "off",
     history: history == null ? "inherit" : history ? "on" : "off",
     encoding: settings?.encoding ?? "inherit",
+    tmux: settings?.tmux == null ? "inherit" : settings.tmux === "" ? "off" : settings.tmux,
     env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
   };
 }
@@ -158,6 +161,12 @@ export function withSession(base: SettingsSpec, fields: SessionFieldsState): Set
     forwardAgent: fields.forwardAgent === "inherit" ? null : fields.forwardAgent === "on",
     history: fields.history === "inherit" ? null : fields.history === "on",
     encoding: fields.encoding === "inherit" ? null : fields.encoding,
+    tmux:
+      fields.tmux.trim() === "" || fields.tmux === "inherit"
+        ? null
+        : fields.tmux === "off"
+          ? ""
+          : fields.tmux.trim(),
     env: env.length > 0 ? env : null,
   };
 }
@@ -674,6 +683,19 @@ function SessionFields({
             ))}
           </select>
         </Field>
+        <Field label="tmux to join on every connect (blank inherits, off turns it off)">
+          <input
+            value={value.tmux === "inherit" ? "" : value.tmux}
+            onChange={(e) => set({ tmux: e.target.value === "" ? "inherit" : e.target.value })}
+            placeholder="inherit"
+            spellCheck={false}
+            className={`${FIELD} font-mono`}
+          />
+        </Field>
+        <p className="mb-3 text-xs opacity-60">
+          With tmux, a dropped connection leaves your work running on the host, and the next connect
+          picks it up where it was.
+        </p>
         <Field label="Environment variables (one per line, as LANG=C.UTF-8)">
           <textarea
             value={value.env}

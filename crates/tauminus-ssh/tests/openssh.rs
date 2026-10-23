@@ -10,9 +10,12 @@
 mod support;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use support::*;
-use tauminus_app::ports::{Answer, ConnectError, Prompt, Prompter, SshConnector, TerminalInput};
+use tauminus_app::ports::{
+    Answer, ConnectError, Prompt, Prompter, SshConnector, TerminalEvent, TerminalInput,
+};
 use tauminus_domain::{AuthMethod, AuthOptions, Route, TerminalSize};
 use tauminus_ssh::{AgentSource, HostKeyStore, RusshConnector};
 
@@ -312,7 +315,7 @@ async fn agent_keys_log_in() {
         if socket.exists() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let added = std::process::Command::new("ssh-add")
         .arg(&key)
@@ -535,16 +538,15 @@ async fn a_paste_larger_than_the_window_into_an_echoing_program_completes() {
         ))
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
     stream
         .input
         .send(TerminalInput::Data(vec![b'x'; PASTE]))
         .await
         .unwrap();
-    let (output, code) =
-        tokio::time::timeout(std::time::Duration::from_secs(30), collect(&mut stream))
-            .await
-            .expect("no deadlock between the paste and its echo");
+    let (output, code) = tokio::time::timeout(Duration::from_secs(30), collect(&mut stream))
+        .await
+        .expect("no deadlock between the paste and its echo");
     assert!(output.matches('x').count() >= PASTE, "the echo came back");
     assert_eq!(code, Some(0));
 }
@@ -566,9 +568,9 @@ async fn terminate_works_while_a_write_waits_for_the_window() {
         .send(TerminalInput::Data(vec![b'x'; 8 * 1024 * 1024]))
         .await
         .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     stream.terminator.terminate();
-    let (_, code) = tokio::time::timeout(std::time::Duration::from_secs(5), collect(&mut stream))
+    let (_, code) = tokio::time::timeout(Duration::from_secs(5), collect(&mut stream))
         .await
         .expect("terminate ends the session");
     assert_eq!(code, None);
@@ -649,7 +651,7 @@ async fn a_partial_success_restarts_with_what_the_server_still_wants() {
 }
 
 /// Answers the host key prompt after `delay`.
-struct SlowTrust(std::time::Duration);
+struct SlowTrust(Duration);
 
 impl Prompter for SlowTrust {
     fn ask(&self, _prompt: Prompt) -> tauminus_app::ports::BoxFuture<'_, Answer> {
@@ -670,7 +672,7 @@ async fn time_spent_reading_the_fingerprint_does_not_count_against_the_server() 
     let key = client.user_key("id", "");
     client.connector = client
         .connector
-        .with_connect_timeout(std::time::Duration::from_secs(1));
+        .with_connect_timeout(Duration::from_secs(1));
     let sshd = Sshd::start(
         &sshd_bin,
         &[&client.scratch.path("id.pub")],
@@ -678,7 +680,7 @@ async fn time_spent_reading_the_fingerprint_does_not_count_against_the_server() 
         SshdOptions::default(),
     );
     let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
-    let slow: Arc<dyn Prompter> = Arc::new(SlowTrust(std::time::Duration::from_secs(2)));
+    let slow: Arc<dyn Prompter> = Arc::new(SlowTrust(Duration::from_secs(2)));
     let mut stream = client
         .connector
         .connect(&target, SIZE(), slow)
@@ -702,9 +704,9 @@ async fn an_abandoned_connect_never_records_the_key_it_was_asking_about() {
         SshdOptions::default(),
     );
     let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
-    let slow: Arc<dyn Prompter> = Arc::new(SlowTrust(std::time::Duration::from_secs(1)));
+    let slow: Arc<dyn Prompter> = Arc::new(SlowTrust(Duration::from_secs(1)));
     let abandoned = tokio::time::timeout(
-        std::time::Duration::from_millis(300),
+        Duration::from_millis(300),
         client.connector.connect(&target, SIZE(), slow),
     )
     .await;
@@ -712,7 +714,7 @@ async fn an_abandoned_connect_never_records_the_key_it_was_asking_about() {
         abandoned.is_err(),
         "the connect was still waiting on the prompt"
     );
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
         !client.scratch.path("tauminus_known_hosts").exists(),
         "a late answer must not trust a key for a connection nobody uses"
@@ -769,7 +771,7 @@ async fn start_agent(
         if socket.exists() {
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     let added = std::process::Command::new("ssh-add")
         .arg(key)
@@ -1225,7 +1227,7 @@ async fn a_script_that_floods_output_is_cut_at_the_cap() {
     );
     let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
     let outcome = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
+        Duration::from_secs(30),
         client.connector.run_script(
             &target,
             prompter(&ScriptedPrompter::trust()),
@@ -1239,4 +1241,299 @@ async fn a_script_that_floods_output_is_cut_at_the_cap() {
     assert_eq!(outcome.output.len(), 64 * 1024);
     // The rest is dropped, and the exit status still arrives.
     assert_eq!(outcome.status, Some(0));
+}
+
+/// Forwards TCP to `to`, and can black-hole it: while cut, nothing moves
+/// either way and nothing is reset, as when a laptop sleeps or a network
+/// drops; new connections are held the same way.
+struct CuttableProxy {
+    port: u16,
+    cut: Arc<std::sync::atomic::AtomicBool>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl CuttableProxy {
+    async fn start(to: u16) -> Self {
+        use std::sync::atomic::Ordering;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cut = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&cut);
+        let task = tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let flag = Arc::clone(&flag);
+                tokio::spawn(async move {
+                    let Ok(server) = tokio::net::TcpStream::connect(("127.0.0.1", to)).await else {
+                        return;
+                    };
+                    let (cr, cw) = client.into_split();
+                    let (sr, sw) = server.into_split();
+                    let pump =
+                        |flag: Arc<std::sync::atomic::AtomicBool>| {
+                            move |mut from: tokio::net::tcp::OwnedReadHalf,
+                              mut to: tokio::net::tcp::OwnedWriteHalf| async move {
+                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                            let mut buffer = vec![0_u8; 16 * 1024];
+                            loop {
+                                while flag.load(Ordering::Acquire) {
+                                    tokio::time::sleep(Duration::from_millis(50)).await;
+                                }
+                                let Ok(n) = from.read(&mut buffer).await else { return };
+                                if n == 0 {
+                                    return;
+                                }
+                                // Read during a cut: held, as a dead link holds it.
+                                while flag.load(Ordering::Acquire) {
+                                    tokio::time::sleep(Duration::from_millis(50)).await;
+                                }
+                                if to.write_all(&buffer[..n]).await.is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        };
+                    let up = tokio::spawn(pump(Arc::clone(&flag))(cr, sw));
+                    let down = tokio::spawn(pump(flag)(sr, cw));
+                    let _ = tokio::join!(up, down);
+                });
+            }
+        });
+        Self { port, cut, task }
+    }
+
+    fn set_cut(&self, cut: bool) {
+        self.cut.store(cut, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl Drop for CuttableProxy {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn output_until(stream: &mut tauminus_app::ports::TerminalStream, needle: &str) -> String {
+    let mut seen = Vec::new();
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !String::from_utf8_lossy(&seen).contains(needle) {
+            match stream.events.recv().await {
+                Some(TerminalEvent::Output(chunk)) => seen.extend(chunk),
+                other => panic!(
+                    "{other:?} before {needle:?}: {}",
+                    String::from_utf8_lossy(&seen)
+                ),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("no {needle:?} in {}", String::from_utf8_lossy(&seen)));
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+/// The v0.3 exit criterion: the network goes away for 30 s, the session
+/// notices, connects again, and its tmux session is there as it was left.
+#[tokio::test]
+async fn a_thirty_second_outage_is_survived_by_reconnecting_to_tmux() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let Some(_) = which("tmux") else {
+        assert!(
+            std::env::var_os("CI").is_none() || !cfg!(target_os = "linux"),
+            "CI needs tmux"
+        );
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions {
+            extra: vec!["AcceptEnv TMUX_TMPDIR".into()],
+            ..SshdOptions::default()
+        },
+    );
+    let proxy = CuttableProxy::start(sshd.port).await;
+    let mut target = target(
+        endpoint("127.0.0.1", proxy.port),
+        vec![],
+        Route::Direct,
+        key_auth(&[key]),
+    );
+    // A tmux server of the test's own, never the user's.
+    let sockets = client.scratch.path("tmux");
+    std::fs::create_dir_all(&sockets).unwrap();
+    target.session.env = tauminus_domain::env_list(vec![
+        tauminus_domain::EnvVar::parse("TMUX_TMPDIR", &sockets.display().to_string()).unwrap(),
+    ])
+    .unwrap();
+    target.session.tmux = Some(tauminus_domain::TmuxSession::parse("work").unwrap());
+
+    let mut first = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    first
+        .input
+        .send(TerminalInput::Text("echo MARK-$((40+2))\r".into()))
+        .await
+        .unwrap();
+    output_until(&mut first, "MARK-42").await;
+    // A probe of a live link changes nothing.
+    first.terminator.probe();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    first
+        .input
+        .send(TerminalInput::Text("echo LIVE-$((1+1))\r".into()))
+        .await
+        .unwrap();
+    output_until(&mut first, "LIVE-2").await;
+
+    proxy.set_cut(true);
+    let cut_at = std::time::Instant::now();
+    // As on waking: the app probes, and the dead link is found within the
+    // probe's deadline, long before the network returns.
+    first.terminator.probe();
+    let lost = tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            match first.events.recv().await {
+                Some(TerminalEvent::Lost) => return true,
+                Some(TerminalEvent::Exited { .. }) | None => return false,
+                Some(TerminalEvent::Output(_)) => {}
+            }
+        }
+    })
+    .await;
+    assert_eq!(
+        lost,
+        Ok(true),
+        "the session reports the link lost, not ended"
+    );
+    // The rest of the 30 s outage.
+    tokio::time::sleep(Duration::from_secs(30).saturating_sub(cut_at.elapsed())).await;
+    proxy.set_cut(false);
+
+    let mut second = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    // tmux draws the window as it was left: the line from before is there.
+    output_until(&mut second, "MARK-42").await;
+    // End the test's tmux session, and with it its server: the shell exits,
+    // the session ends, and this connection closes with it.
+    second
+        .input
+        .send(TerminalInput::Text("exit\r".into()))
+        .await
+        .unwrap();
+    let (_, code) = collect(&mut second).await;
+    assert_eq!(code, Some(0), "tmux ends with its last session");
+}
+
+fn which(program: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(program))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// A server that takes the connection and drops it before its banner, as
+/// sshd does past `MaxStartups`: a failure to reach it, tried again later,
+/// not a protocol error that stops a reconnect.
+#[tokio::test]
+async fn a_server_that_drops_before_its_banner_is_unreachable_not_broken() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        while let Ok((socket, _)) = listener.accept().await {
+            drop(socket);
+        }
+    });
+    let client = Client::new("");
+    let target = target(
+        endpoint("127.0.0.1", port),
+        vec![],
+        Route::Direct,
+        key_auth(&[]),
+    );
+    let Err(error) = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+    else {
+        panic!("nothing to connect to");
+    };
+    server.abort();
+    assert!(matches!(error, ConnectError::Io(_)), "{error:?}");
+}
+
+/// A probe while output backs up: the answer waits behind megabytes the
+/// pane has not read yet, and the session is not lost for it.
+#[tokio::test]
+async fn a_probe_behind_unread_output_does_not_lose_a_live_link() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    stream
+        .input
+        .send(TerminalInput::Text("yes flood\r".into()))
+        .await
+        .unwrap();
+    output_until(&mut stream, "flood\r\nflood").await;
+    stream.terminator.probe();
+    // The pane stops reading for longer than the probe's deadline.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    let read = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match stream.events.recv().await {
+                Some(TerminalEvent::Output(_)) => {}
+                other => return other,
+            }
+        }
+    })
+    .await;
+    assert!(read.is_err(), "the link was live: {read:?}");
+    stream
+        .input
+        .send(TerminalInput::Text("\u{3}".into()))
+        .await
+        .unwrap();
+    stream
+        .input
+        .send(TerminalInput::Text("exit\r".into()))
+        .await
+        .unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            match stream.events.recv().await {
+                Some(TerminalEvent::Output(_)) => {}
+                other => return other,
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(ended, Some(TerminalEvent::Exited { .. })),
+        "{ended:?}"
+    );
 }

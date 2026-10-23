@@ -45,6 +45,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         commands::session_write,
         commands::session_write_bytes,
         commands::session_resize,
+        commands::session_probe,
         commands::session_acknowledge,
         commands::session_close,
         ssh::ssh_open,

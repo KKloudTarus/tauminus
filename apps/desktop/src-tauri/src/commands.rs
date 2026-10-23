@@ -73,6 +73,21 @@ pub(crate) async fn session_resize(
     Ok(sessions.resize(id.into(), size.try_into()?).await?)
 }
 
+/// Asks a session to check that its link still answers, after a wake or a
+/// network change; a dead one ends with `lost`. Returns at once.
+#[tauri::command]
+#[specta::specta]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri injects State by value into command handlers"
+)]
+pub(crate) fn session_probe(
+    sessions: State<'_, Arc<SessionManager>>,
+    id: SessionHandle,
+) -> Result<(), CommandError> {
+    Ok(sessions.probe(id.into())?)
+}
+
 /// Reports bytes the terminal view has finished parsing, for flow control.
 #[tauri::command]
 #[specta::specta]

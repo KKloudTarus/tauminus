@@ -17,7 +17,8 @@ use thiserror::Error;
 use crate::forward::{ForwardError, ForwardRule, check_rules};
 use crate::guard::{GuardSettings, PatternError, Policy};
 use crate::ssh::{
-    AuthMethod, AuthOptions, Encoding, Endpoint, HostName, Route, SshTarget, UserName,
+    AuthMethod, AuthOptions, Encoding, Endpoint, HostName, Route, SshTarget, Tmux, TmuxSession,
+    UserName,
 };
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 use crate::telnet::{TELNET_PORT, TelnetTarget};
@@ -280,6 +281,8 @@ pub struct Settings {
     /// The terminal's character set; `None` inherits, and the root default
     /// is UTF-8.
     pub encoding: Option<Encoding>,
+    /// A tmux session to join on every connect; `None` inherits.
+    pub tmux: Option<Tmux>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,6 +618,10 @@ impl Inventory {
             forward_agent: chain.iter().find_map(|s| s.forward_agent).unwrap_or(false),
             env: env.into_values().cloned().collect(),
             encoding: chain.iter().find_map(|s| s.encoding).unwrap_or_default(),
+            tmux: chain
+                .iter()
+                .find_map(|s| s.tmux.as_ref())
+                .and_then(|t| t.session().cloned()),
         })
     }
 
@@ -622,6 +629,19 @@ impl Inventory {
     /// group's. O(d).
     pub fn identity(&self, id: &HostId) -> Result<Option<IdentityId>, HostsError> {
         Ok(self.chain(id)?.iter().find_map(|s| s.identity.clone()))
+    }
+
+    /// The tmux session a host joins, by its own setting or the nearest
+    /// group's. O(d), no allocation: the host list asks it of every host.
+    pub fn tmux(&self, id: &HostId) -> Result<Option<&TmuxSession>, HostsError> {
+        let host = self
+            .hosts
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        Ok(std::iter::once(&host.settings)
+            .chain(self.ancestry(host.group.as_ref()).map(|g| &g.settings))
+            .find_map(|s| s.tmux.as_ref())
+            .and_then(Tmux::session))
     }
 
     /// Whether a host forwards the agent, by its own setting or the nearest
@@ -796,7 +816,8 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         forward_agent,
         identity,
         history,
-        encoding
+        encoding,
+        tmux
     );
     let mut env = child.env.clone();
     env.extend(parent.env.iter().cloned());

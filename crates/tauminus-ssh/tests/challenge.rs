@@ -25,6 +25,16 @@ use tokio::net::TcpListener;
 
 const PASSWORD: &str = "hunter2";
 const CODE: &str = "123456";
+/// A stored password the server no longer takes; no other test sends it.
+const ROTATED: &str = "rotated-away";
+static ROTATED_TRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The same, for the test where the server closes right after turning it down.
+const ROTATED_LAST: &str = "rotated-and-last";
+/// The same, for panes signing in at the same moment.
+const ROTATED_TOGETHER: &str = "rotated-together";
+static ROTATED_TOGETHER_TRIES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+static ROTATED_LAST_TRIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Accepts password and two-factor logins. `rounds` sets how many
 /// keyboard-interactive challenges come before the verdict; `None` never
@@ -35,6 +45,14 @@ struct Server {
     asked: usize,
     /// Asks one hidden field, with this prompt, and accepts this answer.
     single: Option<(&'static str, &'static str)>,
+    /// Drops the connection when a password arrives, as Wi-Fi going away
+    /// mid-login does.
+    cut: Option<Arc<tokio::sync::Notify>>,
+    /// Sign-in requests refused before the server says goodbye.
+    max_tries: usize,
+    /// Keyboard-interactive in two rounds, as a PAM stack asks: the
+    /// password, then a code.
+    two_step: bool,
 }
 
 impl Server {
@@ -43,6 +61,9 @@ impl Server {
             rounds: Some(1),
             asked: 0,
             single: None,
+            cut: None,
+            max_tries: 10,
+            two_step: false,
         }
     }
 }
@@ -55,6 +76,19 @@ impl server::Handler for Server {
     type Error = russh::Error;
 
     async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
+        if let Some(cut) = &self.cut {
+            cut.notify_one();
+            std::future::pending::<()>().await;
+        }
+        if password == ROTATED {
+            ROTATED_TRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if password == ROTATED_TOGETHER {
+            ROTATED_TOGETHER_TRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        if password == ROTATED_LAST {
+            ROTATED_LAST_TRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(if password == PASSWORD {
             Auth::Accept
         } else {
@@ -73,6 +107,24 @@ impl server::Handler for Server {
             instructions: Cow::Borrowed(""),
             prompts: Cow::Owned(vec![(Cow::Borrowed("Code: "), true)]),
         };
+        if self.two_step {
+            let prompt = |text: &'static str| Auth::Partial {
+                name: Cow::Borrowed("pam"),
+                instructions: Cow::Borrowed(""),
+                prompts: Cow::Owned(vec![(Cow::Borrowed(text), false)]),
+            };
+            let Some(response) = response else {
+                self.asked = 0;
+                return Ok(prompt("Password: "));
+            };
+            let answer: Vec<_> = response.collect();
+            self.asked += 1;
+            return Ok(match self.asked {
+                1 if answer == [PASSWORD.as_bytes()] => prompt("Verification code: "),
+                2 if answer == [CODE.as_bytes()] => Auth::Accept,
+                _ => reject(),
+            });
+        }
         if let Some((prompt, answer)) = self.single {
             return Ok(match response {
                 None => Auth::Partial {
@@ -163,10 +215,18 @@ async fn start_with(scratch: &Scratch, server: Server) -> u16 {
     )
     .unwrap();
     let config = Arc::new(server::Config {
-        methods: MethodSet::from(&[MethodKind::Password, MethodKind::KeyboardInteractive][..]),
+        // Keys are offered and all refused, by russh's default handler.
+        methods: MethodSet::from(
+            &[
+                MethodKind::PublicKey,
+                MethodKind::Password,
+                MethodKind::KeyboardInteractive,
+            ][..],
+        ),
         auth_rejection_time: Duration::ZERO,
         auth_rejection_time_initial: Some(Duration::ZERO),
         keys: vec![host_key],
+        max_auth_attempts: server.max_tries,
         ..server::Config::default()
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -176,7 +236,20 @@ async fn start_with(scratch: &Scratch, server: Server) -> u16 {
             let config = Arc::clone(&config);
             let handler = server.clone();
             tokio::spawn(async move {
-                if let Ok(session) = server::run_stream(config, socket, handler).await {
+                // A cut shuts the socket under the session: the client
+                // sees the link end, as on a network drop.
+                if let Some(cut) = handler.cut.clone() {
+                    let raw = socket.into_std().unwrap();
+                    let twin = raw.try_clone().unwrap();
+                    let socket = tokio::net::TcpStream::from_std(raw).unwrap();
+                    tokio::spawn(async move {
+                        cut.notified().await;
+                        let _ = twin.shutdown(std::net::Shutdown::Both);
+                    });
+                    if let Ok(session) = server::run_stream(config, socket, handler).await {
+                        let _ = session.await;
+                    }
+                } else if let Ok(session) = server::run_stream(config, socket, handler).await {
                     let _ = session.await;
                 }
             });
@@ -369,8 +442,7 @@ async fn the_tenth_challenge_round_still_logs_in() {
         &scratch,
         Server {
             rounds: Some(10),
-            asked: 0,
-            single: None,
+            ..Server::new()
         },
     )
     .await;
@@ -395,8 +467,7 @@ async fn a_server_that_never_stops_asking_is_given_up_on() {
         &scratch,
         Server {
             rounds: None,
-            asked: 0,
-            single: None,
+            ..Server::new()
         },
     )
     .await;
@@ -486,4 +557,285 @@ async fn a_wrong_stored_password_over_keyboard_interactive_then_asks() {
         .await
         .unwrap();
     assert_eq!(prompter.asked().len(), 2, "{:?}", prompter.asked());
+}
+
+/// A password changed on the server: the first connect spends the old one
+/// once, and later connects (a wake reconnecting every pane) ask instead of
+/// spending one of the account's tries each.
+#[tokio::test]
+async fn a_stored_password_turned_down_once_is_not_sent_again() {
+    let scratch = Scratch::new("pw-rotated");
+    let port = start_with(&scratch, Server::new()).await;
+    let connector = connector(&scratch);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(ROTATED)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    for round in 0..3 {
+        let mut answers = vec![Answer::Secret(secret(PASSWORD))];
+        if round == 0 {
+            answers.insert(0, Answer::TrustHostKey { remember: true });
+        }
+        let prompter = ScriptedPrompter::new(answers);
+        connector
+            .connect_with(
+                &target(port, vec![AuthMethod::Password]),
+                size(),
+                dyn_prompter(&prompter),
+                Arc::clone(&credentials),
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        ROTATED_TRIES.load(std::sync::atomic::Ordering::Relaxed),
+        1,
+        "the old password went out once"
+    );
+}
+
+/// The link goes away in the middle of signing in: a reconnect tries again
+/// later instead of taking it for a refusal.
+#[tokio::test]
+async fn a_link_lost_while_signing_in_is_unreachable_not_refused() {
+    let scratch = Scratch::new("pw-dropped");
+    let dropping = start_with(
+        &scratch,
+        Server {
+            cut: Some(Arc::default()),
+            ..Server::new()
+        },
+    )
+    .await;
+    let connector = connector(&scratch);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(PASSWORD)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    let Err(error) = connector
+        .connect_with(
+            &target(dropping, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            Arc::clone(&credentials),
+        )
+        .await
+    else {
+        panic!("the server dropped the link");
+    };
+    assert!(
+        matches!(error, ConnectError::Io(_)),
+        "{error:?} {:?}",
+        prompter.asked()
+    );
+    // The password was not turned down: the next connect still sends it.
+    let scratch = Scratch::new("pw-after-drop");
+    let fine = start(&scratch).await;
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    connector
+        .connect_with(
+            &target(fine, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            credentials,
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompter.asked().len(), 1, "{:?}", prompter.asked());
+}
+
+/// A server that says goodbye after too many tries, as OpenSSH does past
+/// `MaxAuthTries`, refused: reconnecting would only spend more tries.
+#[tokio::test]
+async fn a_server_that_closes_after_too_many_tries_refused() {
+    let scratch = Scratch::new("pw-goodbye");
+    let port = start_with(
+        &scratch,
+        Server {
+            max_tries: 1,
+            ..Server::new()
+        },
+    )
+    .await;
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Secret(secret(PASSWORD)),
+    ]);
+    let Err(error) = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            Arc::default(),
+        )
+        .await
+    else {
+        panic!("the server gave up on the login");
+    };
+    let ConnectError::Protocol(message) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains("Too many authentication attempts"),
+        "{message}"
+    );
+}
+
+/// The goodbye comes while keys are being offered: the sign-in that
+/// notices it on its next key still takes it for a refusal.
+#[tokio::test]
+async fn a_goodbye_between_keys_is_a_refusal() {
+    let scratch = Scratch::new("keys-goodbye");
+    let port = start_with(
+        &scratch,
+        Server {
+            max_tries: 2,
+            ..Server::new()
+        },
+    )
+    .await;
+    let mut files = Vec::new();
+    for name in ["k1", "k2", "k3", "k4"] {
+        keygen(&scratch.0, &["-q", "-t", "ed25519", "-N", "", "-f", name]);
+        files.push(scratch.path(name));
+    }
+    let mut target = target(port, vec![AuthMethod::PublicKey]);
+    target.auth.identity_files = files;
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    let Err(error) = connector(&scratch)
+        .connect_with(&target, size(), dyn_prompter(&prompter), Arc::default())
+        .await
+    else {
+        panic!("every key was refused");
+    };
+    let ConnectError::Protocol(message) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains("Too many authentication attempts"),
+        "{message}"
+    );
+}
+
+/// The stale password is the last try the server takes before it closes
+/// the connection: it is still not sent again.
+#[tokio::test]
+async fn a_password_turned_down_just_before_a_goodbye_is_not_sent_again() {
+    let scratch = Scratch::new("pw-last");
+    let port = start_with(
+        &scratch,
+        Server {
+            max_tries: 2,
+            ..Server::new()
+        },
+    )
+    .await;
+    let connector = connector(&scratch);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(ROTATED_LAST)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    for round in 0..2 {
+        let mut answers = vec![Answer::Secret(secret("also-wrong"))];
+        if round == 0 {
+            answers.insert(0, Answer::TrustHostKey { remember: true });
+        }
+        let prompter = ScriptedPrompter::new(answers);
+        let _ = connector
+            .connect_with(
+                &target(port, vec![AuthMethod::Password]),
+                size(),
+                dyn_prompter(&prompter),
+                Arc::clone(&credentials),
+            )
+            .await;
+    }
+    assert_eq!(
+        ROTATED_LAST_TRIES.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+/// Six panes sign in at the same moment after a wake, with a password that
+/// changed on the server: it goes out once, and the others ask instead.
+#[tokio::test]
+async fn panes_signing_in_together_spend_a_stale_password_once() {
+    let scratch = Scratch::new("pw-together");
+    let port = start(&scratch).await;
+    let connector = Arc::new(connector(&scratch));
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(ROTATED_TOGETHER)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    let mut panes = Vec::new();
+    for _ in 0..6 {
+        let connector = Arc::clone(&connector);
+        let credentials = Arc::clone(&credentials);
+        panes.push(tokio::spawn(async move {
+            let prompter = ScriptedPrompter::new(vec![
+                Answer::TrustHostKey { remember: false },
+                Answer::Secret(secret(PASSWORD)),
+            ]);
+            connector
+                .connect_with(
+                    &target(port, vec![AuthMethod::Password]),
+                    size(),
+                    dyn_prompter(&prompter),
+                    credentials,
+                )
+                .await
+                .map(drop)
+        }));
+    }
+    for pane in panes {
+        assert!(matches!(pane.await, Ok(Ok(()))));
+    }
+    assert_eq!(
+        ROTATED_TOGETHER_TRIES.load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+}
+
+/// The stored password was right and the code was wrong: the password is
+/// still sent next time.
+#[tokio::test]
+async fn a_wrong_code_after_the_stored_password_does_not_mark_it() {
+    let scratch = Scratch::new("kbd-two-step");
+    let port = start_with(
+        &scratch,
+        Server {
+            two_step: true,
+            ..Server::new()
+        },
+    )
+    .await;
+    let connector = connector(&scratch);
+    let credentials = Arc::new(tauminus_app::ports::Credentials {
+        password: Some(secret(PASSWORD)),
+        ..tauminus_app::ports::Credentials::default()
+    });
+    let wrong = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: true },
+        Answer::Responses(vec![secret("000000")]),
+        Answer::Cancel,
+    ]);
+    let _ = connector
+        .connect_with(
+            &target(port, vec![AuthMethod::KeyboardInteractive]),
+            size(),
+            dyn_prompter(&wrong),
+            Arc::clone(&credentials),
+        )
+        .await;
+    let right = ScriptedPrompter::new(vec![Answer::Responses(vec![secret(CODE)])]);
+    connector
+        .connect_with(
+            &target(port, vec![AuthMethod::KeyboardInteractive]),
+            size(),
+            dyn_prompter(&right),
+            credentials,
+        )
+        .await
+        .unwrap();
 }

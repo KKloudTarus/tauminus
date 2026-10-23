@@ -19,8 +19,8 @@ const PROMPT = "$ ";
 
 /**
  * Lines it understands: `echo <text>`, `title <text>`, `exit [code]`,
- * `size`, `later <text>`, which prints after 1 s, and `sudo`, which
- * reads a password without echo. Ctrl+C drops
+ * `size`, `later <text>`, which prints after 1 s, `sudo`, which reads a
+ * password without echo, and `drop`, which loses the connection. Ctrl+C drops
  * the line.
  */
 class FakeShell implements TerminalSession {
@@ -74,6 +74,8 @@ class FakeShell implements TerminalSession {
 
   async acknowledge(): Promise<void> {}
 
+  async probe(): Promise<void> {}
+
   async close(): Promise<void> {
     this.#exit(null);
   }
@@ -108,6 +110,10 @@ class FakeShell implements TerminalSession {
       case "exit":
         this.#exit(Number.parseInt(argument || "0", 10));
         return;
+      case "drop":
+        // As a network going away: the session ends without an exit.
+        this.#exit(null, true);
+        return;
       default:
         this.#print(`${command}: command not found\r\n`);
     }
@@ -118,10 +124,10 @@ class FakeShell implements TerminalSession {
     this.#events.onOutput(encoder.encode(text));
   }
 
-  #exit(code: number | null) {
+  #exit(code: number | null, lost = false) {
     if (this.#ended) return;
     this.#ended = true;
-    queueMicrotask(() => this.#events.onExit(code));
+    queueMicrotask(() => this.#events.onExit(code, lost));
   }
 }
 

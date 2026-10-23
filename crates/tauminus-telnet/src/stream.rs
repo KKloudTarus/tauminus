@@ -170,6 +170,7 @@ async fn run(
     ));
     let mut output = Transcoder::new(encoding);
     let mut buffer = vec![0_u8; READ_BUFFER];
+    let mut lost = false;
     loop {
         let read = tokio::select! {
             biased;
@@ -180,7 +181,12 @@ async fn run(
             read = reader.read(&mut buffer) => read,
         };
         let n = match read {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(e) => {
+                debug!(error = %e, "telnet connection lost");
+                lost = true;
+                break;
+            }
             Ok(n) => n,
         };
         let received = lock(&telnet).receive(&buffer[..n]);
@@ -220,8 +226,13 @@ async fn run(
     if !rest.is_empty() {
         let _ = events.send(TerminalEvent::Output(rest)).await;
     }
-    // Telnet has no exit status: the connection just closes.
-    let _ = events.send(TerminalEvent::Exited { code: None }).await;
+    // Telnet has no exit status: the connection just closes, or breaks.
+    let end = if lost {
+        TerminalEvent::Lost
+    } else {
+        TerminalEvent::Exited { code: None }
+    };
+    let _ = events.send(end).await;
 }
 
 async fn write_wire(

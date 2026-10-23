@@ -26,6 +26,7 @@ async fn collect_until_exit(events: &mut mpsc::Receiver<TerminalEvent>) -> (Vec<
             match events.recv().await {
                 Some(TerminalEvent::Output(chunk)) => output.extend(chunk),
                 Some(TerminalEvent::Exited { code }) => return code,
+                Some(TerminalEvent::Lost) => panic!("a local shell has no connection to lose"),
                 None => panic!("event channel closed before exit"),
             }
         }
@@ -340,6 +341,7 @@ mod windows {
                         output.extend(chunk);
                     }
                     Some(TerminalEvent::Exited { code }) => return code,
+                    Some(TerminalEvent::Lost) => panic!("a local shell has no connection to lose"),
                     None => panic!("event channel closed before exit"),
                 }
             }

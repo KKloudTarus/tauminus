@@ -40,6 +40,9 @@ pub enum TerminalEvent {
     Exited {
         code: Option<u32>,
     },
+    /// The connection was lost before the remote side ended: the shell
+    /// may still be running there, and a new connection can reach it.
+    Lost,
 }
 
 /// Ends a terminal stream from outside its input queue.
@@ -56,6 +59,11 @@ pub trait Terminator: Send + Sync + 'static {
     fn kill(&self) {
         self.terminate();
     }
+
+    /// Checks that the link still answers, as after a wake or a network
+    /// change; one that does not ends the stream with
+    /// [`TerminalEvent::Lost`]. A stream with no link to check ignores it.
+    fn probe(&self) {}
 }
 
 /// One interactive byte stream: a local shell on a PTY, or a shell channel on
@@ -102,6 +110,10 @@ pub struct SinkClosed;
 pub trait OutputSink: Send + Sync + 'static {
     fn send_output(&self, batch: Vec<u8>) -> Result<(), SinkClosed>;
     fn send_exit(&self, code: Option<u32>);
+    /// The connection was lost; the view may connect again.
+    fn send_lost(&self) {
+        self.send_exit(None);
+    }
 }
 
 /// A future the adapter returns from an object-safe trait. SSH connects and

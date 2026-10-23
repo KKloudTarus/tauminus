@@ -140,6 +140,40 @@ describe("AppShell broadcast", () => {
     }
   });
 
+  it("forgets a pane's secret when its connection is lost", async () => {
+    const hosts = fakeHosts();
+    await hosts.saveHost({ label: "router", address: "10.0.0.1", protocol: "telnet" });
+    const app = shell(hosts);
+    await app.hosts.load();
+    app.connectHost(app.hosts.getSnapshot().view.hosts[0]!);
+    app.run("pane.splitRight");
+    const [left, right] = paneIds(app.workspace.activeTab!.root);
+    await show(app);
+    const two = app.workspace.terminal(left!)!;
+    const one = app.workspace.terminal(right!)!;
+    await vi.waitFor(() => expect(two.getStatus().kind).toBe("running"));
+    await vi.waitFor(() => expect(one.getStatus().kind).toBe("running"));
+    app.run("broadcast.tab");
+    const asks = vi.spyOn(two, "atSecretPrompt", "get").mockReturnValue(true);
+    const typed = vi.spyOn(two, "typeShared");
+    await new Promise<void>((resolve) => {
+      one.terminal.write("\r\n[sudo] password for me: ", resolve);
+    });
+    one.terminal.input("p");
+    expect(typed).toHaveBeenLastCalledWith("p");
+
+    // The router's link drops mid-secret, and it comes back at a plain prompt.
+    // The "p" already sent is on its line: end it first.
+    two.type("\rdrop\r");
+    await vi.waitFor(() => expect(two.getStatus().kind).toBe("reconnecting"));
+    two.reconnectNow();
+    await vi.waitFor(() => expect(two.getStatus().kind).toBe("running"));
+    asks.mockReturnValue(false);
+    typed.mockClear();
+    one.terminal.input("w");
+    expect(typed).not.toHaveBeenCalled();
+  });
+
   it("opens many hosts as an even grid that broadcasts together", async () => {
     const hosts = fakeHosts();
     for (let i = 0; i < 5; i += 1) {

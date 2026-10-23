@@ -118,7 +118,7 @@ async fn ended(stream: &mut TerminalStream) -> bool {
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             match stream.events.recv().await {
-                Some(TerminalEvent::Exited { .. }) | None => return,
+                Some(TerminalEvent::Exited { .. } | TerminalEvent::Lost) | None => return,
                 Some(TerminalEvent::Output(_)) => {}
             }
         }

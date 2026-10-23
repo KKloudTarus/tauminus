@@ -9,6 +9,7 @@
     "allow-session-write",
     "allow-session-write-bytes",
     "allow-session-resize",
+    "allow-session-probe",
     "allow-session-acknowledge",
     "allow-session-close",
     "allow-ssh-open",

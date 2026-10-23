@@ -35,6 +35,9 @@ impl Type for OutputChunk {
 pub(crate) struct SessionExit {
     /// `null` when the process ended without an exit status, e.g. by signal.
     pub(crate) exit_code: Option<u32>,
+    /// The connection went away before the remote side ended; connecting
+    /// again may find the shell, or its tmux session, still there.
+    pub(crate) lost: bool,
 }
 
 /// Session id as the webview sees it. A `u32` keeps it a plain JavaScript
@@ -160,7 +163,17 @@ impl OutputSink for ChannelSink {
 
     fn send_exit(&self, code: Option<u32>) {
         // The view may already be gone; nothing else can be told.
-        let _ = self.exit.send(SessionExit { exit_code: code });
+        let _ = self.exit.send(SessionExit {
+            exit_code: code,
+            lost: false,
+        });
+    }
+
+    fn send_lost(&self) {
+        let _ = self.exit.send(SessionExit {
+            exit_code: None,
+            lost: true,
+        });
     }
 }
 

@@ -88,3 +88,36 @@ test("a host types its startup snippets into each new shell", async ({ page }) =
   await expect(focusedScreen(page)).toContainText("Welcome to prompt.test");
   await expect(focusedScreen(page)).toContainText("started on prompt");
 });
+
+test("a host that joins tmux types no startup snippets, and keeps its session name", async ({
+  page,
+}) => {
+  await newSnippet(page, "hello", "echo started on {{where:prompt}}");
+  await sidebar(page).getByRole("button", { name: "New host" }).click();
+  const editor = page.getByRole("dialog", { name: "New host" });
+  await editor.getByLabel("Name").fill("db");
+  await editor.getByLabel("Address").fill("prompt.test");
+  await editor.getByLabel("User (blank inherits)").fill("ops");
+  await editor.getByRole("combobox", { name: "Add" }).selectOption({ label: "hello" });
+  await editor.getByText("Session").click();
+  await editor.getByLabel(/tmux to join/).fill("work");
+  await editor.getByRole("button", { name: "Save" }).click();
+  await expect(editor).toHaveCount(0);
+
+  await sidebar(page)
+    .getByRole("button", { name: /^db ops@prompt\.test/ })
+    .click();
+  await page.getByRole("button", { name: "Trust once" }).click();
+  const password = page.getByRole("dialog", { name: "Password for ops@prompt.test" });
+  await password.getByLabel("Password", { exact: true }).fill("secret");
+  await password.getByLabel("Password", { exact: true }).press("Enter");
+  await expect(focusedScreen(page)).toContainText("Welcome to prompt.test");
+  // A tmux session may already run something: the snippet is not typed.
+  await page.waitForTimeout(500);
+  await expect(focusedScreen(page)).not.toContainText("started on");
+
+  await sidebar(page).getByRole("button", { name: "Edit db" }).click();
+  const again = page.getByRole("dialog", { name: "Edit db" });
+  await again.getByText("Session").click();
+  await expect(again.getByLabel(/tmux to join/)).toHaveValue("work");
+});

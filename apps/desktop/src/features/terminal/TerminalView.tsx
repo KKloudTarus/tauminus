@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
 
@@ -52,6 +52,16 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
           Connecting to {controller.defaultTitle}…
         </output>
       )}
+      {status.kind === "reconnecting" && (
+        <Reconnecting
+          target={controller.defaultTitle}
+          attempt={status.attempt}
+          retryAt={status.retryAt}
+          queued={status.queued === true}
+          onNow={() => controller.reconnectNow()}
+          onStop={() => controller.stopReconnecting()}
+        />
+      )}
       {status.kind === "exited" && (
         <output className="block border-t border-current/10 px-3 py-1 text-xs opacity-80">
           {remote ? "Connection closed" : "Process exited"}
@@ -89,5 +99,48 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
         />
       )}
     </div>
+  );
+}
+
+/** The connection is gone; a new one is tried, counting down to it. */
+function Reconnecting({
+  target,
+  attempt,
+  retryAt,
+  queued,
+  onNow,
+  onStop,
+}: {
+  target: string;
+  attempt: number;
+  retryAt: number;
+  queued: boolean;
+  onNow: () => void;
+  onStop: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.ceil((retryAt - now) / 1000));
+  return (
+    <output
+      data-testid="reconnecting"
+      className="flex items-center gap-2 border-t border-current/10 px-3 py-1 text-xs"
+    >
+      <span className="min-w-0 flex-1">
+        Connection to {target} lost.{" "}
+        {queued
+          ? "Waiting for other panes of this host to connect first."
+          : `Connecting again ${seconds > 0 ? `in ${seconds} s` : "now"}${attempt > 1 ? ` (try ${attempt})` : ""}.`}
+      </span>
+      <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onNow}>
+        Reconnect now
+      </button>
+      <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onStop}>
+        Stop
+      </button>
+    </output>
   );
 }

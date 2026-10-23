@@ -186,6 +186,7 @@ async fn settings_survive_a_round_trip_through_the_view() {
         history: Some(false),
         identity: Some("work-1".into()),
         encoding: Some(EncodingSpec::EucKr),
+        tmux: Some("work".into()),
         env: Some(vec![
             EnvSpec {
                 name: "LANG".into(),
@@ -531,4 +532,54 @@ async fn a_telnet_host_lists_as_one_and_connects_on_23() {
     let target = book.telnet_target(&id).await.unwrap();
     assert_eq!(target.port, tauminus_domain::TELNET_PORT);
     assert_eq!(target.host.as_str(), "10.0.0.1");
+}
+
+#[tokio::test]
+async fn only_ssh_hosts_join_a_groups_tmux_session() {
+    let book = book().await;
+    let ops = GroupId::parse("ops").unwrap();
+    let mut group = Group {
+        id: ops.clone(),
+        name: Label::parse("ops").unwrap(),
+        parent: None,
+        settings: Settings::default(),
+    };
+    group.settings.tmux = Some(Tmux::Join(TmuxSession::parse("work").unwrap()));
+    let host = |id: &str, protocol: Protocol, tmux: Option<Tmux>| {
+        let mut host = parse_host(&book, input(id, id)).unwrap();
+        host.id = HostId::parse(id).unwrap();
+        host.group = Some(ops.clone());
+        host.protocol = protocol;
+        host.settings.tmux = tmux;
+        host
+    };
+    let hosts = [
+        host("web", Protocol::Ssh, None),
+        host("router", Protocol::Telnet, None),
+        host("quiet", Protocol::Ssh, Some(Tmux::Off)),
+    ];
+    let inventory = book
+        .edit(|inventory| {
+            inventory.put_group(group)?;
+            for host in hosts {
+                inventory.put_host(host)?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let mut joins: Vec<_> = view(&inventory)
+        .hosts
+        .iter()
+        .map(|h| (h.id.clone(), h.joins_tmux))
+        .collect();
+    joins.sort();
+    assert_eq!(
+        joins,
+        [
+            ("quiet".into(), false),
+            ("router".into(), false),
+            ("web".into(), true)
+        ]
+    );
 }
