@@ -6,7 +6,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
-import { type ITheme, Terminal } from "@xterm/xterm";
+import { type IMarker, type ITheme, Terminal } from "@xterm/xterm";
 
 import { SerializeAddon } from "@xterm/addon-serialize";
 
@@ -14,6 +14,7 @@ import { snapshot } from "@/features/recording/snapshot.ts";
 import type { RecordingView } from "@/ipc/recordings.ts";
 import { describePort } from "@/ipc/serial.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
+import { messageOf } from "@/features/hosts/hosts-store.ts";
 import {
   type AnswerSpec,
   type ErrorCode,
@@ -31,6 +32,7 @@ import {
   type GuardRequest,
   type GuardSource,
   atSecretPrompt,
+  isPasswordPrompt,
 } from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
@@ -43,6 +45,22 @@ import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 import { type HighlightSource, Highlighter } from "./highlighter.ts";
+
+/** What a pane shows about filling a password; see `TerminalController.getFill`. */
+export type FillState =
+  /** The login identity's name (`null` while the vault is locked) and `user@address`. */
+  | { readonly kind: "offer"; readonly identity: string | null; readonly login: string }
+  /** The host showed what the last fill typed: it may not have asked for a password. */
+  | { readonly kind: "echoed"; readonly line: string }
+  /** Why the last fill did not happen. */
+  | { readonly kind: "failed"; readonly message: string; readonly line: string };
+
+/** How long after a fill the line is looked at for an echo, in ms. */
+const ECHO_CHECK_MS = 400;
+/** How long a prompt line must stand before it is offered, in ms. */
+const OFFER_MS = 60;
+/** Characters of the cursor's line a prompt is looked for in. */
+const TAIL = 256;
 import { type FiredBatch, type TriggerSource, TriggerWatcher } from "./trigger-watcher.ts";
 
 /** Delay before retrying an acknowledgement whose IPC call failed. */
@@ -326,6 +344,7 @@ export class TerminalController {
     this.#output = (options.output ?? outputScheduler).lane(
       (chunk, parsed) => this.terminal.write(chunk, parsed),
       (bytes) => {
+        this.#parsedBytes += bytes;
         const ready = this.#acks.add(bytes);
         if (ready > 0) {
           this.#acknowledge(ready);
@@ -355,6 +374,11 @@ export class TerminalController {
       {
         writeText: async (data) => (await this.#writable())?.write(data),
         writeBytes: async (data) => (await this.#writable())?.writeBytes(data),
+        fillPassword: async (seen) => {
+          const session = await this.#writable();
+          if (!session?.fillPassword) throw new Error("this session has no saved host");
+          await session.fillPassword(seen);
+        },
       },
       ignoreEndedSession,
     );
@@ -397,6 +421,7 @@ export class TerminalController {
       ? new TriggerWatcher(this.terminal, options.triggers.source, options.triggers.fired)
       : undefined;
     this.terminal.onWriteParsed(() => {
+      this.#checkFill();
       this.#parses += 1;
       for (const waiter of this.#parseWaiters) waiter();
       this.#parseWaiters.clear();
@@ -428,6 +453,7 @@ export class TerminalController {
     this.terminal.onData((raw) => {
       const data = defusePaste(raw);
       this.#noteTyping(data);
+      this.#checkFill();
       // Wheel scrolling and Alt+click send arrow keys worked out from this
       // pane's screen; they mean nothing in another.
       if (!this.#fromPointer) this.#onInput?.(data);
@@ -680,6 +706,9 @@ export class TerminalController {
    * history as the user's own input would go.
    */
   type(data: string): void {
+    // Broadcast keys and snippets type on the line as the user's own do.
+    this.#noteTyping(data);
+    this.#checkFill();
     if (this.#guard) {
       this.#guard.input(data);
     } else {
@@ -695,6 +724,179 @@ export class TerminalController {
   /** The backend's id for the session running now, if one is. */
   get sessionId(): number | undefined {
     return this.#session?.id;
+  }
+
+  /**
+   * What the pane shows about filling a password: an offer at a prompt
+   * (the saved host's login identity, its name `null` while the vault is
+   * locked), a warning that the host showed what was typed, or why a fill
+   * did not happen. For `useSyncExternalStore`.
+   */
+  getFill = (): FillState | undefined => this.#fill;
+
+  /**
+   * Types the saved host's login password at the prompt the pane shows,
+   * without Enter: the backend checks the prompt itself and sends it, the
+   * view never sees it. In turn with keys already queued. `"locked"` when
+   * the vault must be unlocked first.
+   */
+  async fillPassword(): Promise<"filled" | "locked" | "failed" | "none"> {
+    const prompt = this.#fillPrompt();
+    if (this.#fill?.kind !== "offer" || prompt === undefined || prompt.key !== this.#offered) {
+      return "none";
+    }
+    const seen = this.#parsedBytes;
+    try {
+      await new Promise<void>((resolve, reject) =>
+        this.#input.push({
+          kind: "secret",
+          seen,
+          done: (error) => (error === undefined ? resolve() : reject(error)),
+        }),
+      );
+    } catch (error) {
+      if (error instanceof SessionCommandError && error.code === "vault_locked") return "locked";
+      if (error instanceof SessionCommandError && error.code === "cancelled") {
+        // Output came since the prompt was read: look again, and offer
+        // again if it still stands.
+        this.#offered = undefined;
+        this.#checkFill();
+        return "failed";
+      }
+      this.#fill = { kind: "failed", message: messageOf(error), line: prompt.key };
+      this.#notify();
+      return "failed";
+    }
+    this.#filled?.dispose();
+    this.#filled = this.#markRow(prompt.row);
+    this.#filledKey = prompt.key;
+    this.#fill = undefined;
+    this.#notify();
+    // A real password prompt shows nothing of what is typed (or `*`s). A
+    // host that shows it was not asking for a password: the user should
+    // know, and clear the line (Ctrl+U) before pressing Enter.
+    setTimeout(() => {
+      if (this.#disposed) return;
+      const now = this.#cursorTail();
+      const added = now.text.startsWith(prompt.text)
+        ? now.text.slice(prompt.text.length)
+        : now.text;
+      // The prompt's own row, by its marker: with scrollback full, another
+      // line comes to sit at the same index.
+      const filled = this.#filled;
+      const same = filled !== undefined && !filled.isDisposed && filled.line === now.row;
+      if (same && /[^\s*•●]/u.test(added)) {
+        this.#fill = { kind: "echoed", line: this.#cursorTail().key };
+        this.#notify();
+      }
+    }, ECHO_CHECK_MS);
+    return "filled";
+  }
+
+  /** Bytes of the current session's output parsed so far. */
+  #parsedBytes = 0;
+  #fill: FillState | undefined;
+  /** The prompt the offer is for. */
+  #offered: string | undefined;
+  /** The prompt last filled, by a marker on its row: not offered again. */
+  #filled: IMarker | undefined;
+  #filledKey: string | undefined;
+  #offerTimer: ReturnType<typeof setTimeout> | undefined;
+
+  #markRow(row: number): IMarker | undefined {
+    const buffer = this.terminal.buffer.active;
+    return this.terminal.registerMarker(row - (buffer.baseY + buffer.cursorY));
+  }
+
+  /**
+   * The last [`TAIL`] characters of the cursor's line, where it starts,
+   * and a key for it. Reads only the rows the tail is in, however long the
+   * line: O(TAIL + rows to its start).
+   */
+  #cursorTail(): { key: string; text: string; row: number } {
+    const buffer = this.terminal.buffer.active;
+    const cursor = buffer.baseY + buffer.cursorY;
+    let start = cursor;
+    for (let back = 0; back < 512 && start > 0 && buffer.getLine(start)?.isWrapped; back += 1) {
+      start -= 1;
+    }
+    let text = "";
+    for (let row = cursor; row >= start && text.length < TAIL; row -= 1) {
+      text = (buffer.getLine(row)?.translateToString(row === cursor) ?? "") + text;
+    }
+    text = text.slice(-TAIL);
+    return { key: `${start}:${text}`, text, row: start };
+  }
+
+  /** The prompt the vault may fill now, if the pane shows one. */
+  #fillPrompt(): { key: string; text: string; row: number } | undefined {
+    if (
+      !this.#session?.fillOffer ||
+      this.#status.kind !== "running" ||
+      this.terminal.buffer.active.type !== "normal" ||
+      this.#typing
+    ) {
+      return undefined;
+    }
+    const tail = this.#cursorTail();
+    if (!isPasswordPrompt(tail.text)) return undefined;
+    // The same prompt, filled already: its row's marker still there.
+    const filled = this.#filled;
+    if (
+      filled !== undefined &&
+      !filled.isDisposed &&
+      filled.line === tail.row &&
+      this.#filledKey === tail.key
+    ) {
+      return undefined;
+    }
+    return tail;
+  }
+
+  /**
+   * Offers, or takes back the offer, as the cursor's line changes. The
+   * backend is asked once the line has stood for [`OFFER_MS`]: a prompt
+   * waits for its answer, a log line scrolling past does not. A warning
+   * or a failure stays until the line changes. O(tail).
+   */
+  #checkFill(): void {
+    const prompt = this.#fillPrompt();
+    const line = prompt?.key ?? this.#cursorTail().key;
+    if (this.#fill !== undefined && this.#fill.kind !== "offer" && this.#fill.line !== line) {
+      this.#fill = undefined;
+      this.#notify();
+    }
+    if (
+      prompt === undefined &&
+      this.#filled !== undefined &&
+      this.#cursorTail().row !== this.#filled.line
+    ) {
+      // The cursor left the filled prompt: a later one, however alike, is new.
+      this.#filled.dispose();
+      this.#filled = undefined;
+      this.#filledKey = undefined;
+    }
+    const key = prompt?.key;
+    if (key === this.#offered) return;
+    this.#offered = key;
+    clearTimeout(this.#offerTimer);
+    if (this.#fill?.kind === "offer") {
+      this.#fill = undefined;
+      this.#notify();
+    }
+    const session = this.#session;
+    if (key === undefined || !session?.fillOffer) return;
+    this.#offerTimer = setTimeout(() => {
+      if (this.#offered !== key || this.#fillPrompt()?.key !== key) return;
+      session
+        .fillOffer?.()
+        .then((offer) => {
+          if (this.#offered !== key || !offer) return;
+          this.#fill = { kind: "offer", identity: offer.identity, login: offer.login };
+          this.#notify();
+        })
+        .catch(() => {});
+    }, OFFER_MS);
   }
 
   /** The recording of this pane in progress, if any. For `useSyncExternalStore`. */
@@ -959,6 +1161,9 @@ export class TerminalController {
       this.#settleOpened = settle;
     });
     this.#sentSize = { cols: this.terminal.cols, rows: this.terminal.rows };
+    // The backend counts output per session, from its first byte, which
+    // may be parsed before `open` returns.
+    this.#parsedBytes = 0;
     this.#sessions
       .open(this.spec, this.#sentSize, {
         onPrompt: (prompt) => this.#ask(prompt),
@@ -1221,7 +1426,12 @@ export class TerminalController {
   #setStatus(status: TerminalStatus): void {
     this.#status = status;
     // A recording ends with the session it records.
-    if (status.kind !== "running") this.#recording = undefined;
+    if (status.kind !== "running") {
+      this.#recording = undefined;
+      this.#fill = undefined;
+      this.#offered = undefined;
+      clearTimeout(this.#offerTimer);
+    }
     if (status.kind === "failed" || (status.kind === "exited" && status.code !== 0)) {
       this.#mark("error");
     }

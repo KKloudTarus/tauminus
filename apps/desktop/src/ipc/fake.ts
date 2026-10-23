@@ -136,7 +136,28 @@ class FakeShell implements TerminalSession {
 
   #print(text: string) {
     fakeOutputTaps.get(this.id)?.(text);
-    this.#events.onOutput(encoder.encode(text));
+    const bytes = encoder.encode(text);
+    this.#emitted += bytes.length;
+    this.#events.onOutput(bytes);
+  }
+
+  #emitted = 0;
+  /** The fake vault's identity logs in to it: `vault.test`. */
+  vaultHost = false;
+
+  async fillOffer(): Promise<{ identity: string | null; login: string } | null> {
+    if (!this.vaultHost) return null;
+    const { sharedFakeVault } = await import("./fake-vault.ts");
+    return { identity: sharedFakeVault().unlocked() ? "deploy" : null, login: "me@vault.test" };
+  }
+
+  /** Types the fake identity's password as keys: echoed unless a prompt hides it. */
+  async fillPassword(seen: number): Promise<void> {
+    if (!this.vaultHost) throw fail("not_found", "this session is not a saved host's");
+    const { sharedFakeVault } = await import("./fake-vault.ts");
+    if (!sharedFakeVault().unlocked()) throw fail("vault_locked", "the vault is locked");
+    if (this.#emitted > seen) throw fail("cancelled", "the session showed more since");
+    await this.write(FAKE_IDENTITY_PASSWORD);
   }
 
   #exit(code: number | null, lost = false) {
@@ -150,6 +171,8 @@ let nextId = 1;
 
 /** The password every fake SSH host accepts. */
 export const FAKE_PASSWORD = "secret";
+/** The fake vault identity's password, which `fillPassword` types. */
+export const FAKE_IDENTITY_PASSWORD = "hunter2";
 const FAKE_FINGERPRINT = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU";
 
 function fail(code: CommandError["code"], message: string): SessionCommandError {
@@ -235,6 +258,10 @@ export const fakeSessions: SessionClient = {
               : await fakeSsh(spec, events);
     const id = nextId;
     nextId += 1;
-    return new FakeShell(id, size, events, banner);
+    const shell = new FakeShell(id, size, events, banner);
+    shell.vaultHost =
+      (spec.kind === "host" || spec.kind === "ssh") &&
+      spec.target.destination.host === "vault.test";
+    return shell;
   },
 };

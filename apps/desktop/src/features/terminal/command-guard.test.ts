@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GuardFinding, GuardVerdict } from "@/ipc/index.ts";
 
 import {
+  isPasswordPrompt,
   CHECK_TIMEOUT_MS,
   CommandGuard,
   ECHO_WAIT_MS,
@@ -613,5 +614,37 @@ describe("CommandGuard", () => {
     guard.input("ls");
     await guard.settled();
     expect(sent).toEqual([]);
+  });
+});
+
+describe("isPasswordPrompt", () => {
+  it("knows sudo's and OpenSSH's prompts, as the backend does", () => {
+    for (const line of [
+      "[sudo] password for ops: ",
+      "[sudo] Passwort für ops: ",
+      "ops@db.example's password: ",
+      "(ops@db.example) Password: ",
+      "ops@[2001:db8::5]'s password: ",
+      "ops@code-server's password: ",
+    ]) {
+      expect([line, isPasswordPrompt(line)]).toEqual([line, true]);
+    }
+  });
+
+  it("refuses prompts that do not say whose login, other secrets, and lines with typing", () => {
+    for (const line of [
+      "Password: ",
+      "Enter password: ",
+      "Password for 'ops@other':",
+      "ops@other.example\u2019s password: ",
+      "Enter passphrase for key '/home/ops/.ssh/id_ed25519': ",
+      "One-time password (OATH) for `ops': ",
+      "New password: ",
+      "Your password has expired. Change it now? [y/N]? ",
+      "Password for 'https://ops@github.com': ",
+      "[sudo] password for ops: hunter2",
+    ]) {
+      expect([line, isPasswordPrompt(line)]).toEqual([line, false]);
+    }
   });
 });
