@@ -11,6 +11,7 @@
 mod connections;
 #[cfg(test)]
 mod fakes;
+mod files;
 mod forwards;
 pub mod history;
 mod hosts;
@@ -21,6 +22,10 @@ mod ssh;
 pub mod vault;
 
 pub use connections::{Connections, Login, LoginError};
+pub use files::{
+    Direction, Files, FilesError, MAX_RUNNING, MAX_SESSIONS, PER_SESSION, TransferState,
+    TransferStatus,
+};
 pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;

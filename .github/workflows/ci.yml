@@ -98,6 +98,13 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p tauminus-store --release --locked -- --ignored a_million_lines --nocapture
 
+      # v0.3 exit criterion: 1 GiB up and down over SFTP with matching
+      # checksums. Release build, since debug crypto takes minutes; Unix
+      # runners, where the test sshd runs.
+      - name: SFTP 1 GiB transfer
+        if: runner.os != 'Windows'
+        run: cargo test -p tauminus-ssh --release --locked --test sftp -- --ignored a_gibibyte --nocapture
+
       # Biometric unlock (ADR 0009): what each runner's OS answers when the
       # presence check asks whether it can run. Runners have no sensor, so
       # this shows the OS calls work, not a prompt answered by a person.
