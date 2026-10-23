@@ -9,7 +9,7 @@
 //! a pending file that only the vault's private key opens; the next unlock
 //! moves them into the database. Searching needs the vault open.
 
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, PoisonError, Weak};
 
 use tauminus_domain::{HistoryEntry, HistoryHit, HistoryQuery, Retention};
 use thiserror::Error;
@@ -126,8 +126,17 @@ pub struct History {
     /// it, so nothing goes into the database after a lock even before the
     /// follower closes it.
     unlocked: tokio::sync::watch::Receiver<bool>,
-    /// A prune is running: another would only wait on it.
-    pruning: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether a prune runs, and the database to prune after it.
+    pruning: Arc<std::sync::Mutex<Pruning>>,
+}
+
+/// One prune at a time. A database opened meanwhile, after a lock and
+/// unlock, is pruned when the running one ends, so its retention is not
+/// skipped until the next open.
+#[derive(Default)]
+struct Pruning {
+    running: bool,
+    next: Option<Arc<dyn HistoryStore>>,
 }
 
 impl std::fmt::Debug for History {
@@ -333,23 +342,35 @@ impl History {
     /// large history, and records and searches take turns with it. One at
     /// a time.
     fn prune(&self, db: Arc<dyn HistoryStore>) {
-        use std::sync::atomic::Ordering;
-        if self.pruning.swap(true, Ordering::AcqRel) {
-            return;
+        {
+            let mut pruning = self.pruning.lock().unwrap_or_else(PoisonError::into_inner);
+            if pruning.running {
+                pruning.next = Some(db);
+                return;
+            }
+            pruning.running = true;
         }
         let pruning = Arc::clone(&self.pruning);
         let retention = self.retention;
-        let now = self.backend.now_ms();
+        let backend = Arc::clone(&self.backend);
         // A lock stops it between chunks, so its connection to the
         // database, and the key, do not outlive the lock by more than one.
         let unlocked = self.unlocked.clone();
         tokio::task::spawn_blocking(move || {
-            match db.prune(retention, now, &|| *unlocked.borrow()) {
-                Ok(0) => {}
-                Ok(removed) => tracing::info!(removed, "history pruned"),
-                Err(e) => tracing::warn!(error = %e, "history prune failed"),
+            let mut db = db;
+            loop {
+                match db.prune(retention, backend.now_ms(), &|| *unlocked.borrow()) {
+                    Ok(0) => {}
+                    Ok(removed) => tracing::info!(removed, "history pruned"),
+                    Err(e) => tracing::warn!(error = %e, "history prune failed"),
+                }
+                let mut state = pruning.lock().unwrap_or_else(PoisonError::into_inner);
+                let Some(next) = state.next.take() else {
+                    state.running = false;
+                    return;
+                };
+                db = next;
             }
-            pruning.store(false, Ordering::Release);
         });
     }
 
