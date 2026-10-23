@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-mosh"
+description = "Mosh for Tauminus: the upstream mosh-client on a PTY"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tauminus-app.workspace = true
+tauminus-domain.workspace = true
+tauminus-pty.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "net", "process", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

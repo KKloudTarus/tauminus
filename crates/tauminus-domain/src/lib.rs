@@ -13,6 +13,7 @@ mod guard;
 mod history;
 mod hosts;
 mod keys;
+mod mosh;
 mod output;
 mod serial;
 mod session;
@@ -40,6 +41,7 @@ pub use hosts::{
     SnippetId, Tag,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
+pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
 pub use output::{OutputBatcher, ReadyBatches};
 pub use serial::{
     BAUD_RATES, Parity, SerialError, SerialFlow, SerialPortInfo, SerialSettings, StopBits,

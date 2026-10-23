@@ -134,7 +134,11 @@ globalThis.addEventListener?.("blur", () => {
 /** The last refusal a reconnect got, by host. */
 const refusals = new Map<string, { at: number; message: string; code: ErrorCode | undefined }>();
 
-/** Whether a lost session of this kind is worth connecting again. */
+/**
+ * Whether a lost session of this kind is worth connecting again. Mosh
+ * keeps its own session across networks; its client exits only when the
+ * server is gone.
+ */
 function reconnects(spec: SessionSpec): boolean {
   return spec.kind === "ssh" || spec.kind === "host" || spec.kind === "telnet";
 }
@@ -144,6 +148,7 @@ function reconnectKey(spec: SessionSpec): string {
   switch (spec.kind) {
     case "host":
     case "telnet":
+    case "mosh":
       return `host:${spec.hostId}`;
     case "ssh": {
       const { user, host, port } = spec.target.destination;
@@ -689,6 +694,7 @@ export class TerminalController {
     switch (this.spec.kind) {
       case "host":
       case "telnet":
+      case "mosh":
         return this.spec.label;
       case "ssh":
         return formatEndpoint(this.spec.target.destination);

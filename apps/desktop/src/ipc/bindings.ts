@@ -67,6 +67,12 @@ export const commands = {
 	 *  remote shell's own prompt.
 	 */
 	telnetConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("telnet_connect", { id, size, onOutput, onExit })),
+	/**
+	 *  Signs in to a saved Mosh host, starts `mosh-server` there, and streams
+	 *  the local `mosh-client` to the view. Questions the sign-in raises
+	 *  arrive on `on_prompt`, as for an SSH connect.
+	 */
+	moshConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("mosh_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**  The ports attached now, and the speeds offered. */
 	serialPorts: () => typedError<SerialPortsView, CommandError>(__TAURI_INVOKE("serial_ports")),
 	/**
@@ -516,7 +522,9 @@ export type PromptRequest = {
 /**  How a saved host is reached. */
 export type ProtocolSpec = "ssh" | 
 /**  Clear text, for devices and old systems. */
-"telnet";
+"telnet" | 
+/**  Signs in over SSH; the terminal runs over Mosh. */
+"mosh";
 
 export type RecordedSpec = "stored" | "sealed" | "dropped";
 

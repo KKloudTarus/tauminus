@@ -16,6 +16,7 @@ mod forwards;
 pub mod history;
 mod hosts;
 mod local;
+mod mosh;
 pub mod ports;
 mod serial;
 mod session;
@@ -32,6 +33,7 @@ pub use files::{
 pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;
+pub use mosh::{MoshOpenError, MoshSessions};
 pub use serial::SerialSessions;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};

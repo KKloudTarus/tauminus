@@ -34,6 +34,7 @@ pub enum SessionKind {
     Ssh,
     Telnet,
     Serial,
+    Mosh,
 }
 
 /// Facts about a session that policies need, independent of its transport.
@@ -55,11 +56,27 @@ impl SessionMeta {
 ///
 /// `program: None` means the user's login shell, which the PTY adapter resolves
 /// per platform.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LocalShell {
     pub program: Option<String>,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Set on top of what the app inherited, as `mosh-client` needs its
+    /// session key in `MOSH_KEY`.
+    pub env: Vec<(String, String)>,
+}
+
+impl fmt::Debug for LocalShell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Values can be secrets, as Mosh's session key: names only.
+        let names: Vec<&str> = self.env.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("LocalShell")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("env", &names)
+            .finish()
+    }
 }
 
 #[cfg(test)]

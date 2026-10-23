@@ -225,12 +225,25 @@ pub enum ConnectError {
 }
 
 /// How a script run with [`SshConnector::run_script`] ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ScriptOutcome {
     /// `None` when the server sent no exit status.
     pub status: Option<u32>,
     /// Standard output and error, at most 64 KiB.
     pub output: String,
+    /// The address the host was reached at, when straight over TCP.
+    pub peer: Option<std::net::IpAddr>,
+}
+
+impl fmt::Debug for ScriptOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The output may hold a secret, as Mosh's session key.
+        f.debug_struct("ScriptOutcome")
+            .field("status", &self.status)
+            .field("output_bytes", &self.output.len())
+            .field("peer", &self.peer)
+            .finish()
+    }
 }
 
 /// How a running forward is doing.
@@ -428,6 +441,24 @@ pub trait TelnetConnector: Send + Sync + 'static {
         target: &'a tauminus_domain::TelnetTarget,
         size: TerminalSize,
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+}
+
+/// Starts the local `mosh-client` toward a server the bootstrap started
+/// on `host`, on a PTY of its own.
+pub trait MoshClient: Send + Sync + 'static {
+    /// Fails when no client can run here, before any sign-in.
+    fn ready(&self) -> Result<(), LaunchError> {
+        Ok(())
+    }
+
+    /// `address` is where SSH reached the host, which `mosh-server -s`
+    /// listens on; a second lookup of the name could answer otherwise.
+    fn launch<'a>(
+        &'a self,
+        address: std::net::IpAddr,
+        connect: &'a tauminus_domain::MoshConnect,
+        size: TerminalSize,
+    ) -> BoxFuture<'a, Result<TerminalStream, LaunchError>>;
 }
 
 /// Keeps the saved hosts. `save` replaces everything at once, so a crash

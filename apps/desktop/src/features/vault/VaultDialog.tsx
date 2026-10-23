@@ -568,7 +568,8 @@ const PublicKey = memo(function PublicKey({
         >
           <option value="">Choose a saved host…</option>
           {tools.hosts
-            .filter((h) => h.protocol === "ssh")
+            // Mosh hosts sign in over SSH too.
+            .filter((h) => h.protocol !== "telnet")
             .map((h) => (
               <option key={h.id} value={h.id}>
                 {h.label}

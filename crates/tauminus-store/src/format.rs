@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 to 6. Domain types stay free of serde; these types
+//! The file format, versions 1 to 7. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
@@ -16,10 +16,12 @@ use tauminus_domain::{
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
-/// encodings, version 5 Telnet hosts, and version 6 tmux sessions; a file
-/// is written as the lowest version that holds what it has, so a build
-/// from before a feature keeps reading files that do not use it.
-const VERSION: u32 = 6;
+/// encodings, version 5 Telnet hosts, version 6 tmux sessions, and
+/// version 7 Mosh hosts; a file is written as the lowest version that
+/// holds what it has, so a build from before a feature keeps reading files
+/// that do not use it.
+const VERSION: u32 = 7;
+const VERSION_WITHOUT_MOSH: u32 = 6;
 const VERSION_WITHOUT_TMUX: u32 = 5;
 const VERSION_WITHOUT_TELNET: u32 = 4;
 const VERSION_WITHOUT_ENCODING: u32 = 3;
@@ -72,6 +74,7 @@ struct HostRecord {
 #[serde(rename_all = "camelCase")]
 enum ProtocolRecord {
     Telnet,
+    Mosh,
 }
 
 /// One forwarding rule. `bind` is `loopback`, `any`, or an IP address.
@@ -198,6 +201,7 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let mosh = inventory.hosts().any(|h| h.protocol == Protocol::Mosh);
     let tmux = inventory.hosts().any(|h| h.settings.tmux.is_some())
         || inventory.groups().any(|g| g.settings.tmux.is_some());
     let telnet = inventory.hosts().any(|h| h.protocol == Protocol::Telnet);
@@ -206,8 +210,10 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if tmux {
+        version: if mosh {
             VERSION
+        } else if tmux {
+            VERSION_WITHOUT_MOSH
         } else if telnet {
             VERSION_WITHOUT_TMUX
         } else if encoding {
@@ -242,6 +248,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
                 protocol: match h.protocol {
                     Protocol::Ssh => None,
                     Protocol::Telnet => Some(ProtocolRecord::Telnet),
+                    Protocol::Mosh => Some(ProtocolRecord::Mosh),
                 },
             })
             .collect(),
@@ -302,6 +309,7 @@ pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
             host.protocol = match h.protocol {
                 None => Protocol::Ssh,
                 Some(ProtocolRecord::Telnet) => Protocol::Telnet,
+                Some(ProtocolRecord::Mosh) => Protocol::Mosh,
             };
             host.startup = h
                 .startup

@@ -25,6 +25,7 @@ tauminus-pty = { path = "crates/tauminus-pty" }
 tauminus-ssh = { path = "crates/tauminus-ssh" }
 tauminus-store = { path = "crates/tauminus-store" }
 tauminus-telnet = { path = "crates/tauminus-telnet" }
+tauminus-mosh = { path = "crates/tauminus-mosh" }
 
 # External crates. Each one is allowed only in the crates listed in deny.toml [bans].
 anyhow = "1.0.104"

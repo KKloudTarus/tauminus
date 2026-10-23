@@ -128,9 +128,19 @@ impl RusshConnector {
         let (alarm, closed) = watch::channel(false);
         let alarm = Arc::new(alarm);
         let routes = Arc::new(Routes::default());
+        // The address the destination was reached at, when it was reached
+        // straight over TCP.
+        let mut peer = None;
         for (index, hop) in hops.iter().enumerate() {
             let io = match connections.last() {
-                None => transport::open(&target.route, hop, self.connect_timeout).await?,
+                None => {
+                    let (io, reached) =
+                        transport::open(&target.route, hop, self.connect_timeout).await?;
+                    if hops.len() == 1 {
+                        peer = reached;
+                    }
+                    io
+                }
                 Some(previous) => {
                     let tunnel = previous
                         .channel_open_direct_tcpip(
@@ -200,6 +210,7 @@ impl RusshConnector {
             routes,
             forward_agent,
             pipe::Ledger::new(self.forward_budget, self.forward_stall),
+            peer,
         ))
     }
 
@@ -266,6 +277,7 @@ impl RusshConnector {
         Ok(ScriptOutcome {
             status,
             output: String::from_utf8_lossy(&output).into_owned(),
+            peer: connection.peer(),
         })
     }
 }

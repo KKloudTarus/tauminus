@@ -23,9 +23,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Io for T {}
 
 pub(crate) type BoxedIo = Box<dyn Io>;
 
-/// Opens the stream to `endpoint` along `route`. `timeout` bounds each TCP
-/// connect and each proxy handshake.
+/// Opens the stream to `endpoint` along `route`, with the address a direct
+/// connection reached. `timeout` bounds each TCP connect and each proxy
+/// handshake.
 pub(crate) async fn open(
+    route: &Route,
+    endpoint: &Endpoint,
+    timeout: Duration,
+) -> Result<(BoxedIo, Option<std::net::IpAddr>), ConnectError> {
+    if *route == Route::Direct {
+        let stream = tcp(&endpoint.host, endpoint.port, timeout).await?;
+        let peer = stream.peer_addr().ok().map(|a| a.ip());
+        return Ok((Box::new(stream), peer));
+    }
+    Ok((routed(route, endpoint, timeout).await?, None))
+}
+
+async fn routed(
     route: &Route,
     endpoint: &Endpoint,
     timeout: Duration,

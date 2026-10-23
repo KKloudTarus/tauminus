@@ -232,7 +232,7 @@ export class AppShell {
       });
       // Not over Telnet: it reports running once TCP connects, and the text
       // would go to the device's login prompt.
-      if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
+      if (spec?.kind === "host" || spec?.kind === "mosh") this.#startupOn(controller, spec.hostId);
       return controller;
     });
     // Panes of the shown tab are watched; the others collect activity.
@@ -432,7 +432,7 @@ export class AppShell {
     }
     const panes = this.#openGrid(specs);
     for (const spec of specs.slice(panes.length)) {
-      if (spec.kind === "host" || spec.kind === "telnet") {
+      if (spec.kind === "host" || spec.kind === "telnet" || spec.kind === "mosh") {
         unable.push(`${spec.label} (no room for more panes)`);
       }
     }
@@ -874,7 +874,7 @@ export class AppShell {
       case "files.open": {
         const spec = this.workspace.focusedSpec();
         const host =
-          spec?.kind === "host"
+          spec?.kind === "host" || spec?.kind === "mosh"
             ? this.hosts.getSnapshot().view.hosts.find((h) => h.id === spec.hostId)
             : undefined;
         if (host) this.openFiles(host);
@@ -974,7 +974,7 @@ export class AppShell {
   #recorderFor(spec: SessionSpec | undefined): (entry: RecordedCommand) => void {
     const host = savedHostId(spec) ?? null;
     const label =
-      spec?.kind === "host" || spec?.kind === "telnet"
+      spec?.kind === "host" || spec?.kind === "telnet" || spec?.kind === "mosh"
         ? spec.label
         : spec?.kind === "ssh"
           ? formatEndpoint(spec.target.destination)
@@ -1028,13 +1028,21 @@ function specFor(host: HostView): SessionSpec | string {
     if (host.problem) return host.problem;
     return { kind: "telnet", hostId: host.id, label: host.label };
   }
+  if (host.protocol === "mosh") {
+    // A routed host keeps its SSH target for files, not for Mosh.
+    if (host.problem) return host.problem;
+    if (!host.target) return "cannot connect";
+    return { kind: "mosh", hostId: host.id, label: host.label };
+  }
   if (!host.target) return host.problem ?? "cannot connect";
   return { kind: "host", hostId: host.id, label: host.label, target: host.target };
 }
 
 /** The saved host a pane opened, whatever its protocol. */
 function savedHostId(spec: SessionSpec | undefined): string | undefined {
-  return spec?.kind === "host" || spec?.kind === "telnet" ? spec.hostId : undefined;
+  return spec?.kind === "host" || spec?.kind === "telnet" || spec?.kind === "mosh"
+    ? spec.hostId
+    : undefined;
 }
 
 /** A template with each pane's spec turned into another. O(n). */

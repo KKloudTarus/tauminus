@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "snippet_command",
     "host_startup",
     "telnet_connect",
+    "mosh_connect",
     "serial_ports",
     "serial_open",
     "host_save",
