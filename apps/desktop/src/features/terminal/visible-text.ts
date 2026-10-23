@@ -8,17 +8,23 @@ export const MAX_SHOWN = 4000;
  * Text to confirm, with nothing hidden: controls other than newline and tab
  * appear as `^X` or `<U+XXXX>`, and so do bidirectional controls, which
  * could make a command read differently than it runs (CVE-2021-42574).
- * Past `MAX_SHOWN` characters the rest is counted, not shown. O(n).
+ * Past `MAX_SHOWN` characters the rest is counted, not read: a 1 MiB paste
+ * costs as much as 4000 characters. O(min(n, MAX_SHOWN)).
  */
 export function visibleText(text: string): string {
   let shown = "";
   let count = 0;
+  let units = 0;
   for (const char of text) {
+    if (count === MAX_SHOWN) break;
     count += 1;
-    if (count > MAX_SHOWN) continue;
+    units += char.length;
     shown += visible(char);
   }
-  return count > MAX_SHOWN ? `${shown}… ${count - MAX_SHOWN} more characters` : shown;
+  // Counted in UTF-16 units past here: exact for most text, a little high
+  // for emoji, and never short.
+  const rest = text.length - units;
+  return rest > 0 ? `${shown}… ${rest} more characters` : shown;
 }
 
 function visible(char: string): string {
