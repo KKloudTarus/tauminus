@@ -236,3 +236,16 @@ test("sets agent forwarding and environment variables, with a warning", async ({
   ).toHaveValue("on");
   await expect(editor.getByLabel(/Environment variables/)).toHaveValue("LANG=C.UTF-8\nTEAM=ops");
 });
+
+test("keeps the editor's buttons in reach in a short window", async ({ page }) => {
+  await page.setViewportSize({ width: 1200, height: 560 });
+  await sidebar(page).getByRole("button", { name: "New host" }).click();
+  const editor = page.getByRole("dialog", { name: "New host" });
+  const save = editor.getByRole("button", { name: "Save" });
+  await expect(save).toBeInViewport();
+  await editor.getByLabel("Name").fill("web");
+  await editor.getByLabel("Address").fill("web.test");
+  await save.click();
+  await expect(editor).toHaveCount(0);
+  await expect(sidebar(page).getByRole("button", { name: /^web / })).toBeVisible();
+});
