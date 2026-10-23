@@ -84,15 +84,50 @@ instead of 0.2 ms, 100 rules 20 to 47 ms, on a background thread. The
 byte budget and the 256 rules a pane compiles bound it; `(?-u:\b)` asks
 for the ASCII meaning and the fast path.
 
-### Actions run in the view
+### Triggers run in the view, on finished lines
 
-The prod guard and the secret-prompt check run in the view, on what the
-user types. Text a trigger sends will go through the same path as typing
-(`TerminalController.type`), so the guard asks on a guarded host, the
-text stays out of broadcast, and nothing is sent at a password prompt.
-Highlight ships first; notify, capture, and send text follow with rate
-limits per rule, no capture groups in sent text, and no actions on the
-alternate screen.
+A rule's action is a highlight, or one of three triggers: notify, keep the
+line (capture), or send text. Triggers have their own matcher: each fires
+once per line, at its first match, and rules do not hide each other.
+
+Notify and capture read each line of output once, when the cursor has
+left it: a progress bar redrawn with `\r` fires once it is done. A scan
+reads at most 512 rows every 100 ms; a flood faster than that skips lines,
+since triggers watch, they do not guard. An erased screen (Ctrl+L) counts
+what it erased as read. Send reads the line the cursor waits on, once
+output has stopped for 300 ms, and each such line once: a question like
+`Continue? [y/N] ` waits there, and a password prompt that follows a line
+arrives before anything is typed. Full-screen programs (the alternate
+screen) are skipped. Lines come back with secrets of a known shape hidden,
+as the command history hides them; a line that is all base64 (one line of
+a private key, whose BEGIN line came alone before it) is hidden whole, and
+characters that change how text reads unseen are dropped.
+
+- **Notify.** The app's notice shows the rule, the pane, and the line in
+  quotes, once a rule a scan and at most every 5 s, so the app's own
+  notices are not drowned out. A system notification shows only while
+  the window is in the back, at most one per rule every 30 s and five a
+  minute in all, and holds no output: notification centres keep what they show, on the lock screen
+  too, Linux servers render markup in bodies, and output could pose as a
+  prompt of the app's. The webview names the rule (a handle and an
+  index); the backend writes "Tauminus: rule" and "Matched on host" from
+  what the user wrote, and raises it through `tauri-plugin-notification`
+  from Rust. The window has none of the plugin's permissions, and a test
+  refuses any permission in the capability file that is not an app
+  command.
+- **Capture.** The line goes to a list in memory, at most 1000, newest
+  first, to read and copy. Nothing goes to disk.
+- **Send.** The text holds no control characters (Enter is its own
+  choice) and nothing from the match: the host would choose what runs. It
+  is typed as the user types (`TerminalController.type`), so the prod
+  guard asks on a guarded host, it enters the history, and it is not
+  broadcast. It is not sent at a password prompt, into a full-screen
+  program, or over a line the user has begun to type (with Enter, the
+  user's half-typed command would run). A rule sends at most every 2 s
+  and five times a minute in a pane; past that it is off in that pane
+  until the rules change, which ends a loop on its own echo. On a
+  guarded host the check is made when the rule fires, not again when the
+  user confirms the guard's question.
 
 ## Consequences
 
@@ -102,3 +137,6 @@ alternate screen.
   its text was read, so `^` may match mid-line.
 - Highlights stay on screen only: scrolled back to, a line is scanned
   again.
+- A trigger fires only on output that arrives while the pane is open, not
+  on what it showed before, and a line wrapped across more than 512 rows
+  is read from its last 512.
