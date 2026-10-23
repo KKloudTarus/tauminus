@@ -11,13 +11,10 @@ import {
   SessionCommandError,
 } from "@/ipc/index.ts";
 
-const FIELD =
-  "rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50";
-const BUTTON =
-  "rounded border border-current/20 px-3 py-1.5 hover:bg-current/10 disabled:opacity-50";
-const PRIMARY =
-  "rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90 disabled:opacity-50";
-const ALERT = "text-red-600 dark:text-red-400";
+const FIELD = "field";
+const BUTTON = "btn";
+const PRIMARY = "btn btn-primary";
+const ALERT = "text-error";
 
 export type AssistantMode = "ask" | "explain" | "settings";
 
@@ -122,7 +119,7 @@ export function AiDialog({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[8%] m-0 mx-auto flex max-h-[84vh] w-[min(720px,94vw)] flex-col rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal flex w-[min(720px,94vw)] flex-col p-4"
     >
       <h2 id={titleId} className="mb-3 font-semibold">
         {mode === "settings"
@@ -254,7 +251,7 @@ function StepView({
           </p>
           <pre
             data-testid="ai-preview"
-            className="max-h-72 overflow-auto rounded bg-current/5 p-2 font-mono text-xs whitespace-pre-wrap"
+            className="max-h-72 overflow-auto rounded-lg border border-line bg-terminal p-2 font-mono text-xs whitespace-pre-wrap"
           >
             {step.text}
           </pre>
@@ -284,12 +281,12 @@ function Reply({
     <div>
       <pre
         data-testid="ai-answer"
-        className="max-h-64 overflow-auto rounded bg-current/5 p-2 text-xs whitespace-pre-wrap"
+        className="max-h-64 overflow-auto rounded-lg border border-line bg-surface-1 p-2 text-xs whitespace-pre-wrap"
       >
         {reply.text}
       </pre>
       {reply.command !== null && (
-        <div className="mt-3 rounded border border-current/15 p-2">
+        <div className="mt-3 rounded-lg border border-line bg-surface-1 p-2">
           <code data-testid="ai-command" className="block font-mono text-xs break-all">
             {reply.command}
           </code>
@@ -432,7 +429,7 @@ function SettingsForm({
           Save
         </button>
       </div>
-      <fieldset className="flex flex-col gap-2 border-t border-current/15 pt-3">
+      <fieldset className="flex flex-col gap-2 border-t border-line pt-3">
         <legend className="sr-only">API key</legend>
         <p>
           {settings.hasKey
