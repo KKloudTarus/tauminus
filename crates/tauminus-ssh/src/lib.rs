@@ -18,6 +18,7 @@ mod forward;
 mod host_keys;
 pub mod known_hosts;
 mod pipe;
+mod sftp;
 mod socks;
 mod transport;
 mod tunnel;
@@ -321,6 +322,10 @@ fn client_config(known: &KnownHosts, hop: &Endpoint) -> client::Config {
         keepalive_max: 3,
         inactivity_timeout: None,
         channel_buffer_size: CHANNEL_BUFFER,
+        // The default 2 MiB caps one transfer at 2 MiB per round trip,
+        // 19 MiB/s at 50 ms; 16 MiB carries a gigabit at 50 ms. russh grants
+        // window on receipt, so this bounds no memory; the queue above does.
+        window_size: 16 * 1024 * 1024,
         ..client::Config::default()
     }
 }

@@ -318,6 +318,9 @@ pub trait SshConnection: Send + Sync + 'static {
         forward: &'a Forward,
     ) -> BoxFuture<'a, Result<ForwardHandle, TunnelError>>;
 
+    /// Starts the SFTP subsystem on a channel of its own.
+    fn open_sftp(&self) -> BoxFuture<'_, Result<Arc<dyn SftpPort>, ConnectError>>;
+
     /// False once the session has ended.
     fn is_open(&self) -> bool;
 
@@ -429,4 +432,120 @@ pub struct ConfigHost {
 /// Reads the hosts an OpenSSH client config defines.
 pub trait SshConfigSource: Send + Sync + 'static {
     fn hosts(&self) -> BoxFuture<'_, Result<Vec<ConfigHost>, std::io::Error>>;
+}
+
+/// What a directory entry on the server is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    File,
+    Dir,
+    Link,
+    Other,
+}
+
+/// One entry of a remote directory, as the server describes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteEntry {
+    /// As the server sent it: check it with `tauminus_domain::local_name`
+    /// before it names anything on this machine.
+    pub name: String,
+    pub kind: EntryKind,
+    pub size: u64,
+    /// Seconds since the epoch.
+    pub modified: Option<u64>,
+    /// Permission bits, as `chmod` takes them.
+    pub mode: Option<u32>,
+}
+
+#[derive(Debug, Error)]
+pub enum SftpError {
+    /// The server refused, with its own words.
+    #[error("the server said: {0}")]
+    Server(String),
+    #[error("the directory has more than {0} entries")]
+    TooMany(usize),
+    #[error("{0}")]
+    Local(#[from] std::io::Error),
+    /// The source changed size while it was copied.
+    #[error("the file changed while it was copied")]
+    Changed,
+    #[error("{0} already exists")]
+    Exists(String),
+    #[error("{0} is larger than allowed here")]
+    TooLarge(String),
+    #[error("cancelled")]
+    Cancelled,
+    #[error("the connection is closed")]
+    Closed,
+}
+
+/// How far a transfer has come.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransferProgress {
+    /// Bytes in place at the destination, counting a resumed start.
+    pub done: u64,
+    pub total: u64,
+    /// Where it resumed, or 0 when it started from the beginning.
+    pub resumed_from: u64,
+}
+
+/// A file to copy from the server. `local` is the final path; a partial
+/// copy waits beside it until it is complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Download {
+    pub remote: String,
+    pub local: std::path::PathBuf,
+    /// The saved host, recorded with a partial copy so it only resumes
+    /// against the same file.
+    pub host: String,
+    pub overwrite: bool,
+    /// Continue a partial copy of the same file; off, it always starts over.
+    pub resume: bool,
+    /// Refuse a file larger than this.
+    pub max: Option<u64>,
+}
+
+/// A file to copy to the server. It is written beside `remote` under a
+/// temporary name and renamed over it once complete; `state` is a local
+/// directory that keeps what a resume needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Upload {
+    pub local: std::path::PathBuf,
+    pub remote: String,
+    pub host: String,
+    pub overwrite: bool,
+    pub state: std::path::PathBuf,
+    /// Continue a partial upload of the same file; off, it starts over.
+    pub resume: bool,
+}
+
+/// Files on one server, over the SFTP subsystem of a connection.
+pub trait SftpPort: Send + Sync + 'static {
+    /// At most 100 000 entries, without `.` and `..`.
+    fn list<'a>(&'a self, dir: &'a str) -> BoxFuture<'a, Result<Vec<RemoteEntry>, SftpError>>;
+    /// Follows links; `name` is the last component.
+    fn stat<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<RemoteEntry, SftpError>>;
+    /// The absolute form of `path`; `.` is the login directory.
+    fn canonicalize<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<String, SftpError>>;
+    fn mkdir<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<(), SftpError>>;
+    fn remove_file<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<(), SftpError>>;
+    fn remove_dir<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<(), SftpError>>;
+    /// Fails when `to` exists: renaming never replaces a file.
+    fn rename<'a>(&'a self, from: &'a str, to: &'a str) -> BoxFuture<'a, Result<(), SftpError>>;
+    fn chmod<'a>(&'a self, path: &'a str, mode: u32) -> BoxFuture<'a, Result<(), SftpError>>;
+    /// Copies a file here, resuming a partial copy of the same file.
+    /// Returns the bytes moved this time.
+    fn download<'a>(
+        &'a self,
+        job: &'a Download,
+        progress: watch::Sender<TransferProgress>,
+        cancel: watch::Receiver<()>,
+    ) -> BoxFuture<'a, Result<u64, SftpError>>;
+    /// Copies a file there, resuming a partial upload of the same file.
+    fn upload<'a>(
+        &'a self,
+        job: &'a Upload,
+        progress: watch::Sender<TransferProgress>,
+        cancel: watch::Receiver<()>,
+    ) -> BoxFuture<'a, Result<u64, SftpError>>;
 }

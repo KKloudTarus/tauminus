@@ -12,7 +12,7 @@ use std::sync::{Arc, Weak};
 use russh::Disconnect;
 use russh::client::Handle;
 use tauminus_app::ports::{
-    BoxFuture, ConnectError, ForwardHandle, SshConnection, TerminalStream, TunnelError,
+    BoxFuture, ConnectError, ForwardHandle, SftpPort, SshConnection, TerminalStream, TunnelError,
 };
 use tauminus_domain::{Forward, SessionOptions, TerminalSize};
 use tokio::sync::watch;
@@ -127,6 +127,13 @@ impl SshConnection for Connection {
         forward: &'a Forward,
     ) -> BoxFuture<'a, Result<ForwardHandle, TunnelError>> {
         Box::pin(tunnel::start(self.lease(), forward))
+    }
+
+    fn open_sftp(&self) -> BoxFuture<'_, Result<Arc<dyn SftpPort>, ConnectError>> {
+        Box::pin(async move {
+            let sftp = crate::sftp::open(self.lease()).await?;
+            Ok(Arc::new(sftp) as Arc<dyn SftpPort>)
+        })
     }
 
     fn is_open(&self) -> bool {

@@ -28,6 +28,8 @@ pub(crate) struct FakeConnector {
     /// Every connection made, so a test can close one.
     pub(crate) made: Mutex<Vec<Arc<FakeConnection>>>,
     pub(crate) refuse: AtomicBool,
+    /// Fails logins as an unreachable network would, for a while.
+    pub(crate) unreachable: AtomicBool,
 }
 
 impl SshConnector for FakeConnector {
@@ -42,6 +44,13 @@ impl SshConnector for FakeConnector {
             tokio::time::sleep(self.delay).await;
             if self.refuse.load(Ordering::Relaxed) {
                 return Err(ConnectError::Cancelled);
+            }
+            if self.unreachable.load(Ordering::Relaxed) {
+                return Err(ConnectError::Timeout {
+                    host: "db".into(),
+                    port: 22,
+                    seconds: 15,
+                });
             }
             self.logins.lock().unwrap().push(forward_agent);
             let connection = Arc::new(FakeConnection::default());
@@ -75,6 +84,115 @@ pub(crate) struct FakeConnection {
     pub(crate) forwards: Mutex<Vec<Arc<watch::Sender<ForwardStatus>>>>,
     /// One per forward started; closed once its handle drops.
     pub(crate) stops: Mutex<Vec<watch::Receiver<()>>>,
+    pub(crate) sftp: Arc<FakeSftp>,
+}
+
+/// SFTP whose transfers take `delay` each and remember what ran.
+#[derive(Default)]
+pub(crate) struct FakeSftp {
+    pub(crate) delay: Mutex<Duration>,
+    pub(crate) running: AtomicUsize,
+    pub(crate) most_at_once: AtomicUsize,
+    pub(crate) downloads: Mutex<Vec<crate::ports::Download>>,
+    pub(crate) uploads: Mutex<Vec<crate::ports::Upload>>,
+    /// Transfers that fail as a dropped connection would, before one works.
+    pub(crate) drops: AtomicUsize,
+}
+
+impl FakeSftp {
+    async fn transfer(
+        &self,
+        progress: watch::Sender<crate::ports::TransferProgress>,
+        mut cancel: watch::Receiver<()>,
+    ) -> Result<u64, crate::ports::SftpError> {
+        let dropped = self
+            .drops
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if dropped {
+            return Err(crate::ports::SftpError::Closed);
+        }
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most_at_once.fetch_max(now, Ordering::SeqCst);
+        let delay = *self.delay.lock().unwrap();
+        let result = tokio::select! {
+            () = tokio::time::sleep(delay) => {
+                progress.send_modify(|p| { p.done = 10; p.total = 10; });
+                Ok(10)
+            }
+            _ = cancel.changed() => Err(crate::ports::SftpError::Cancelled),
+        };
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+}
+
+impl crate::ports::SftpPort for FakeSftp {
+    fn list<'a>(
+        &'a self,
+        _dir: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<crate::ports::RemoteEntry>, crate::ports::SftpError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+    fn stat<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<crate::ports::RemoteEntry, crate::ports::SftpError>> {
+        Box::pin(async move { Err(crate::ports::SftpError::Server(format!("no {path}"))) })
+    }
+    fn canonicalize<'a>(
+        &'a self,
+        _path: &'a str,
+    ) -> BoxFuture<'a, Result<String, crate::ports::SftpError>> {
+        Box::pin(async { Ok("/home/ops".to_owned()) })
+    }
+    fn mkdir<'a>(&'a self, _path: &'a str) -> BoxFuture<'a, Result<(), crate::ports::SftpError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn remove_file<'a>(
+        &'a self,
+        _path: &'a str,
+    ) -> BoxFuture<'a, Result<(), crate::ports::SftpError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn remove_dir<'a>(
+        &'a self,
+        _path: &'a str,
+    ) -> BoxFuture<'a, Result<(), crate::ports::SftpError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn rename<'a>(
+        &'a self,
+        _from: &'a str,
+        _to: &'a str,
+    ) -> BoxFuture<'a, Result<(), crate::ports::SftpError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn chmod<'a>(
+        &'a self,
+        _path: &'a str,
+        _mode: u32,
+    ) -> BoxFuture<'a, Result<(), crate::ports::SftpError>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn download<'a>(
+        &'a self,
+        job: &'a crate::ports::Download,
+        progress: watch::Sender<crate::ports::TransferProgress>,
+        cancel: watch::Receiver<()>,
+    ) -> BoxFuture<'a, Result<u64, crate::ports::SftpError>> {
+        self.downloads.lock().unwrap().push(job.clone());
+        Box::pin(self.transfer(progress, cancel))
+    }
+    fn upload<'a>(
+        &'a self,
+        job: &'a crate::ports::Upload,
+        progress: watch::Sender<crate::ports::TransferProgress>,
+        cancel: watch::Receiver<()>,
+    ) -> BoxFuture<'a, Result<u64, crate::ports::SftpError>> {
+        self.uploads.lock().unwrap().push(job.clone());
+        Box::pin(self.transfer(progress, cancel))
+    }
 }
 
 impl FakeConnection {
@@ -130,6 +248,11 @@ impl SshConnection for FakeConnection {
             let (_, finished) = watch::channel(());
             Ok(ForwardHandle::new(port, status, stop, finished))
         })
+    }
+
+    fn open_sftp(&self) -> BoxFuture<'_, Result<Arc<dyn crate::ports::SftpPort>, ConnectError>> {
+        let sftp = Arc::clone(&self.sftp) as Arc<dyn crate::ports::SftpPort>;
+        Box::pin(async move { Ok(sftp) })
     }
 
     fn is_open(&self) -> bool {

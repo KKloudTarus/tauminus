@@ -133,34 +133,85 @@ every rule with start and stop.
 ### SFTP
 
 `russh-sftp` 3.0.1 (Apache-2.0) speaks the protocol over a channel
-stream. Its `File` keeps reads and writes in flight (16 of each by
-default, configurable), so a 50 ms link is not capped at one request per
-round trip; transfers raise both to 64. A read reply longer than asked is an error; a short one is
-asked again for the rest; only `SSH_FX_EOF` ends a file.
+stream. Its `SftpSession::read_dir` gathers a whole directory with no
+bound, re-collecting at every batch, and its session does not expose the
+raw one, so everything goes through `RawSftpSession`: listings stop at
+100 000 entries with 64 READDIR requests ahead. Transfers keep two round
+trips of their rate over the last second in flight, as BBR sizes its
+window: 128 KiB for the first second, shared by the transfers starting
+on the session, then 32 KiB to 8 MiB, at most 256
+requests, each up to the server's `limits@openssh.com` size (4 KiB to
+256 KiB) and a quarter of the window when it is small. More than that
+only waits in queues, where a listing on the same connection waits
+behind it and a request's 30 s timer runs. Replies are taken in offset
+order. Paced by its lowest round trip, a transfer gives way to a
+bulk forward that fills the same connection's queue: at 2 MB/s it keeps
+about 4% of the link. Browsing and keystrokes stay fast, which matters
+more; a share floor that follows the smoothed round trip is the next
+step if that proves too little. A read reply longer than asked is an error; a short one
+is asked again for the rest; only `SSH_FX_EOF` ends a file. A listing also
+stops at 32 MiB of names, skips names over 4 KiB, and gives up after 16
+empty replies in a row. A rename the user asks for never replaces a file;
+an upload's final rename uses `posix-rename@openssh.com` when it may
+replace.
 
 Names from the server are bytes it chose. Each one becomes a local path
 component only after a check that refuses empty, `.`, `..`, separators,
 NUL, control and bidirectional characters, and on Windows `:`, `*?"<>|`,
-trailing dots and spaces, and device names. A listing keeps at most
-100 000 entries.
+trailing dots and spaces, and device names (`CONIN$`, `CONOUT$`, and
+COM and LPT with a superscript digit too). Names ending in
+`.tauminus-part` or `.tauminus-part.info` are refused, so a server cannot
+plant a partial copy or its record.
 
-A download writes to `<name>.tauminus-part`, created new (never through
-an existing file or link), beside a record of the host, remote path, size,
-and modification time, and renames it when complete. A resume continues
-only when that record matches the remote file now and the last 64 KiB on
-both sides agree; otherwise it starts over. An upload writes to a
-temporary remote name and renames it over the target. The rules that
+A download writes to `<name>.tauminus-part`, created new and private
+(never through an existing file or link, and refused with a second hard
+link), beside a record of the host, remote path, size, and modification
+time. It stats the file again when done and reports a change instead of
+keeping a mix. Without overwrite it finishes with a hard link, which
+fails rather than replace a file that appeared meanwhile. A resume
+continues only when the record matches the remote file now (the server
+gives a time) and the last 64 KiB before the resume point agree on both
+sides; otherwise it starts over.
+
+An upload writes to `<name>.tauminus-part-<random>` on the server,
+created with `EXCL`, so a link another user planted at a guessed name is
+refused. Its local record, under a hashed name, keeps that name and the
+prefix acknowledged in order, since writes may land out of order; a
+resume continues from there only when `lstat` finds a regular file and
+`fstat` on the opened handle agrees with it. The finished file's mode is
+set on the handle: the target's when it replaces one, the local file's
+for a new one, always without setuid, setgid, or sticky bits, so an
+upload never widens who can read a file. A resume also requires the part
+to be owned by whoever owned it when it was created. A link at the target is
+replaced by the file, never written through. The rules that
 decide resume live in the domain, where they are tested without a
-server. Transfers run one at a time per connection, four connections at
-once.
+server. Transfers run one at a time per session, four at once in all. A
+transfer cut off by a dropped connection logs in again after 2, 5, and
+10 s and resumes from its partial copy; a login that fails waits for the
+next try. One new login runs per session at a time, and one refused or
+cancelled stops the retries of the whole session, so a dead password
+never counts against the account once per transfer. Two downloads to one local file never run together.
 
-Editing a remote file downloads it into a new private directory (0700),
-opens it with the editor the user configured, or `$VISUAL`, `$EDITOR`,
-`open -t`, or Notepad, as a program with the path as its last argument,
-never through the file's type association. It uploads when the content's
-hash changes, only to the connection it came from, and only if the
-remote file has not changed since. The directory is removed when the edit
-ends, and leftovers are removed at start.
+Editing a remote file downloads it into a new private folder (0700, in
+the per-user runtime folder when there is one) and opens it with
+`TAUMINUS_EDITOR`, or `open -t` on macOS, Notepad on Windows, or the
+first text editor found on Linux, as a program with the path as its last
+argument, never through the file's type association. A link is resolved
+first, so saves reach the file it points at. Files over 64 MiB are not
+opened, the download stops at that size whatever the server said before,
+and at most 16 edits run. Once a second the copy's size and time are
+checked, and its content hashed only when they moved; a change uploads,
+on the session's current connection, only while the server's copy is the
+one downloaded, and never resumes an older save. If someone else changed
+it, uploads stop. A copy whose last save did not reach the server is
+kept when the edit ends, marked, and the view shows where; later starts
+leave it, and the user removes it (on Linux it goes at logout with the
+runtime folder). Others are removed.
+At start, only folders of instances no longer running are removed, and
+only inside a root that is a private folder of this user.
+
+Files dropped on the window from the OS reach the view through a channel
+it registers, so the window needs no permission to listen to app events.
 
 ## Consequences
 
