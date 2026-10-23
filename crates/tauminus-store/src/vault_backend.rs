@@ -9,8 +9,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys, VaultBackend,
-    VaultError,
+    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
+    RecordingKeys, VaultBackend, VaultError,
 };
 use zeroize::Zeroizing;
 
@@ -169,6 +169,10 @@ impl VaultBackend for FileVaultBackend {
 
     fn history_public(&self) -> Option<[u8; 32]> {
         self.file.history_public().ok().flatten()
+    }
+
+    fn recordings_public(&self) -> Option<[u8; 32]> {
+        self.file.recordings_public().ok().flatten()
     }
 
     fn new_id(&self) -> String {
@@ -366,6 +370,25 @@ impl OpenPort for Opened {
         Ok((history_keys(&database, &pair), true))
     }
 
+    fn recording_keys(&mut self) -> Result<(RecordingKeys, bool), VaultError> {
+        if let Some(stored) = self.vault.get(RECORDINGS_SEALING) {
+            let pair =
+                HistoryKeyPair::from_secret(SecretKey::from_bytes(stored).map_err(port_error)?);
+            if self.vault.recordings_public() != Some(pair.public()) {
+                return Err(VaultError::Corrupt(
+                    "the recordings key does not match the vault".into(),
+                ));
+            }
+            return Ok((recording_keys(&pair), false));
+        }
+        let pair = HistoryKeyPair::random().map_err(|e| VaultError::Io(e.to_string()))?;
+        self.vault
+            .put(RECORDINGS_SEALING, pair.secret().as_bytes().to_vec())
+            .map_err(port_error)?;
+        self.vault.set_recordings_public(pair.public());
+        Ok((recording_keys(&pair), true))
+    }
+
     /// Saves, then brings the keychain in line with the file.
     fn save(&mut self) -> Result<(), VaultError> {
         self.vault.save(&self.file).map_err(port_error)?;
@@ -508,6 +531,8 @@ impl Opened {
 
 /// Vault records holding the history's keys.
 const HISTORY_DATABASE: &str = "history-database";
+/// Never rotated: every recording made is sealed to it.
+const RECORDINGS_SEALING: &str = "recordings-sealing";
 const HISTORY_SEALING: &str = "history-sealing";
 /// The same, from before each password change the history has not moved past.
 const HISTORY_DATABASE_PREVIOUS: &str = "history-database-previous";
@@ -515,6 +540,15 @@ const HISTORY_SEALING_PREVIOUS: &str = "history-sealing-previous";
 /// Most key generations kept for a history that has not moved: eight
 /// password changes without the history opening once.
 const MAX_GENERATIONS: usize = 8;
+
+fn recording_keys(pair: &HistoryKeyPair) -> RecordingKeys {
+    let mut secret = Zeroizing::new([0u8; 32]);
+    secret.copy_from_slice(pair.secret().as_bytes());
+    RecordingKeys {
+        secret,
+        public: pair.public(),
+    }
+}
 
 fn history_keys(database: &SecretKey, pair: &HistoryKeyPair) -> HistoryKeys {
     let key = |secret: &SecretKey| {

@@ -248,6 +248,9 @@ pub trait VaultBackend: Send + Sync + 'static {
     /// The history's public key, read without unlocking; `None` before the
     /// history's keys exist.
     fn history_public(&self) -> Option<[u8; 32]>;
+    /// The recordings' public key, read without unlocking; `None` before
+    /// the recordings' keys exist.
+    fn recordings_public(&self) -> Option<[u8; 32]>;
 }
 
 /// An unlocked vault. Changes are kept in memory until `save`.
@@ -273,9 +276,27 @@ pub trait OpenVault: Send {
     /// change while the history moved) stay. `true` when the vault must be
     /// saved.
     fn forget_previous_history_keys(&mut self, known: &[PreviousHistoryKeys]) -> bool;
+    /// The recordings' key pair, made on first use; `true` when it was
+    /// just made and the vault must be saved. It outlives password changes:
+    /// a recording is sealed to it for good.
+    fn recording_keys(&mut self) -> Result<(RecordingKeys, bool), VaultError>;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
+}
+
+/// The key pair recordings are sealed to. Wiped when dropped.
+pub struct RecordingKeys {
+    pub secret: Zeroizing<[u8; 32]>,
+    pub public: [u8; 32],
+}
+
+impl std::fmt::Debug for RecordingKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordingKeys")
+            .field("public", &self.public)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The history's keys: one opens its database, the other opens commands
@@ -749,6 +770,28 @@ impl Vault {
             Ok(())
         })
         .await
+    }
+
+    /// The recordings' key pair, made and saved on first use. Needs the
+    /// vault open.
+    pub async fn recording_keys(&self) -> Result<RecordingKeys, VaultError> {
+        self.with_open(|vault| {
+            let (keys, made) = vault.recording_keys()?;
+            if made {
+                saved(vault)?;
+            }
+            Ok(keys)
+        })
+        .await
+    }
+
+    /// The recordings' public key, while locked too.
+    pub async fn recordings_public(&self) -> Option<[u8; 32]> {
+        let backend = Arc::clone(&self.backend);
+        blocking(move || Ok(backend.recordings_public()))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// The history's public key, while locked too.

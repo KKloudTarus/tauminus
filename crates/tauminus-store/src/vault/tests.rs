@@ -447,7 +447,7 @@ fn a_vault_without_a_history_key_keeps_its_old_manifest() {
     // The manifest's additional data from before the history existed.
     let costs = TEST_KDF;
     let salt = [3u8; SALT_LEN];
-    let aad = manifest_aad("00112233445566778899aabbccddeeff", costs, &salt, None);
+    let aad = manifest_aad("00112233445566778899aabbccddeeff", costs, &salt, None, None);
     let Kdf {
         memory_kib,
         iterations,
@@ -531,4 +531,34 @@ fn a_new_password_raises_low_costs_to_the_floor() {
     vault.save(&file).unwrap();
     let reopened = file.open_with_password(b"battery staple").unwrap();
     assert_eq!(reopened.kdf, floor);
+}
+
+#[test]
+fn the_recordings_key_is_readable_locked_and_checked_on_unlock() {
+    let dir = Dir::new("recordingskey");
+    let file = sample(&dir);
+    assert_eq!(file.recordings_public().unwrap(), None);
+    let mut vault = file.open_with_password(b"correct horse").unwrap();
+    vault.set_history_public([9; KEY_LEN]);
+    vault.set_recordings_public([5; KEY_LEN]);
+    vault.save(&file).unwrap();
+    assert_eq!(file.recordings_public().unwrap(), Some([5; KEY_LEN]));
+    let vault = file.open_with_password(b"correct horse").unwrap();
+    assert_eq!(vault.recordings_public(), Some([5; KEY_LEN]));
+    // A swapped key, so recordings would be sealed to someone else, fails
+    // the next unlock, and so does a removed one.
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(file.path()).unwrap()).unwrap();
+    value["recordings"] = encode(&[7; KEY_LEN]).into();
+    std::fs::write(file.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        file.open_with_password(b"correct horse"),
+        Err(VaultError::Corrupt(_))
+    ));
+    value.as_object_mut().unwrap().remove("recordings");
+    std::fs::write(file.path(), serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(matches!(
+        file.open_with_password(b"correct horse"),
+        Err(VaultError::Corrupt(_))
+    ));
 }

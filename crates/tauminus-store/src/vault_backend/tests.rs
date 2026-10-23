@@ -391,3 +391,23 @@ fn forgetting_drops_only_the_generations_the_history_moved_past() {
         "nothing more to drop"
     );
 }
+
+#[test]
+fn recording_keys_are_made_once_and_outlive_a_password_change() {
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    assert_eq!(backend.recordings_public(), None);
+    let (first, made) = open.recording_keys().unwrap();
+    assert!(made);
+    open.save().unwrap();
+    assert_eq!(backend.recordings_public(), Some(first.public));
+    let mut open = backend.unlock(&secret("correct horse")).unwrap();
+    open.change_password(&secret("battery staple")).unwrap();
+    open.save().unwrap();
+    // Every recording is sealed to this pair: a new password keeps it.
+    let mut open = backend.unlock(&secret("battery staple")).unwrap();
+    let (again, made) = open.recording_keys().unwrap();
+    assert!(!made);
+    assert_eq!(*first.secret, *again.secret);
+    assert_eq!(first.public, again.public);
+}
