@@ -42,13 +42,27 @@ async function newSet(page: Page, name: string, pattern: string) {
   await expect(dialog(page).getByRole("list", { name: "Highlight sets" })).toContainText(name);
 }
 
+/** The theme's ANSI yellow, as the browser computes it, which "Yellow" names. */
+async function themeYellow(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.color = getComputedStyle(document.documentElement).getPropertyValue(
+      "--terminal-yellow",
+    );
+    document.body.append(probe);
+    const rgb = getComputedStyle(probe).color;
+    probe.remove();
+    return rgb;
+  });
+}
+
 test("a set applied to every session colours what it matches, in every pane", async ({ page }) => {
   await newSet(page, "Errors", "ERROR|FAIL\\w*");
   await dialog(page).getByLabel("Apply Errors to every session").check();
   await dialog(page).getByRole("button", { name: "Close" }).click();
   await run(page, "echo an ERROR, then FAILED");
   await expect(coloured(page)).toHaveCount(2 * "ERRORFAILED".length);
-  await expect(coloured(page).first()).toHaveCSS("background-color", "rgb(196, 160, 0)");
+  await expect(coloured(page).first()).toHaveCSS("background-color", await themeYellow(page));
 
   // Not applied any more: the colour goes, without new output.
   await palette(page, "Highlight sets and triggers");
