@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use tauminus_domain::{
     EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
-    IdentityId, Inventory, Label, Policy, Route, Settings, SshTarget, UserName, env_list,
+    IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget, UserName,
+    env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -78,6 +79,15 @@ impl HostBook {
             .host(id)
             .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
         Ok(host.forwards.clone())
+    }
+
+    /// A host's startup snippets, as saved now. O(log H + k).
+    pub async fn startup(&self, id: &HostId) -> Result<Vec<SnippetId>, HostsError> {
+        let inventory = self.inventory.lock().await;
+        let host = inventory
+            .host(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        Ok(host.startup.clone())
     }
 
     /// Applies `change` to a copy, saves it, then publishes it. Returns the

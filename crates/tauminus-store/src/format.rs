@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 and 2. Domain types stay free of serde; these types
+//! The file format, versions 1 to 3. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
@@ -10,14 +10,16 @@ use serde::{Deserialize, Serialize};
 use tauminus_domain::{
     AuthMethod, Bind, BindAddress, Destination, EnvVar, Forward, ForwardId, ForwardRule, Group,
     GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label, Pattern,
-    Route, Settings, Tag, UserName,
+    Route, Settings, SnippetId, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
-/// Version 2 adds forwarding rules; a file without any is still written as
-/// version 1, so a build from before them keeps reading it.
-const VERSION: u32 = 2;
+/// Version 2 adds forwarding rules and version 3 startup snippets; a file
+/// is written as the lowest version that holds what it has, so a build
+/// from before a feature keeps reading files that do not use it.
+const VERSION: u32 = 3;
+const VERSION_WITHOUT_STARTUP: u32 = 2;
 const VERSION_WITHOUT_FORWARDS: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
@@ -55,6 +57,8 @@ struct HostRecord {
     settings: SettingsRecord,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     forwards: Vec<ForwardRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    startup: Vec<String>,
 }
 
 /// One forwarding rule. `bind` is `loopback`, `any`, or an IP address.
@@ -173,10 +177,13 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if forwards {
+        version: if startup {
             VERSION
+        } else if forwards {
+            VERSION_WITHOUT_STARTUP
         } else {
             VERSION_WITHOUT_FORWARDS
         },
@@ -199,6 +206,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
                 tags: h.tags().iter().map(|t| t.as_str().to_owned()).collect(),
                 settings: settings_record(&h.settings),
                 forwards: h.forwards.iter().map(forward_record).collect(),
+                startup: h.startup.iter().map(ToString::to_string).collect(),
             })
             .collect(),
     };
@@ -209,7 +217,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
 
 pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
     let file: File = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if file.version != VERSION && file.version != VERSION_WITHOUT_FORWARDS {
+    if !(VERSION_WITHOUT_FORWARDS..=VERSION).contains(&file.version) {
         return Err(format!(
             "it is version {}, and this build reads version {VERSION}; update Tauminus",
             file.version
@@ -255,6 +263,12 @@ pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
             host.set_tags(tags).map_err(|e| err("tags", &e))?;
             host.settings = settings(h.settings)?;
             host.forwards = h.forwards.iter().map(forward).collect::<Result<_, _>>()?;
+            host.startup = h
+                .startup
+                .iter()
+                .map(|s| SnippetId::parse(s))
+                .collect::<Result<_, _>>()
+                .map_err(|e| err("startup snippet", &e))?;
             Ok(host)
         })
         .collect::<Result<Vec<_>, String>>()?;
