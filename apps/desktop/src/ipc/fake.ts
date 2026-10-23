@@ -20,8 +20,9 @@ const PROMPT = "$ ";
 /**
  * Lines it understands: `echo <text>`, `title <text>`, `exit [code]`,
  * `size`, `later <text>`, which prints after 1 s, `sudo`, which reads a
- * password without echo, and `drop`, which loses the connection. Ctrl+C drops
- * the line.
+ * password without echo, `ask <question>`, which waits on the question's
+ * line for an answer and prints it, and `drop`, which loses the
+ * connection. Ctrl+C drops the line.
  */
 /** What fake sessions print, by session, for the fake recordings. */
 export const fakeOutputTaps = new Map<number, (text: string) => void>();
@@ -32,6 +33,8 @@ class FakeShell implements TerminalSession {
   #line = "";
   /** Reading a password after `sudo`: keys do not echo. */
   #secret = false;
+  /** Waiting on a question's line for its answer, after `ask`. */
+  #asking = false;
   #size: GridSize;
   #ended = false;
 
@@ -49,6 +52,10 @@ class FakeShell implements TerminalSession {
         this.#secret = false;
         this.#line = "";
         this.#print(`\r\nsudo: ok\r\n${PROMPT}`);
+      } else if (char === "\r" && this.#asking) {
+        this.#asking = false;
+        this.#print(`\r\nanswer: ${this.#line}\r\n${PROMPT}`);
+        this.#line = "";
       } else if (char === "\r") {
         this.#print("\r\n");
         this.#run(this.#line.trim());
@@ -89,6 +96,10 @@ class FakeShell implements TerminalSession {
     switch (command) {
       case "":
         break;
+      case "ask":
+        this.#asking = true;
+        this.#print(`${argument} `);
+        return;
       case "sudo":
         this.#secret = true;
         this.#print("[sudo] password for me: ");

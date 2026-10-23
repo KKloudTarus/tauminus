@@ -4,10 +4,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeTriggers } from "@/ipc/fake-triggers.ts";
+import type { RuleSpec } from "@/ipc/index.ts";
 
 import { TriggersStore, defaults } from "./triggers-store.ts";
 
-const rule = { name: "e", pattern: "ERROR", enabled: true, style: { fg: "1" } };
+const rule: RuleSpec = {
+  name: "e",
+  pattern: "ERROR",
+  enabled: true,
+  action: { kind: "highlight", style: { fg: "1" } },
+};
 
 describe("TriggersStore", () => {
   it("tells panes after each saved change, not after a load or a refusal", async () => {

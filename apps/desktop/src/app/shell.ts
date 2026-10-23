@@ -23,6 +23,9 @@ import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
 import { SnippetsStore } from "@/features/snippets/snippets-store.ts";
 import { TriggersStore } from "@/features/triggers/triggers-store.ts";
+import { type Capture, CapturesStore, SendLimiter } from "@/features/triggers/captures-store.ts";
+import type { FiredBatch, TriggerSource } from "@/features/terminal/trigger-watcher.ts";
+import { visibleText } from "@/features/terminal/visible-text.ts";
 import type { HighlightSource } from "@/features/terminal/highlighter.ts";
 import type {
   FilesClient,
@@ -39,6 +42,7 @@ import type {
   SnippetView,
   SnippetsClient,
   TriggersClient,
+  FiredView,
   TextClipboard,
   VaultClient,
 } from "@/ipc/index.ts";
@@ -49,6 +53,8 @@ import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } fro
 const KEYMAP_STORAGE_KEY = "tauminus.keymap";
 /** How long keys typed after a broadcast line wait for a prompt to show. */
 const HOLD_MS = 500;
+/** Characters of a fired line the app's notice shows. */
+const NOTICE_CHARS = 160;
 /** Enter, Ctrl+C, or Ctrl+D: the end of a secret typed at a prompt. */
 // oxlint-disable-next-line no-control-regex -- these keys are controls
 const ENDS_SECRET = /[\r\n\u0003\u0004]/u;
@@ -89,7 +95,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   "serial.open": "Open a serial port",
   "recording.toggle": "Record this pane, or stop recording it",
   "recordings.open": "Recordings: play back recorded sessions",
-  "triggers.open": "Highlight sets: colour what output matches",
+  "triggers.open": "Highlight sets and triggers",
+  "captures.open": "Captured lines: what trigger rules kept",
 };
 
 interface ShellState {
@@ -103,6 +110,7 @@ interface ShellState {
   serialOpen: boolean;
   recordingsOpen: boolean;
   triggersOpen: boolean;
+  capturesOpen: boolean;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -133,6 +141,12 @@ export class AppShell {
   readonly snippets: SnippetsStore | undefined;
   /** Highlight sets, when this window has a backend for them. */
   readonly triggers: TriggersStore | undefined;
+  /** Lines capture rules kept. */
+  readonly captures = new CapturesStore();
+  readonly #sends = new SendLimiter();
+  readonly #notices = new SendLimiter(5000, Number.POSITIVE_INFINITY, false);
+  /** As the backend limits system notifications, so most calls are not made. */
+  readonly #systemNotices = new SendLimiter(30_000, Number.POSITIVE_INFINITY, false);
   /** The panes that type together. */
   readonly broadcast = new Broadcast();
   /** Sets of tabs saved to open again. */
@@ -227,6 +241,7 @@ export class AppShell {
       serialOpen: false,
       recordingsOpen: false,
       triggersOpen: false,
+      capturesOpen: false,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -237,12 +252,24 @@ export class AppShell {
 
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
+      // Set once the controller exists: triggers fire only after output.
+      let created: TerminalController | undefined;
       const controller = new TerminalController(options.sessions, {
         ...(options.renderer ? { renderer: options.renderer } : {}),
         ...(spec ? { spec } : {}),
         ...(savedHostId(spec) ? { guard: this.hosts.guardFor(savedHostId(spec) ?? "") } : {}),
         ...(this.#history ? { record: this.#recorderFor(spec) } : {}),
-        ...(this.triggers ? { highlights: this.#highlightsFor(spec) } : {}),
+        ...(this.triggers
+          ? {
+              highlights: this.#highlightsFor(spec),
+              triggers: {
+                source: this.#highlightsFor(spec),
+                fired: (batch) => {
+                  if (created) this.#onTriggers(paneId, created, spec, batch);
+                },
+              },
+            }
+          : {}),
         mac: this.platform === "mac",
         ...(links
           ? {
@@ -254,6 +281,7 @@ export class AppShell {
             }
           : {}),
       });
+      created = controller;
       controller.setKeyHandler((event) => this.handleKey(event));
       controller.setInputListener((data) => this.#broadcastFrom(paneId, data));
       // A secret typed into a session that went away ends with it: the next
@@ -359,6 +387,12 @@ export class AppShell {
     void this.forwards.toggle(hostId, ruleId);
   }
 
+  setCapturesOpen(open: boolean): void {
+    if (this.#state.capturesOpen === open) return;
+    this.#set({ ...this.#state, capturesOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
   setTriggersOpen(open: boolean): void {
     if (this.#state.triggersOpen === open) return;
     if (open && !this.triggers?.getSnapshot().loaded) void this.triggers?.load();
@@ -366,13 +400,70 @@ export class AppShell {
     if (!open) this.#focusActivePane();
   }
 
+  /**
+   * Does what the triggers one scan fired ask. Notify shows the app's
+   * notice once a rule a scan, with the line (secrets hidden), at most every
+   * 5 s, and asks the backend for a system one, which it words itself, at
+   * most every 30 s. Capture keeps the lines. Send types its text as the
+   * user would, at most every 2 s and five times a minute per rule and
+   * pane, and only where `sendFromTrigger` may type.
+   */
+  #onTriggers(
+    paneId: string,
+    controller: TerminalController,
+    spec: SessionSpec | undefined,
+    { prepared, fired }: FiredBatch,
+  ): void {
+    const pane = controller.defaultTitle;
+    const now = Date.now();
+    const kept: Omit<Capture, "id">[] = [];
+    // The last line each notify rule matched in this scan.
+    const notified = new Map<number, FiredView>();
+    for (const one of fired) {
+      const trigger = prepared.triggers[one.rule];
+      if (!trigger) continue;
+      const { action } = trigger;
+      const key = `${paneId}/${one.rule}/${trigger.name}`;
+      if (action.kind === "notify") {
+        notified.set(one.rule, one);
+      } else if (action.kind === "capture") {
+        kept.push({ at: now, rule: trigger.name, pane, text: one.text });
+      } else if (action.kind === "send" && controller.canSendFromTrigger) {
+        // Counted only when it could be sent.
+        const allowed = this.#sends.allow(key, now);
+        if (allowed === "off") {
+          this.hosts.notify(
+            `${trigger.name} sent too often on ${pane}; it is off in that pane until the rules change`,
+          );
+        }
+        if (allowed === true)
+          controller.sendFromTrigger(`${action.text}${action.enter ? "\r" : ""}`);
+      }
+    }
+    if (kept.length > 0) this.captures.addMany(kept);
+    for (const [rule, one] of notified) {
+      const name = prepared.triggers[rule]?.name ?? "";
+      const key = `${paneId}/${rule}/${name}`;
+      if (this.#notices.allow(key, now) === true) {
+        const line = visibleText(one.text.slice(0, NOTICE_CHARS));
+        // Quoted: the line is the host's, not the app's.
+        this.hosts.notify(`${name} on ${pane}: “${line}”`);
+      }
+      if (this.#systemNotices.allow(key, now) === true) {
+        void this.triggers?.client
+          .notify(savedHostId(spec) ?? null, prepared.handle, rule)
+          .catch((error: unknown) => console.warn("could not notify", error));
+      }
+    }
+  }
+
   /** Where a pane's highlight rules come from: its saved host's, or the defaults. */
-  #highlightsFor(spec: SessionSpec | undefined): HighlightSource {
+  #highlightsFor(spec: SessionSpec | undefined): HighlightSource & TriggerSource {
     const client = this.triggers?.client;
     const host = savedHostId(spec) ?? null;
     return {
       prepare: async () => {
-        if (!client) return { handle: 0, styles: [] };
+        if (!client) return { handle: 0, styles: [], triggers: [] };
         try {
           return await client.prepare(host);
         } catch (error) {
@@ -385,11 +476,15 @@ export class AppShell {
         }
       },
       scan: (handle, lines) => client?.scan(handle, lines) ?? Promise.resolve([]),
+      fire: (handle, lines) => client?.fire(handle, lines) ?? Promise.resolve([]),
     };
   }
 
   /** Every pane matches again with the rules saved now. */
   #refreshHighlights(): void {
+    this.#sends.reset();
+    this.#notices.reset();
+    this.#systemNotices.reset();
     this.workspace.forEachTerminal((controller) => controller.refreshHighlights());
   }
 
@@ -1026,6 +1121,9 @@ export class AppShell {
         return;
       case "triggers.open":
         this.setTriggersOpen(true);
+        return;
+      case "captures.open":
+        this.setCapturesOpen(true);
         return;
       case "broadcast.off":
         this.broadcast.clear();

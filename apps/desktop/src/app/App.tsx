@@ -10,6 +10,7 @@ import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { RecordingsDialog } from "@/features/recording/RecordingsDialog.tsx";
 import { TriggersDialog } from "@/features/triggers/TriggersDialog.tsx";
+import { CapturesDialog } from "@/features/triggers/CapturesDialog.tsx";
 import { SerialDialog } from "@/features/serial/SerialDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
 import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
@@ -39,6 +40,7 @@ export function App({ shell }: { shell: AppShell }) {
     serialOpen,
     recordingsOpen,
     triggersOpen,
+    capturesOpen,
     snippetToFill,
     snippetHosts,
     files,
@@ -107,6 +109,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.serialOpen ||
         state.recordingsOpen ||
         state.triggersOpen ||
+        state.capturesOpen ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -231,6 +234,13 @@ export function App({ shell }: { shell: AppShell }) {
       )}
       {triggersOpen && shell.triggers && (
         <TriggersDialog store={shell.triggers} onClose={() => shell.setTriggersOpen(false)} />
+      )}
+      {capturesOpen && (
+        <CapturesDialog
+          store={shell.captures}
+          onCopy={(text) => shell.copyText(text)}
+          onClose={() => shell.setCapturesOpen(false)}
+        />
       )}
       {workspacesOpen && (
         <WorkspacesDialog

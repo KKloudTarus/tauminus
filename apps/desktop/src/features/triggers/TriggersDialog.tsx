@@ -12,7 +12,13 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import type { RuleSpec, TriggerSetView, TriggersClient } from "@/ipc/index.ts";
+import type {
+  ActionSpec,
+  RuleSpec,
+  StyleSpec,
+  TriggerSetView,
+  TriggersClient,
+} from "@/ipc/index.ts";
 
 import type { TriggersStore } from "./triggers-store.ts";
 
@@ -184,12 +190,36 @@ const SetRow = memo(function SetRow({
   );
 });
 
+const NEW_STYLE: StyleSpec = { fg: "1", bg: null, line: false };
+
 const NEW_RULE: RuleSpec = {
   name: "",
   pattern: "",
   enabled: true,
-  style: { fg: "1", bg: null, line: false },
+  action: { kind: "highlight", style: NEW_STYLE },
 };
+
+/** What each action is called in the editor. */
+const ACTIONS: { kind: ActionSpec["kind"]; label: string }[] = [
+  { kind: "highlight", label: "Colour the match" },
+  { kind: "notify", label: "Notify me" },
+  { kind: "capture", label: "Keep the line" },
+  { kind: "send", label: "Send text" },
+];
+
+/** A fresh action of `kind`, keeping what carries over from `from`. */
+function actionOf(kind: ActionSpec["kind"], from: ActionSpec): ActionSpec {
+  switch (kind) {
+    case "highlight":
+      return { kind, style: from.kind === "highlight" ? from.style : NEW_STYLE };
+    case "send":
+      return from.kind === "send" ? from : { kind, text: "", enter: true };
+    case "notify":
+    case "capture":
+    default:
+      return { kind: kind === "capture" ? "capture" : "notify" };
+  }
+}
 
 function SetEditor({
   set,
@@ -237,7 +267,9 @@ function SetEditor({
       />
       <p className="text-xs opacity-70">
         Patterns are regular expressions; <code>(?i)</code> ignores case. An earlier rule wins where
-        two match the same text.
+        two colour the same text. Other actions run once for each finished line of output, not in
+        full-screen programs; sent text goes through the prod guard, and is not sent at a password
+        prompt.
       </p>
       <ol aria-label="Rules" className="flex flex-col gap-2">
         {rules.map((rule, at) => (
@@ -306,8 +338,12 @@ function RuleEditor({
     };
   }, [client, rule.pattern]);
   const label = `Rule ${index + 1}`;
-  const style = (change: Partial<RuleSpec["style"]>) =>
-    onChange({ ...rule, style: { ...rule.style, ...change } });
+  const { action } = rule;
+  const style = (change: Partial<StyleSpec>) => {
+    if (action.kind === "highlight") {
+      onChange({ ...rule, action: { kind: "highlight", style: { ...action.style, ...change } } });
+    }
+  };
   return (
     <li aria-label={label} className="flex flex-col gap-1 rounded bg-current/5 p-2">
       <div className="flex items-center gap-2">
@@ -336,28 +372,69 @@ function RuleEditor({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <ColourPicker
-          label={`${label} text colour`}
-          value={rule.style.fg}
-          onChange={(fg) => style({ fg })}
+        <select
+          aria-label={`${label} action`}
+          value={action.kind}
+          onChange={(e) => {
+            const kind = ACTIONS.find((a) => a.kind === e.target.value)?.kind;
+            if (kind) onChange({ ...rule, action: actionOf(kind, action) });
+          }}
+          className="rounded border border-current/20 bg-transparent px-1 py-0.5"
         >
-          Text
-        </ColourPicker>
-        <ColourPicker
-          label={`${label} background`}
-          value={rule.style.bg}
-          onChange={(bg) => style({ bg })}
-        >
-          Background
-        </ColourPicker>
-        <label className="flex items-center gap-1">
-          <input
-            type="checkbox"
-            checked={rule.style.line === true}
-            onChange={(e) => style({ line: e.target.checked })}
-          />
-          Whole line
-        </label>
+          {ACTIONS.map((a) => (
+            <option key={a.kind} value={a.kind}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+        {action.kind === "highlight" && (
+          <>
+            <ColourPicker
+              label={`${label} text colour`}
+              value={action.style.fg}
+              onChange={(fg) => style({ fg })}
+            >
+              Text
+            </ColourPicker>
+            <ColourPicker
+              label={`${label} background`}
+              value={action.style.bg}
+              onChange={(bg) => style({ bg })}
+            >
+              Background
+            </ColourPicker>
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={action.style.line === true}
+                onChange={(e) => style({ line: e.target.checked })}
+              />
+              Whole line
+            </label>
+          </>
+        )}
+        {action.kind === "send" && (
+          <>
+            <input
+              aria-label={`${label} text to send`}
+              value={action.text}
+              onChange={(e) => onChange({ ...rule, action: { ...action, text: e.target.value } })}
+              className="min-w-0 flex-1 rounded border border-current/20 bg-transparent px-1 py-0.5 font-mono"
+              placeholder="yes (never a password: keep those in the vault)"
+              spellCheck={false}
+            />
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={action.enter}
+                onChange={(e) =>
+                  onChange({ ...rule, action: { ...action, enter: e.target.checked } })
+                }
+              />
+              Then Enter
+            </label>
+          </>
+        )}
         <label className="flex items-center gap-1">
           <input
             type="checkbox"

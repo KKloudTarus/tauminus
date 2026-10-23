@@ -33,7 +33,7 @@ const sidebar = (page: Page) => page.getByRole("complementary", { name: "Hosts" 
 const coloured = (page: Page) => screen(page).locator("span.xterm-decoration-top");
 
 async function newSet(page: Page, name: string, pattern: string) {
-  await palette(page, "Highlight sets: colour what output matches");
+  await palette(page, "Highlight sets and triggers");
   await dialog(page).getByRole("button", { name: "New set" }).click();
   await dialog(page).getByLabel("Name", { exact: true }).fill(name);
   await dialog(page).getByLabel("Rule 1 pattern").fill(pattern);
@@ -51,14 +51,14 @@ test("a set applied to every session colours what it matches, in every pane", as
   await expect(coloured(page).first()).toHaveCSS("background-color", "rgb(196, 160, 0)");
 
   // Not applied any more: the colour goes, without new output.
-  await palette(page, "Highlight sets: colour what output matches");
+  await palette(page, "Highlight sets and triggers");
   await dialog(page).getByLabel("Apply Errors to every session").uncheck();
   await dialog(page).getByRole("button", { name: "Close" }).click();
   await expect(coloured(page)).toHaveCount(0);
 });
 
 test("a pattern that cannot be one says why before it is saved", async ({ page }) => {
-  await palette(page, "Highlight sets: colour what output matches");
+  await palette(page, "Highlight sets and triggers");
   await dialog(page).getByRole("button", { name: "New set" }).click();
   await dialog(page).getByLabel("Name", { exact: true }).fill("Broken");
   await dialog(page).getByLabel("Rule 1 pattern").fill("(a)\\1");
