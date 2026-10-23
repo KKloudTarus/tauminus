@@ -109,6 +109,12 @@ for (const size of SIZES) {
       await page.keyboard.press("Escape");
 
       await page.locator("body").press("Control+Shift+P");
+      await page.getByPlaceholder("Type a command").fill("recordings: play back");
+      await page.keyboard.press("Enter");
+      await shot(page, `${prefix}-11-recordings`);
+      await page.keyboard.press("Escape");
+
+      await page.locator("body").press("Control+Shift+P");
       await page.getByPlaceholder("Type a command").fill("connect to ssh host");
       await page.keyboard.press("Enter");
       await shot(page, `${prefix}-10-connect`);
