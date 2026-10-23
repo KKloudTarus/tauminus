@@ -25,8 +25,7 @@ export type Editing =
   | { kind: "host"; host: HostView | undefined }
   | { kind: "group"; group: GroupView | undefined };
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50";
+const FIELD = "field";
 
 /** `a, b ,c` → `["a", "b", "c"]`; blank → `undefined`, meaning inherit. */
 function list(text: string): string[] | undefined {
@@ -253,7 +252,7 @@ export function EditorDialog({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[10%] m-0 mx-auto max-h-[80dvh] w-[min(520px,90vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-0 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal w-[min(520px,90vw)] p-0"
     >
       {editing.kind === "host" ? (
         <HostForm
@@ -421,7 +420,7 @@ function HostForm({
         </p>
       )}
       {protocol === "telnet" && (
-        <p className="mb-3 text-xs text-red-600 dark:text-red-400">
+        <p className="mb-3 text-xs text-error">
           Telnet sends everything, passwords included, as clear text. It connects on port 23 unless
           this host sets a port; user, jump hosts, keys, the vault identity, and startup snippets
           are not used, and a group that reaches its network through a jump host or a proxy cannot
@@ -680,7 +679,7 @@ function SessionFields({
   const forwards = value.forwardAgent === "on" || (value.forwardAgent === "inherit" && inherited);
   const set = (patch: Partial<SessionFieldsState>) => onChange({ ...value, ...patch });
   return (
-    <details className="mb-3 rounded border border-current/15 px-3 py-2">
+    <details className="disclosure mb-3">
       <summary className="cursor-pointer select-none">Session</summary>
       <div className="mt-2">
         <Field label="Forward the SSH agent (ssh -A)">
@@ -695,7 +694,7 @@ function SessionFields({
           </select>
         </Field>
         {forwards && (
-          <p className="mb-3 text-xs text-red-600 dark:text-red-400">
+          <p className="mb-3 text-xs text-error">
             {value.forwardAgent === "inherit" ? "A group forwards the agent. " : ""}
             Anyone with root on the server can use your agent&apos;s keys while you are connected.
           </p>
@@ -783,10 +782,7 @@ function GuardFields({
 }) {
   const set = (patch: Partial<GuardFieldsState>) => onChange({ ...value, ...patch });
   return (
-    <details
-      className="mb-3 rounded border border-current/15 px-3 py-2"
-      open={value.enabled === "on"}
-    >
+    <details className="disclosure mb-3" open={value.enabled === "on"}>
       <summary className="cursor-pointer select-none">Prod guard</summary>
       <div className="mt-2">
         <Field label="Check commands before they run">
@@ -832,7 +828,7 @@ function GuardFields({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="mb-3 block">
-      <span className="mb-1 block opacity-80">{label}</span>
+      <span className="mb-1.5 block text-[13px] font-medium text-muted">{label}</span>
       {children}
     </label>
   );
@@ -870,12 +866,11 @@ function Form({
       </h2>
       {children}
       {shown && (
-        <p role="alert" className="mb-3 text-red-600 dark:text-red-400">
+        <p role="alert" className="mb-3 text-error">
           {shown}
         </p>
       )}
-      {/* Sticks to the bottom of a dialog taller than the window, so Save stays in reach. */}
-      <div className="sticky -bottom-4 -mx-4 -mb-4 flex items-center gap-2 border-t border-current/10 bg-background px-4 py-3">
+      <div className="modal-footer flex items-center gap-2">
         {onDelete && (
           <button
             type="button"
@@ -887,24 +882,16 @@ function Form({
               onDelete().catch((failure: unknown) => setDeleteError(messageOf(failure)));
             }}
             title={deleteNote}
-            className="rounded border border-red-500/50 px-3 py-1.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+            className="btn btn-danger"
           >
             {confirming ? "Confirm delete" : "Delete"}
           </button>
         )}
         <span className="flex-1" />
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-        >
+        <button type="button" onClick={onCancel} className="btn">
           Cancel
         </button>
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90 disabled:opacity-50"
-        >
+        <button type="submit" disabled={saving} className="btn btn-primary">
           Save
         </button>
       </div>
@@ -1033,7 +1020,7 @@ export function StartupFields({
               <span className="min-w-0 flex-1 truncate">{name}</span>
               <button
                 type="button"
-                className="rounded px-2 hover:bg-current/10 disabled:opacity-40"
+                className="btn btn-ghost btn-xs"
                 aria-label={`Run ${name} earlier`}
                 disabled={i === 0}
                 onClick={() => {
@@ -1046,7 +1033,7 @@ export function StartupFields({
               </button>
               <button
                 type="button"
-                className="rounded px-2 hover:bg-current/10"
+                className="btn btn-ghost btn-xs"
                 aria-label={`Remove ${name}`}
                 onClick={() => onChange(value.filter((other) => other !== id))}
               >

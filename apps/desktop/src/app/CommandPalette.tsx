@@ -10,7 +10,11 @@ import { ACTIONS, type Action, displayChord } from "@/features/keymap/keymap.ts"
 import { type SnippetsStore, snippetTitle } from "@/features/snippets/snippets-store.ts";
 import type { HostView } from "@/ipc/index.ts";
 
+import { Icon } from "./icons.tsx";
 import { ACTION_LABELS, type AppShell } from "./shell.ts";
+
+const ITEM =
+  "flex h-9 cursor-default items-center gap-3 rounded-lg px-3 text-[13px] text-muted data-[selected=true]:bg-accent-soft data-[selected=true]:text-foreground";
 
 /** Every action, searchable by name, with its shortcut, then matching forwarding rules. */
 export function CommandPalette({ shell }: { shell: AppShell }) {
@@ -27,15 +31,20 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
       open={paletteOpen}
       onOpenChange={(open) => shell.setPaletteOpen(open)}
       label="Command palette"
-      overlayClassName="fixed inset-0 bg-black/30"
-      contentClassName="fixed top-[15%] left-1/2 w-[min(560px,90vw)] -translate-x-1/2 overflow-hidden rounded-lg border border-current/15 bg-background text-foreground shadow-xl"
+      overlayClassName="fixed inset-0 z-40 bg-[var(--scrim)]"
+      contentClassName="panel palette fixed top-[12vh] left-1/2 z-50 flex max-h-[min(520px,76dvh)] w-[min(620px,calc(100vw-32px))] -translate-x-1/2 flex-col overflow-hidden"
     >
-      <Command.Input
-        placeholder="Type a command"
-        className="w-full border-b border-current/10 bg-transparent px-4 py-3 text-sm outline-none"
-      />
-      <Command.List className="max-h-80 overflow-y-auto p-1 text-sm">
-        <Command.Empty className="px-3 py-2 opacity-60">No matching command</Command.Empty>
+      <div className="flex items-center gap-3 border-b border-line px-4">
+        <Icon name="search" className="size-4 shrink-0 text-faint" />
+        <Command.Input
+          placeholder="Type a command"
+          className="h-12 min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-faint focus-visible:outline-none"
+        />
+      </div>
+      <Command.List className="min-h-0 flex-1 overflow-y-auto p-1.5 [scroll-padding-block:6px]">
+        <Command.Empty className="px-3 py-8 text-center text-[13px] text-faint">
+          No matching command
+        </Command.Empty>
         {choices.map((action) => {
           const chord = shell.keymap.chords(action)[0];
           return (
@@ -43,12 +52,10 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
               key={action}
               value={ACTION_LABELS[action]}
               onSelect={() => run(action)}
-              className="flex cursor-default items-center justify-between rounded px-3 py-2 data-[selected=true]:bg-current/10"
+              className={ITEM}
             >
-              <span>{ACTION_LABELS[action]}</span>
-              {chord && (
-                <kbd className="text-xs opacity-60">{displayChord(chord, shell.platform)}</kbd>
-              )}
+              <span className="flex-1 truncate">{ACTION_LABELS[action]}</span>
+              {chord && <kbd className="kbd">{displayChord(chord, shell.platform)}</kbd>}
             </Command.Item>
           );
         })}
@@ -56,6 +63,21 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
         {paletteOpen && shell.snippets && <SnippetItems shell={shell} snippets={shell.snippets} />}
         {paletteOpen && shell.forwards && <RuleItems shell={shell} forwards={shell.forwards} />}
       </Command.List>
+      <div
+        aria-hidden="true"
+        className="hidden items-center gap-4 border-t border-line px-4 py-2 text-[11px] text-faint sm:flex"
+      >
+        <span className="flex items-center gap-1.5">
+          <kbd className="kbd">↑</kbd>
+          <kbd className="kbd">↓</kbd> to move
+        </span>
+        <span className="flex items-center gap-1.5">
+          <kbd className="kbd">↵</kbd> to run
+        </span>
+        <span className="flex items-center gap-1.5">
+          <kbd className="kbd">Esc</kbd> to close
+        </span>
+      </div>
     </Command.Dialog>
   );
 }
@@ -86,7 +108,7 @@ function RuleItems({ shell, forwards }: { shell: AppShell; forwards: ForwardsSto
           shell.setPaletteOpen(false);
           shell.toggleForward(hostId, ruleId);
         }}
-        className="flex cursor-default items-center rounded px-3 py-2 data-[selected=true]:bg-current/10"
+        className={ITEM}
       >
         {label}
       </Command.Item>
@@ -123,7 +145,7 @@ function SnippetItems({ shell, snippets }: { shell: AppShell; snippets: Snippets
             shell.setPaletteOpen(false);
             shell.chooseSnippet(id);
           }}
-          className="flex cursor-default items-center rounded px-3 py-2 data-[selected=true]:bg-current/10"
+          className={ITEM}
         >
           {label}
         </Command.Item>
@@ -146,7 +168,7 @@ function WorkspaceItems({ shell }: { shell: AppShell }) {
           shell.setPaletteOpen(false);
           void shell.openWorkspace(workspace.id);
         }}
-        className="flex cursor-default items-center rounded px-3 py-2 data-[selected=true]:bg-current/10"
+        className={ITEM}
       >
         {label}
       </Command.Item>

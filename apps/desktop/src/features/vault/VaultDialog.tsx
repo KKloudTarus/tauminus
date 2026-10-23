@@ -25,8 +25,7 @@ function useInitialFocus(ref: React.RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50";
+const FIELD = "field";
 
 /** Auto-lock choices, in minutes. */
 const IDLE_CHOICES = [1, 5, 15, 30, 60, 240, 1440];
@@ -62,7 +61,7 @@ export function VaultDialog({ store, tools, onClose, onUnlocked }: VaultDialogPr
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[8%] m-0 mx-auto max-h-[84vh] w-[min(640px,92vw)] overflow-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal w-[min(640px,92vw)] p-4"
     >
       <h2 id={titleId} className="mb-3 font-semibold">
         Vault
@@ -89,11 +88,7 @@ export function VaultDialog({ store, tools, onClose, onUnlocked }: VaultDialogPr
         <Unlocked store={store} identities={state.identities} tools={tools} />
       )}
       <div className="mt-4 flex justify-end">
-        <button
-          type="button"
-          onClick={() => dialogRef.current?.close()}
-          className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => dialogRef.current?.close()} className="btn">
           Close
         </button>
       </div>
@@ -207,7 +202,7 @@ function Unlock({
                 .catch((failure: unknown) => setError(messageOf(failure)))
                 .finally(() => setAsking(false));
             }}
-            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+            className="btn"
           >
             {keychain}
           </button>
@@ -234,11 +229,7 @@ function Unlocked({
     <div>
       <div className="mb-3 flex items-center gap-2">
         <h3 className="flex-1 font-medium">Identities</h3>
-        <button
-          type="button"
-          onClick={() => setEditing("new")}
-          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => setEditing("new")} className="btn btn-sm">
           New identity
         </button>
         <button
@@ -246,7 +237,7 @@ function Unlocked({
           onClick={() => {
             store.lock().catch((failure: unknown) => setError(messageOf(failure)));
           }}
-          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10"
+          className="btn btn-sm"
         >
           Lock now
         </button>
@@ -463,17 +454,13 @@ function IdentityForm({
                   .then(onDone)
                   .catch((failure: unknown) => setError(messageOf(failure)));
               }}
-              className="rounded border border-red-500/50 px-3 py-1.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+              className="btn btn-danger"
             >
               {confirming ? "Confirm delete" : "Delete"}
             </button>
           )}
           <span className="flex-1" />
-          <button
-            type="button"
-            onClick={onDone}
-            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-          >
+          <button type="button" onClick={onDone} className="btn">
             Cancel
           </button>
           <Submit disabled={saving}>{saving && generate ? "Generating…" : "Save"}</Submit>
@@ -551,11 +538,7 @@ const PublicKey = memo(function PublicKey({
     <div className="relative mb-3 rounded border border-current/15 p-2 text-xs">
       <div className="mb-2 flex items-start gap-2">
         <code className="min-w-0 flex-1 break-all select-all">{publicKey}</code>
-        <button
-          type="button"
-          onClick={() => tools.copy(publicKey)}
-          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => tools.copy(publicKey)} className="btn btn-sm">
           Copy public key
         </button>
       </div>
@@ -580,7 +563,7 @@ const PublicKey = memo(function PublicKey({
           type="button"
           disabled={!host || state.kind === "busy"}
           onClick={install}
-          className="rounded border border-current/20 px-2 py-1 hover:bg-current/10 disabled:opacity-50"
+          className="btn btn-sm"
         >
           {state.kind === "busy" ? "Installing…" : "Install on host"}
         </button>
@@ -589,7 +572,7 @@ const PublicKey = memo(function PublicKey({
         <output className="mt-2 block">The key is in authorized_keys on {state.label}.</output>
       )}
       {state.kind === "failed" && (
-        <p role="alert" className="mt-2 text-red-600 dark:text-red-400">
+        <p role="alert" className="mt-2 text-error">
           {state.text}
         </p>
       )}
@@ -691,7 +674,7 @@ function Settings({
                     report(failure);
                   });
               }}
-              className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
+              className="btn"
             >
               Turn on
             </button>
@@ -794,7 +777,7 @@ function Remove({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="mb-3 block">
-      <span className="mb-1 block opacity-80">{label}</span>
+      <span className="mb-1.5 block text-[13px] font-medium text-muted">{label}</span>
       {children}
     </label>
   );
@@ -802,7 +785,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function Problem({ text }: { text: string | undefined }) {
   return text ? (
-    <p role="alert" className="mb-3 text-red-600 dark:text-red-400">
+    <p role="alert" className="mb-3 text-error">
       {text}
     </p>
   ) : null;
@@ -810,11 +793,7 @@ function Problem({ text }: { text: string | undefined }) {
 
 function Submit({ children, disabled }: { children: ReactNode; disabled?: boolean }) {
   return (
-    <button
-      type="submit"
-      disabled={disabled}
-      className="rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
-    >
+    <button type="submit" disabled={disabled} className="btn btn-primary">
       {children}
     </button>
   );

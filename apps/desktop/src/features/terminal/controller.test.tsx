@@ -90,6 +90,10 @@ async function running(host: string) {
   return { sessions, controller };
 }
 
+/** A custom property as the document root resolves it. */
+const css = (name: string) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
 afterEach(() => {
   for (const controller of controllers.splice(0)) {
     controller.dispose();
@@ -105,6 +109,26 @@ describe("TerminalController with TerminalView", () => {
     const { size } = sessions.opened[0]!;
     expect(size.cols).toBeGreaterThan(10);
     expect(size.rows).toBeGreaterThan(3);
+  });
+
+  it("takes its colors, ANSI palette included, from the theme tokens", async () => {
+    const { controller } = setup();
+    await mount(controller);
+    const read = () => controller.terminal.options.theme ?? {};
+    document.documentElement.classList.add("dark");
+    try {
+      controller.refreshTheme();
+      expect(read().background).toBe(css("--terminal-background"));
+      expect(read().red).toBe(css("--terminal-red"));
+      expect(read().brightMagenta).toBe(css("--terminal-bright-magenta"));
+      const dark = read().red;
+      document.documentElement.classList.replace("dark", "light");
+      controller.refreshTheme();
+      expect(read().red).toBe(css("--terminal-red"));
+      expect(read().red).not.toBe(dark);
+    } finally {
+      document.documentElement.classList.remove("dark", "light");
+    }
   });
 
   it("keeps the session and screen when the view remounts elsewhere", async () => {

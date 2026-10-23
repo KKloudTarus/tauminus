@@ -16,9 +16,8 @@ import type { SnippetView } from "@/ipc/index.ts";
 
 import { type SnippetsStore, byFolder } from "./snippets-store.ts";
 
-const BUTTON = "rounded px-2 py-0.5 hover:bg-current/10 disabled:opacity-40";
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1 outline-none focus:border-current/50";
+const BUTTON = "btn btn-ghost btn-xs";
+const FIELD = "field";
 
 /** What the form edits: a new snippet, or a saved one. */
 type Editing = { kind: "new" } | { kind: "edit"; snippet: SnippetView };
@@ -53,7 +52,7 @@ export function SnippetsDialog({
   const folderNames = folders.flatMap((f) => (f.name ? [f.name] : []));
 
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">
+    <div className="overlay">
       <dialog
         ref={dialog}
         open
@@ -66,7 +65,7 @@ export function SnippetsDialog({
             else onClose();
           }
         }}
-        className="static m-0 max-h-[75vh] w-[min(640px,92vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl outline-none"
+        className="panel static m-0 max-h-[75vh] w-[min(640px,92vw)] overflow-y-auto p-4 outline-none"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 id={titleId} className="text-base font-medium">
@@ -82,7 +81,7 @@ export function SnippetsDialog({
           </div>
         </div>
         {state.error && (
-          <p role="alert" className="mb-2 text-red-600 dark:text-red-400">
+          <p role="alert" className="mb-2 text-error">
             {state.error}
           </p>
         )}

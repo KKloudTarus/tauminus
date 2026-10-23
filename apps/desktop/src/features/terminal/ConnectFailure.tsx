@@ -36,17 +36,13 @@ export function ConnectFailure({
           <button
             type="button"
             onClick={() => onUnlockVault(onRetry)}
-            className="mr-2 rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
+            className="btn btn-primary mr-2"
           >
             Unlock the vault
           </button>
         )}
         {!danger && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-          >
+          <button type="button" onClick={onRetry} className="btn">
             Try again
           </button>
         )}

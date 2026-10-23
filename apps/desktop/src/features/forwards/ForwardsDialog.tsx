@@ -29,7 +29,7 @@ export function ForwardsDialog({
   const withRules = hosts.filter((host) => host.protocol !== "telnet" && host.forwards.length > 0);
 
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">
+    <div className="overlay">
       <dialog
         ref={dialog}
         open
@@ -41,13 +41,13 @@ export function ForwardsDialog({
             onClose();
           }
         }}
-        className="static m-0 max-h-[75vh] w-[min(640px,92vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl outline-none"
+        className="panel static m-0 max-h-[75vh] w-[min(640px,92vw)] overflow-y-auto p-4 outline-none"
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 id={titleId} className="text-base font-medium">
             Port forwarding
           </h2>
-          <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onClose}>
+          <button type="button" className="btn btn-ghost btn-xs" onClick={onClose}>
             Close
           </button>
         </div>
@@ -115,9 +115,7 @@ const RuleItem = memo(function RuleItem({
           />
           <span className="font-medium">{rule.label}</span>
           {opensToNetwork(rule.bind) && (
-            <span className="rounded bg-red-500/15 px-1 text-xs text-red-600 dark:text-red-400">
-              network
-            </span>
+            <span className="rounded bg-red-500/15 px-1 text-xs text-error">network</span>
           )}
         </div>
         <div className="truncate font-mono text-xs opacity-70">{describeRule(rule, listening)}</div>
@@ -133,7 +131,7 @@ const RuleItem = memo(function RuleItem({
       </div>
       <button
         type="button"
-        className="shrink-0 rounded border border-current/20 px-3 py-1 hover:bg-current/10"
+        className="btn btn-sm shrink-0"
         onClick={() => void store.toggle(hostId, rule.id ?? "")}
       >
         {listening != null || starting ? "Stop" : "Start"}

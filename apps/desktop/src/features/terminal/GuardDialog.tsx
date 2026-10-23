@@ -30,7 +30,7 @@ export function GuardDialog({ request, host, onAnswer }: GuardDialogProps) {
       ? `Paste ${lines === 1 ? "1 line" : `${lines} lines`} into ${host}?`
       : `Run this on ${host}?`;
   return (
-    <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/80 p-4">
+    <div className="absolute inset-0 z-20 flex items-center justify-center bg-terminal/80 p-4">
       <dialog
         open
         aria-labelledby={titleId}
@@ -41,18 +41,17 @@ export function GuardDialog({ request, host, onAnswer }: GuardDialogProps) {
             onAnswer(false);
           }
         }}
-        className="static m-0 w-[min(560px,100%)] rounded-lg border-2 border-[var(--prod)] bg-background p-4 text-sm text-foreground shadow-xl"
+        className="panel static m-0 w-[min(560px,100%)] border-2 border-prod p-4 shadow-[0_0_0_4px_var(--prod-soft),var(--shadow-lg)]"
       >
         <h2 id={titleId} className="mb-1 font-semibold">
           {title}
         </h2>
-        <p className="mb-3 text-xs opacity-70">
-          <span className="rounded bg-[var(--prod)] px-1 py-px font-semibold text-white">PROD</span>{" "}
-          {host}
+        <p className="mb-3 text-xs text-muted">
+          <span className="chip chip-prod">PROD</span> {host}
         </p>
         <pre
           data-testid="guard-text"
-          className="mb-3 max-h-48 overflow-auto rounded border border-current/15 bg-current/[0.04] p-2 font-mono text-xs break-all whitespace-pre-wrap"
+          className="mb-3 max-h-48 overflow-auto rounded-lg border border-line bg-terminal p-2.5 font-mono text-xs break-all whitespace-pre-wrap"
         >
           {visibleText(request.text)}
         </pre>
@@ -73,18 +72,13 @@ export function GuardDialog({ request, host, onAnswer }: GuardDialogProps) {
           <p className="mb-4 opacity-80">Each line runs as it arrives.</p>
         )}
         <div className="flex justify-end gap-2">
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={() => onAnswer(false)}
-            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-          >
+          <button ref={cancelRef} type="button" onClick={() => onAnswer(false)} className="btn">
             Cancel
           </button>
           <button
             type="button"
             onClick={() => onAnswer(true)}
-            className="rounded bg-[var(--prod)] px-3 py-1.5 text-white hover:opacity-90"
+            className="btn border-transparent bg-prod-fill text-white hover:!bg-prod-fill/90"
           >
             {request.kind === "paste" ? "Paste" : "Run"}
           </button>

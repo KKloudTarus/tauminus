@@ -14,8 +14,7 @@ export function ConnectDialog({ shell }: { shell: AppShell }) {
   return <ConnectForm shell={shell} />;
 }
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1.5 font-mono outline-none focus:border-current/50";
+const FIELD = "field font-mono";
 
 function ConnectForm({ shell }: { shell: AppShell }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -60,14 +59,14 @@ function ConnectForm({ shell }: { shell: AppShell }) {
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={() => shell.setConnectOpen(false)}
-      className="top-[15%] m-0 mx-auto w-[min(520px,90vw)] rounded-lg border border-current/15 bg-background p-0 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal w-[min(520px,90vw)] p-0"
     >
       <form onSubmit={submit} className="p-4">
         <h2 id={titleId} className="mb-3 font-semibold">
           Connect to SSH host
         </h2>
         <label className="mb-3 block">
-          <span className="mb-1 block opacity-80">Destination</span>
+          <span className="mb-1.5 block text-[13px] font-medium text-muted">Destination</span>
           <input
             value={destination}
             onChange={(event) => {
@@ -83,7 +82,9 @@ function ConnectForm({ shell }: { shell: AppShell }) {
           />
         </label>
         <label className="mb-3 block">
-          <span className="mb-1 block opacity-80">Jump hosts (optional, like ssh -J)</span>
+          <span className="mb-1.5 block text-[13px] font-medium text-muted">
+            Jump hosts (optional, like ssh -J)
+          </span>
           <input
             value={jumps}
             onChange={(event) => {
@@ -97,7 +98,7 @@ function ConnectForm({ shell }: { shell: AppShell }) {
           />
         </label>
         {error && (
-          <p id={errorId} role="alert" className="mb-3 text-red-600 dark:text-red-400">
+          <p id={errorId} role="alert" className="mb-3 text-error">
             {error}
           </p>
         )}
@@ -106,17 +107,10 @@ function ConnectForm({ shell }: { shell: AppShell }) {
           ~/.ssh/known_hosts.
         </p>
         <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => shell.setConnectOpen(false)}
-            className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-          >
+          <button type="button" onClick={() => shell.setConnectOpen(false)} className="btn">
             Cancel
           </button>
-          <button
-            type="submit"
-            className="rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
-          >
+          <button type="submit" className="btn btn-primary">
             Connect
           </button>
         </div>

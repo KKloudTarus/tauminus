@@ -46,12 +46,13 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
       */}
       <div
         ref={hostRef}
-        className="min-h-0 flex-1 p-2"
+        className="min-h-0 flex-1 px-3 pt-2 pb-1"
         style={{ minWidth: 0, contain: "strict" }}
         data-testid="terminal-host"
       />
       {status.kind === "starting" && remote && !prompt && (
-        <output className="absolute inset-x-0 top-0 px-3 py-1 text-xs opacity-70">
+        <output className="absolute top-2 right-3 flex items-center gap-2 rounded-full border border-line bg-surface-3 px-3 py-1 text-xs text-muted shadow-lg">
+          <span aria-hidden className="size-1.5 rounded-full bg-accent" />
           Connecting to {controller.defaultTitle}…
         </output>
       )}
@@ -66,7 +67,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
         />
       )}
       {status.kind === "exited" && (
-        <output className="block border-t border-current/10 px-3 py-1 text-xs opacity-80">
+        <output className="block border-t border-line bg-surface-1 px-3 py-1.5 text-xs text-muted">
           {remote ? "Connection closed" : "Process exited"}
           {status.code === null ? "" : ` with code ${status.code}`}
         </output>
@@ -81,7 +82,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
             {...(onUnlockVault ? { onUnlockVault } : {})}
           />
         ) : (
-          <output className="block border-t border-current/10 px-3 py-1 text-xs opacity-80">
+          <output className="block border-t border-line bg-surface-1 px-3 py-1.5 text-xs text-error">
             Could not start the shell: {status.message}
           </output>
         ))}
@@ -130,7 +131,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
       {guarded && (
         <output
           data-testid="prod-status"
-          className="block bg-[var(--prod)] px-3 py-0.5 text-xs font-medium text-white"
+          className="block bg-prod-fill px-3 py-1 text-xs font-semibold text-white"
         >
           PROD · {controller.defaultTitle} · commands are checked before they run
         </output>
@@ -172,7 +173,7 @@ function Reconnecting({
   return (
     <output
       data-testid="reconnecting"
-      className="flex items-center gap-2 border-t border-current/10 px-3 py-1 text-xs"
+      className="flex items-center gap-2 border-t border-line bg-surface-1 px-3 py-1 text-xs"
     >
       <span className="min-w-0 flex-1">
         Connection to {target} lost.{" "}
@@ -180,10 +181,10 @@ function Reconnecting({
           ? "Waiting for other panes of this host to connect first."
           : `Connecting again ${seconds > 0 ? `in ${seconds} s` : "now"}${attempt > 1 ? ` (try ${attempt})` : ""}.`}
       </span>
-      <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onNow}>
+      <button type="button" className="btn btn-ghost btn-xs" onClick={onNow}>
         Reconnect now
       </button>
-      <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onStop}>
+      <button type="button" className="btn btn-ghost btn-xs" onClick={onStop}>
         Stop
       </button>
     </output>

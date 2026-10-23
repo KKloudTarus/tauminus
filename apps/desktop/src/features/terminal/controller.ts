@@ -83,7 +83,7 @@ import { type FiredBatch, type TriggerSource, TriggerWatcher } from "./trigger-w
 const ACK_RETRY_MS = 100;
 
 const FONT_FAMILY =
-  '"JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+  '"JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
 /**
  * What happened in a pane while no one looked at it, most urgent last:
@@ -1659,8 +1659,32 @@ function themeFrom(element: HTMLElement): ITheme {
   if (foreground) theme.foreground = foreground;
   if (cursor) theme.cursor = cursor;
   if (selection) theme.selectionBackground = selection;
+  for (const key of ANSI_KEYS) {
+    const color = read(`--terminal-${key.replace(/[A-Z]/gu, (c) => `-${c.toLowerCase()}`)}`);
+    if (color) theme[key] = color;
+  }
   return theme;
 }
+
+/** The 16 ANSI colors, each read from --terminal-<name> (brightRed is --terminal-bright-red). */
+const ANSI_KEYS = [
+  "black",
+  "red",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "cyan",
+  "white",
+  "brightBlack",
+  "brightRed",
+  "brightGreen",
+  "brightYellow",
+  "brightBlue",
+  "brightMagenta",
+  "brightCyan",
+  "brightWhite",
+] as const satisfies readonly (keyof ITheme)[];
 
 /**
  * Writes and acknowledgements race with session exit, so `not_found` is
