@@ -42,6 +42,7 @@ import { type RendererPreference, chooseRenderer } from "./renderer.ts";
 import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
+import { type HighlightSource, Highlighter } from "./highlighter.ts";
 
 /** Delay before retrying an acknowledgement whose IPC call failed. */
 const ACK_RETRY_MS = 100;
@@ -245,6 +246,7 @@ export class TerminalController {
   /** Checks commands before they run on a guarded host. */
   readonly #guard: CommandGuard | undefined;
   readonly #recorder: CommandRecorder | undefined;
+  readonly #highlighter: Highlighter | undefined;
   readonly #guardSource: GuardSource | undefined;
   /** Output parses so far, and who waits for the next; for the guard's echo wait. */
   #parses = 0;
@@ -300,6 +302,8 @@ export class TerminalController {
       guard?: GuardSource;
       /** Where the commands this terminal runs are recorded. */
       record?: (entry: RecordedCommand) => void;
+      /** The highlight rules for this pane's host, or the defaults. */
+      highlights?: HighlightSource;
     } = {},
   ) {
     this.#sessions = sessions;
@@ -381,6 +385,9 @@ export class TerminalController {
               this.#parseWaiters.add(done);
             }),
         })
+      : undefined;
+    this.#highlighter = options.highlights
+      ? new Highlighter(this.terminal, options.highlights)
       : undefined;
     this.terminal.onWriteParsed(() => {
       this.#parses += 1;
@@ -755,6 +762,11 @@ export class TerminalController {
     );
   }
 
+  /** The highlight sets, or the host's list of them, changed. */
+  refreshHighlights(): void {
+    this.#highlighter?.refresh();
+  }
+
   /** Re-reads the theme tokens, after the app switches light or dark. */
   refreshTheme(): void {
     if (this.#host) {
@@ -807,6 +819,7 @@ export class TerminalController {
       }
     }
     this.#acquireWebgl();
+    this.#highlighter?.wake();
     this.#fit.fit();
     this.#resizeSession();
     this.#observer = new ResizeObserver(() => this.#scheduleFit());
@@ -847,6 +860,7 @@ export class TerminalController {
     this.#leaveLine();
     this.#retireWebgl();
     this.#guard?.dispose();
+    this.#highlighter?.dispose();
     // A tab closed with a command running keeps what it printed so far.
     this.#recorder?.flush();
     this.#recorder?.dispose();

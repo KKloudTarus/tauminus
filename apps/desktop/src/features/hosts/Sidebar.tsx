@@ -4,7 +4,13 @@
 import { useDeferredValue, useMemo, useState, useSyncExternalStore } from "react";
 
 import { formatEndpoint } from "@/features/ssh/destination.ts";
-import type { GroupView, HostView, IdentityView, SnippetView } from "@/ipc/index.ts";
+import type {
+  GroupView,
+  HostView,
+  IdentityView,
+  SnippetView,
+  TriggerSetView,
+} from "@/ipc/index.ts";
 
 import { type Editing, EditorDialog } from "./HostEditor.tsx";
 import type { HostsStore } from "./hosts-store.ts";
@@ -20,6 +26,8 @@ interface SidebarProps {
   identities?: readonly IdentityView[];
   /** Snippets a host can run when it connects; without them there is no choice. */
   snippets?: readonly SnippetView[] | undefined;
+  /** Highlight sets a host or group can name; without them there is no choice. */
+  highlightSets?: readonly TriggerSetView[] | undefined;
 }
 
 interface Tree {
@@ -61,6 +69,7 @@ export function Sidebar({
   onFiles,
   identities = NO_IDENTITIES,
   snippets,
+  highlightSets,
 }: SidebarProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [query, setQuery] = useState("");
@@ -227,6 +236,7 @@ export function Sidebar({
           editing={editing}
           identities={identities}
           {...(snippets ? { snippets } : {})}
+          {...(highlightSets ? { highlightSets } : {})}
           onClose={() => setEditing(undefined)}
         />
       )}

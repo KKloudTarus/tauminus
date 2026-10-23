@@ -8,6 +8,7 @@ import type { FilesClient } from "./files.ts";
 import type { ForwardsClient } from "./forwards.ts";
 import type { SerialClient } from "./serial.ts";
 import type { SnippetsClient } from "./snippets.ts";
+import type { TriggersClient } from "./triggers.ts";
 import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
@@ -70,6 +71,16 @@ export {
   type VariableView,
   tauriSnippets,
 } from "./snippets.ts";
+export {
+  type HitView,
+  type PreparedView,
+  type RuleSpec,
+  type StyleSpec,
+  type TriggerSetInput,
+  type TriggerSetView,
+  type TriggersClient,
+  tauriTriggers,
+} from "./triggers.ts";
 export {
   type ExitFilterSpec,
   type HistoryClient,
@@ -189,6 +200,19 @@ export async function snippetsClient(
     return (await import("./fake-snippets.ts")).fakeSnippets(startupOf);
   }
   return (await import("./snippets.ts")).tauriSnippets;
+}
+
+/**
+ * Highlight sets; the `e2e` build keeps them in memory. `triggersOf` gives
+ * the sets a saved host and its groups name, nearest first.
+ */
+export async function triggersClient(
+  triggersOf: (host: string) => readonly string[],
+): Promise<TriggersClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-triggers.ts")).fakeTriggers(triggersOf);
+  }
+  return (await import("./triggers.ts")).tauriTriggers;
 }
 
 /** Files on hosts and here; the `e2e` build keeps both sides in memory. */

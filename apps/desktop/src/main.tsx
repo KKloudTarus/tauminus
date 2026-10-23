@@ -16,6 +16,7 @@ import {
   serialClient,
   sessionClient,
   snippetsClient,
+  triggersClient,
   textClipboard,
   vaultClient,
 } from "@/ipc/index.ts";
@@ -39,6 +40,7 @@ const shell = new AppShell({
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),
+  triggers: await triggersClient((host) => triggersOf(host)),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),
@@ -51,6 +53,7 @@ const shell = new AppShell({
 shell.workspace.newTab();
 void shell.hosts.load();
 void shell.snippets?.load();
+void shell.triggers?.load();
 // Only a benchmark build has this flag; other builds drop the import.
 if (import.meta.env.VITE_TAUMINUS_BENCH === "1") {
   void import("@/bench/run.ts").then(({ runBenchmark }) => runBenchmark(shell));
@@ -61,6 +64,23 @@ createRoot(root).render(
     <App shell={shell} />
   </StrictMode>,
 );
+
+/**
+ * The highlight sets a saved host and its groups name, nearest first, for
+ * the `e2e` build's fake. O(d·k).
+ */
+function triggersOf(host: string): string[] {
+  const { hosts, groups } = shell.hosts.getSnapshot().view;
+  const saved = hosts.find((h) => h.id === host);
+  const out: string[] = [...(saved?.settings.triggers ?? [])];
+  let group = saved?.group ?? null;
+  for (let depth = 0; group !== null && depth < 16; depth += 1) {
+    const level = groups.find((g) => g.id === group);
+    out.push(...(level?.settings.triggers ?? []));
+    group = level?.parent ?? null;
+  }
+  return [...new Set(out)];
+}
 
 /** A rule's name, for the `e2e` build's fake forwarding. */
 function ruleLabel(host: string, rule: string): string {

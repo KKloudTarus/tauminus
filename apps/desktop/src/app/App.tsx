@@ -9,6 +9,7 @@ import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { RecordingsDialog } from "@/features/recording/RecordingsDialog.tsx";
+import { TriggersDialog } from "@/features/triggers/TriggersDialog.tsx";
 import { SerialDialog } from "@/features/serial/SerialDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
 import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
@@ -37,6 +38,7 @@ export function App({ shell }: { shell: AppShell }) {
     workspacesOpen,
     serialOpen,
     recordingsOpen,
+    triggersOpen,
     snippetToFill,
     snippetHosts,
     files,
@@ -48,6 +50,14 @@ export function App({ shell }: { shell: AppShell }) {
     () => {
       const state = shell.snippets?.getSnapshot();
       return state?.loaded ? state.snippets : undefined;
+    },
+  );
+  const highlightSets = useSyncExternalStore(
+    shell.triggers?.subscribe ?? noSubscribe,
+    // Only a loaded library: an empty one would show every set as deleted.
+    () => {
+      const state = shell.triggers?.getSnapshot();
+      return state?.loaded ? state.sets : undefined;
     },
   );
   const savedHosts = useSyncExternalStore(shell.hosts.subscribe, shell.hosts.getSnapshot).view
@@ -96,6 +106,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.workspacesOpen ||
         state.serialOpen ||
         state.recordingsOpen ||
+        state.triggersOpen ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -129,6 +140,7 @@ export function App({ shell }: { shell: AppShell }) {
             {...(shell.files ? { onFiles: openFiles } : {})}
             identities={vault.identities}
             snippets={snippetList}
+            highlightSets={highlightSets}
           />
         )}
         <div className="min-w-0 flex-1">
@@ -216,6 +228,9 @@ export function App({ shell }: { shell: AppShell }) {
           onClose={() => shell.setRecordingsOpen(false)}
           onUnlock={(retry) => shell.unlockVaultThen(retry)}
         />
+      )}
+      {triggersOpen && shell.triggers && (
+        <TriggersDialog store={shell.triggers} onClose={() => shell.setTriggersOpen(false)} />
       )}
       {workspacesOpen && (
         <WorkspacesDialog

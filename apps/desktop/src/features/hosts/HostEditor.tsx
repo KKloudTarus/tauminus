@@ -13,6 +13,7 @@ import type {
   ProtocolSpec,
   SettingsSpec,
   SnippetView,
+  TriggerSetView,
 } from "@/ipc/index.ts";
 
 import { ForwardFields } from "@/features/forwards/ForwardFields.tsx";
@@ -224,6 +225,7 @@ export function EditorDialog({
   editing,
   identities = NO_IDENTITIES,
   snippets,
+  highlightSets,
   onClose,
 }: {
   store: HostsStore;
@@ -231,6 +233,8 @@ export function EditorDialog({
   identities?: readonly IdentityView[];
   /** Snippets to start with; without them the choice is not shown or saved. */
   snippets?: readonly SnippetView[];
+  /** Highlight sets to attach; without them the choice is not shown or saved. */
+  highlightSets?: readonly TriggerSetView[];
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -252,6 +256,7 @@ export function EditorDialog({
           host={editing.host}
           identities={identities}
           snippets={snippets}
+          highlightSets={highlightSets}
           titleId={titleId}
           onDone={onClose}
         />
@@ -260,6 +265,7 @@ export function EditorDialog({
           store={store}
           group={editing.group}
           identities={identities}
+          highlightSets={highlightSets}
           titleId={titleId}
           onDone={onClose}
         />
@@ -273,6 +279,7 @@ function HostForm({
   host,
   identities,
   snippets,
+  highlightSets,
   titleId,
   onDone,
 }: {
@@ -280,10 +287,12 @@ function HostForm({
   host: HostView | undefined;
   identities: readonly IdentityView[];
   snippets: readonly SnippetView[] | undefined;
+  highlightSets: readonly TriggerSetView[] | undefined;
   titleId: string;
   onDone: () => void;
 }) {
   const [identity, setIdentity] = useState(host?.settings.identity ?? "");
+  const [triggers, setTriggers] = useState<readonly string[]>(() => host?.settings.triggers ?? []);
   const { view } = store.getSnapshot();
   const [label, setLabel] = useState(host?.label ?? "");
   const [address, setAddress] = useState(host?.address ?? "");
@@ -329,15 +338,18 @@ function HostForm({
         protocol,
         group: group || null,
         tags: list(tags) ?? [],
-        settings: withGuard(
-          withEdits(withOptions, {
-            user,
-            port: portText,
-            jumps,
-            direct,
-            identityFiles,
-          }),
-          guard,
+        settings: withTriggers(
+          withGuard(
+            withEdits(withOptions, {
+              user,
+              port: portText,
+              jumps,
+              direct,
+              identityFiles,
+            }),
+            guard,
+          ),
+          highlightSets ? triggers : undefined,
         ),
         forwards,
         // Without the library this window cannot show them; keep them as saved.
@@ -484,6 +496,9 @@ function HostForm({
         inherited={host?.forwardsAgent ?? false}
       />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
+      {highlightSets && (
+        <HighlightFields value={triggers} sets={highlightSets} onChange={setTriggers} />
+      )}
       <ForwardFields rows={rules} onChange={setRules} />
       {snippets && protocol !== "telnet" && (
         <StartupFields value={startup} snippets={snippets} onChange={setStartup} />
@@ -496,16 +511,19 @@ function GroupForm({
   store,
   group,
   identities,
+  highlightSets,
   titleId,
   onDone,
 }: {
   store: HostsStore;
   group: GroupView | undefined;
   identities: readonly IdentityView[];
+  highlightSets: readonly TriggerSetView[] | undefined;
   titleId: string;
   onDone: () => void;
 }) {
   const [identity, setIdentity] = useState(group?.settings.identity ?? "");
+  const [triggers, setTriggers] = useState<readonly string[]>(() => group?.settings.triggers ?? []);
   const { view } = store.getSnapshot();
   const [name, setName] = useState(group?.name ?? "");
   const [parent, setParent] = useState(group?.parent ?? "");
@@ -535,7 +553,10 @@ function GroupForm({
         id: group?.id ?? null,
         name,
         parent: parent || null,
-        settings: withGuard(withEdits(withOptions, { user, port: portText, jumps }), guard),
+        settings: withTriggers(
+          withGuard(withEdits(withOptions, { user, port: portText, jumps }), guard),
+          highlightSets ? triggers : undefined,
+        ),
       });
       onDone();
     } catch (failure) {
@@ -604,6 +625,9 @@ function GroupForm({
       <IdentityField value={identity} onChange={setIdentity} identities={identities} />
       <SessionFields value={session} onChange={setSession} />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit from the parent group" />
+      {highlightSets && (
+        <HighlightFields value={triggers} sets={highlightSets} onChange={setTriggers} />
+      )}
     </Form>
   );
 }
@@ -868,6 +892,96 @@ function Form({
         </button>
       </div>
     </form>
+  );
+}
+
+/** `settings` with the highlight sets chosen; unchanged when the choice was not shown. */
+export function withTriggers(
+  settings: SettingsSpec,
+  triggers: readonly string[] | undefined,
+): SettingsSpec {
+  return triggers === undefined ? settings : { ...settings, triggers: [...triggers] };
+}
+
+/** Most highlight sets one host or group names, as the backend allows. */
+const MAX_SETS = 8;
+
+/**
+ * The highlight sets a host or group names, in precedence order. They add
+ * up with its groups', its own first.
+ */
+export function HighlightFields({
+  value,
+  sets,
+  onChange,
+}: {
+  value: readonly string[];
+  sets: readonly TriggerSetView[];
+  onChange: (value: readonly string[]) => void;
+}) {
+  const selectId = useId();
+  const byId = new Map(sets.map((s) => [s.id, s]));
+  const left = sets.filter((s) => !value.includes(s.id));
+  return (
+    <details className="mb-3 rounded border border-current/15 px-3 py-2" open={value.length > 0}>
+      <summary className="cursor-pointer select-none">Highlight sets</summary>
+      <div className="mt-2 flex flex-col gap-1">
+        {value.length === 0 && (
+          <p className="opacity-60">
+            Colour what output matches. Sets named here add to those of the groups above.
+          </p>
+        )}
+        <ol aria-label="Highlight sets" className="flex flex-col gap-1">
+          {value.map((id, i) => {
+            const name = byId.get(id)?.name ?? `${id} (deleted)`;
+            return (
+              <li key={id} className="flex items-center gap-2">
+                <span className="w-5 text-right opacity-60">{i + 1}.</span>
+                <span className="min-w-0 flex-1 truncate">{name}</span>
+                <button
+                  type="button"
+                  className="rounded px-2 hover:bg-current/10 disabled:opacity-40"
+                  aria-label={`Put ${name} first`}
+                  disabled={i === 0}
+                  onClick={() => onChange([id, ...value.filter((other) => other !== id)])}
+                >
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="rounded px-2 hover:bg-current/10"
+                  aria-label={`Remove highlight set ${name}`}
+                  onClick={() => onChange(value.filter((other) => other !== id))}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        {left.length > 0 && value.length < MAX_SETS && (
+          <label htmlFor={selectId} className="flex items-center gap-2">
+            Add
+            <select
+              id={selectId}
+              aria-label="Add a highlight set"
+              value=""
+              onChange={(e) => {
+                if (e.target.value) onChange([...value, e.target.value]);
+              }}
+              className={FIELD}
+            >
+              <option value="">Choose a set</option>
+              {left.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+    </details>
   );
 }
 
