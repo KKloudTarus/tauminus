@@ -25,7 +25,7 @@ function shell(hosts = fakeHosts()): AppShell {
     vault: fakeVault(),
     snippets: fakeSnippets(() => []),
     userAgent: "test",
-    storage: undefined,
+    storage: localStorage,
     root: document.documentElement,
     clipboard: undefined,
   });
@@ -158,5 +158,57 @@ describe("AppShell broadcast", () => {
     // Three columns, two rows: no pane under a sixth of the tab.
     const rects = [...paneRects(tab.root).values()];
     for (const rect of rects) expect(rect.width * rect.height).toBeGreaterThan(1 / 6 - 1e-9);
+  });
+});
+
+describe("AppShell workspaces", () => {
+  it("keeps a proxied connection as a local shell, and opens a deleted host as one", async () => {
+    localStorage.removeItem("tauminus.workspaces");
+    const hosts = fakeHosts();
+    await hosts.saveHost({ label: "db", address: "prompt.test" });
+    const app = shell(hosts);
+    await app.hosts.load();
+    const db = app.hosts.getSnapshot().view.hosts[0]!;
+    app.workspace.newTab({ kind: "host", hostId: db.id, label: db.label, target: db.target! });
+    app.workspace.split("row", {
+      kind: "ssh",
+      target: {
+        destination: { user: "me", host: "inner", port: 22 },
+        route: { kind: "proxyCommand", command: "nc %h %p" },
+      },
+    });
+    expect(app.saveWorkspace("ops")).toMatch(/me@inner.*local shell/u);
+    const [saved] = app.workspaces.getSnapshot();
+    expect(JSON.stringify(saved)).not.toContain("nc %h");
+
+    await hosts.deleteHost(db.id);
+    await app.hosts.load();
+    await app.openWorkspace(saved!.id);
+    expect(app.hosts.getSnapshot().notice).toMatch(/ops: a deleted host opened as a local shell/u);
+    expect(app.workspace.focusedSpec()).toEqual({ kind: "local" });
+  });
+
+  it("waits for the saved hosts before it opens one, and never guesses", async () => {
+    localStorage.removeItem("tauminus.workspaces");
+    const hosts = fakeHosts();
+    await hosts.saveHost({ label: "db", address: "prompt.test" });
+    const app = shell(hosts);
+    await app.hosts.load();
+    const db = app.hosts.getSnapshot().view.hosts[0]!;
+    app.workspace.newTab({ kind: "host", hostId: db.id, label: db.label, target: db.target! });
+    app.saveWorkspace("ops");
+    const [saved] = app.workspaces.getSnapshot();
+
+    // A new window, its host list not read yet.
+    const fresh = shell(hosts);
+    expect(fresh.hosts.getSnapshot().status).toBe("loading");
+    await fresh.openWorkspace(saved!.id);
+    expect(fresh.workspace.focusedSpec()).toMatchObject({ kind: "host", hostId: db.id });
+
+    // One whose list failed opens nothing.
+    const broken = shell({ ...hosts, list: () => Promise.reject(new Error("disk")) });
+    await broken.openWorkspace(saved!.id);
+    expect(broken.workspace.getSnapshot().tabs).toHaveLength(0);
+    expect(broken.hosts.getSnapshot().notice).toMatch(/not opened/u);
   });
 });

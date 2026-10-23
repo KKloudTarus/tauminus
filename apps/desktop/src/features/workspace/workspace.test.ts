@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { paneIds } from "./layout.ts";
+import { assertValid, paneIds } from "./layout.ts";
 import { MAX_PANES, MAX_PANES_PER_TAB, type PaneTerminal, Workspace } from "./workspace.ts";
 
 class FakeTerminal implements PaneTerminal {
@@ -256,5 +256,75 @@ describe("Workspace panes", () => {
       expect(terminal.disposed).toBe(1);
     }
     expect(workspace.newTab()).toBe(false);
+  });
+});
+
+const leaf = (spec: string) => ({ kind: "pane" as const, spec });
+
+describe("Workspace templates", () => {
+  it("opens a saved layout again with its specs and shares", () => {
+    const opened: (string | undefined)[] = [];
+    const workspace = new Workspace<FakeTerminal, string>((_id, spec) => {
+      opened.push(spec);
+      return new FakeTerminal();
+    });
+    workspace.newTab("a");
+    workspace.split("row", "b");
+    workspace.split("column", "c");
+    const [template] = workspace.templates();
+    expect(workspace.openTemplate(template!)).toBe(true);
+    expect(opened).toEqual(["a", "b", "c", "a", "b", "c"]);
+    const tab = workspace.activeTab!;
+    assertValid(tab.root);
+    expect(workspace.templates()[1]).toEqual(template);
+  });
+
+  it("repairs a template read from storage, and refuses one past the limits", () => {
+    const workspace = new Workspace<FakeTerminal, string>(() => new FakeTerminal());
+    // One child, bad sizes, and a child split in its parent's direction.
+    expect(
+      workspace.openTemplate({
+        kind: "split",
+        direction: "row",
+        sizes: [-1, Number.NaN],
+        children: [
+          {
+            kind: "split",
+            direction: "row",
+            sizes: [50, 50],
+            children: [leaf("a"), leaf("b")],
+          },
+          { kind: "split", direction: "column", sizes: [100], children: [leaf("c")] },
+        ],
+      }),
+    ).toBe(true);
+    const root = workspace.activeTab!.root;
+    assertValid(root);
+    expect(paneIds(root)).toHaveLength(3);
+    const many = {
+      kind: "split" as const,
+      direction: "row" as const,
+      sizes: [],
+      children: Array.from({ length: MAX_PANES_PER_TAB + 1 }, () => leaf("x")),
+    };
+    expect(workspace.openTemplate(many)).toBe(false);
+    expect(workspace.openTemplate({ ...many, children: [] })).toBe(false);
+    // Shares far apart are shared equally; the layout stays valid.
+    for (const sizes of [
+      [1e308, 1e308],
+      [5e-324, 1],
+      [1e-300, 1],
+    ]) {
+      expect(
+        workspace.openTemplate({
+          kind: "split",
+          direction: "column",
+          sizes,
+          children: [leaf("a"), leaf("b")],
+        }),
+      ).toBe(true);
+      assertValid(workspace.activeTab!.root);
+      expect(workspace.activeTab!.root).toMatchObject({ sizes: [50, 50] });
+    }
   });
 });

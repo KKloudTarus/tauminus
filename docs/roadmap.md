@@ -133,7 +133,7 @@ Goal: Termius Starter parity on desktop.
 - [x] Local, remote, and dynamic forwarding; saved rules; start and stop from the palette
 - [x] Snippets with folders and `{{variable}}` placeholders; startup snippets per host
 - [x] Run a snippet on many hosts; broadcast input to selected panes with instant Ctrl+C
-- [ ] Workspaces: save and restore layouts with their hosts
+- [x] Workspaces: save and restore layouts with their hosts
 - [x] Session status dots: unread output, waiting for input, error
 - [ ] Auto-reconnect after sleep or network change, reattach `tmux` when the host uses it
 - [ ] Telnet transport (RFC 854, NAWS, TTYPE, ECHO)

@@ -14,7 +14,8 @@ import type { RecordedCommand } from "@/features/terminal/recorder.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Broadcast, typedByUser } from "@/features/workspace/broadcast.ts";
-import { type PaneId, paneIds } from "@/features/workspace/layout.ts";
+import { type SavedSpec, SavedWorkspaces } from "@/features/workspace/saved.ts";
+import { type PaneId, type Template, paneIds } from "@/features/workspace/layout.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
@@ -77,6 +78,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "broadcast.toggle": "Broadcast input: add or remove this pane",
   "broadcast.tab": "Broadcast input to every pane in this tab",
   "broadcast.off": "Stop broadcasting input",
+  "workspaces.open": "Workspaces: save or open a set of tabs",
 };
 
 interface ShellState {
@@ -86,6 +88,7 @@ interface ShellState {
   historyOpen: boolean;
   forwardsOpen: boolean;
   snippetsOpen: boolean;
+  workspacesOpen: boolean;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -116,6 +119,8 @@ export class AppShell {
   readonly snippets: SnippetsStore | undefined;
   /** The panes that type together. */
   readonly broadcast = new Broadcast();
+  /** Sets of tabs saved to open again. */
+  readonly workspaces: SavedWorkspaces;
   /** Settles once a host pane's session is up and its startup snippets typed. */
   readonly #ready = new WeakMap<
     TerminalController,
@@ -174,6 +179,7 @@ export class AppShell {
       ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
       : undefined;
     this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
+    this.workspaces = new SavedWorkspaces(options.storage);
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -181,6 +187,7 @@ export class AppShell {
       historyOpen: false,
       forwardsOpen: false,
       snippetsOpen: false,
+      workspacesOpen: false,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -624,6 +631,94 @@ export class AppShell {
     });
   }
 
+  setWorkspacesOpen(open: boolean): void {
+    if (this.#state.workspacesOpen === open) return;
+    this.#set({ ...this.#state, workspacesOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /**
+   * Saves every tab, its layout and what each pane opens, under `name`. A
+   * typed-in connection through a proxy is kept as a local shell: a proxy
+   * command read back from storage would run whatever was written there.
+   * Returns what to tell the user, or undefined when it saved.
+   */
+  saveWorkspace(name: string): string | undefined {
+    const dropped: string[] = [];
+    const saved = (spec: SessionSpec | undefined): SavedSpec => {
+      if (spec?.kind === "host") return { kind: "host", hostId: spec.hostId };
+      if (spec?.kind === "ssh") {
+        if (spec.target.route.kind === "direct") {
+          return {
+            kind: "ssh",
+            destination: spec.target.destination,
+            jumps: spec.target.jumps ?? [],
+          };
+        }
+        dropped.push(formatEndpoint(spec.target.destination));
+      }
+      return { kind: "local" };
+    };
+    const tabs = this.workspace.templates().map((t) => mapTemplate(t, saved));
+    if (!this.workspaces.save(name, tabs)) {
+      return "A workspace needs a name and a tab, and at most 50 are kept";
+    }
+    return dropped.length > 0
+      ? `Saved; ${dropped.join(", ")} went through a proxy and opens as a local shell`
+      : undefined;
+  }
+
+  /**
+   * Opens a saved workspace's tabs after the ones open now. A saved host
+   * opens as it is saved now; one deleted since opens a local shell, and
+   * the user is told.
+   */
+  async openWorkspace(id: string): Promise<void> {
+    const workspace = this.workspaces.find(id);
+    if (!workspace) return;
+    // An empty list while it loads would read every saved host as deleted,
+    // and open local shells where the user expects remote ones.
+    if (this.hosts.getSnapshot().status === "loading") await this.hosts.load();
+    if (this.hosts.getSnapshot().status !== "ready") {
+      this.hosts.notify(`${workspace.name}: not opened; the saved hosts could not be read`);
+      return;
+    }
+    const hosts = this.hosts.getSnapshot().view.hosts;
+    const missing = new Set<string>();
+    const open = (spec: SavedSpec): SessionSpec => {
+      if (spec.kind === "ssh") {
+        return {
+          kind: "ssh",
+          target: {
+            destination: spec.destination,
+            jumps: [...spec.jumps],
+            route: { kind: "direct" },
+          },
+        };
+      }
+      if (spec.kind === "host") {
+        const host = hosts.find((h) => h.id === spec.hostId);
+        if (host?.target) {
+          return { kind: "host", hostId: host.id, label: host.label, target: host.target };
+        }
+        missing.add(host?.label ?? "a deleted host");
+      }
+      return { kind: "local" };
+    };
+    let opened = 0;
+    for (const tab of workspace.tabs) {
+      if (this.workspace.openTemplate(mapTemplate(tab, open))) opened += 1;
+    }
+    this.setWorkspacesOpen(false);
+    const notes = [
+      ...(missing.size > 0 ? [`${[...missing].join(", ")} opened as a local shell`] : []),
+      ...(opened < workspace.tabs.length
+        ? [`${workspace.tabs.length - opened} tabs did not fit under the pane limit`]
+        : []),
+    ];
+    if (notes.length > 0) this.hosts.notify(`${workspace.name}: ${notes.join("; ")}`);
+  }
+
   /** The history client, when this window keeps one. */
   get history(): HistoryClient | undefined {
     return this.#history;
@@ -716,6 +811,9 @@ export class AppShell {
         if (tab) this.broadcast.set(paneIds(tab.root));
         break;
       }
+      case "workspaces.open":
+        this.setWorkspacesOpen(true);
+        return;
       case "broadcast.off":
         this.broadcast.clear();
         break;
@@ -867,6 +965,13 @@ export class AppShell {
     this.#state = state;
     for (const listener of this.#listeners) listener();
   }
+}
+
+/** A template with each pane's spec turned into another. O(n). */
+function mapTemplate<A, B>(template: Template<A>, map: (spec: A) => B): Template<B> {
+  return template.kind === "pane"
+    ? { kind: "pane", spec: map(template.spec) }
+    : { ...template, children: template.children.map((child) => mapTemplate(child, map)) };
 }
 
 /** A promise and what settles it. */
