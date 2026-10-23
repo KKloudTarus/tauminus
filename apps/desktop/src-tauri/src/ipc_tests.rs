@@ -189,3 +189,84 @@ fn an_unreadable_host_file_is_reported_and_left_alone() {
         "no home: nothing to offer"
     );
 }
+
+#[test]
+fn triggers_fire_on_lines_and_notify_only_from_the_backend_s_own_text() {
+    let (app, _dir) = app("triggers");
+    let rule = |pattern: &str, action: Value| json!({"name": pattern, "pattern": pattern, "enabled": true, "action": action});
+    let sets = call(
+        &app,
+        "trigger_set_save",
+        json!({"set": {"name": "Watch", "rules": [
+            rule("ERROR", json!({"kind": "highlight", "style": {"fg": "1"}})),
+            rule("deploy done", json!({"kind": "notify"})),
+            rule("token=\\S+", json!({"kind": "capture"})),
+            rule("\\[y/N\\]", json!({"kind": "send", "text": "y", "enter": true})),
+        ]}}),
+    )
+    .unwrap();
+    let set = sets[0]["id"].as_str().unwrap().to_owned();
+    call(&app, "trigger_defaults_save", json!({"ids": [set]})).unwrap();
+    let prepared = call(&app, "trigger_prepare", json!({"host": null})).unwrap();
+    assert_eq!(prepared["styles"].as_array().unwrap().len(), 1);
+    let triggers: Vec<&str> = prepared["triggers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["action"]["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(triggers, ["notify", "capture", "send"]);
+    let handle = prepared["handle"].clone();
+
+    let fired = call(
+        &app,
+        "trigger_fire",
+        json!({"handle": handle, "lines": [
+            "ERROR only colours",
+            "deploy done in 3s",
+            "login ok, token=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            "Continue? [y/N]",
+        ]}),
+    )
+    .unwrap();
+    let fired = fired.as_array().unwrap();
+    let rules: Vec<u64> = fired.iter().map(|f| f["rule"].as_u64().unwrap()).collect();
+    assert_eq!(rules, [0, 1, 2]);
+    // A captured line comes back with the secret hidden, as history hides it.
+    let captured = fired[1]["text"].as_str().unwrap();
+    assert!(
+        !captured.contains("ghp_abcdefghijklmnopqrstuvwxyz0123456789"),
+        "{captured}"
+    );
+
+    // No system notification while the window has focus; then one, made of
+    // the rule's name only, and not again within 30 s.
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let notices = tauri::Manager::state::<crate::notices::Notices>(&app);
+    let seen = std::sync::Arc::clone(&shown);
+    notices.set_show(Box::new(move |title, body| {
+        seen.lock().unwrap().push((title, body));
+        Ok(())
+    }));
+    notices.set_focused(true);
+    let notify = |rule: u64| {
+        call(
+            &app,
+            "trigger_notify",
+            json!({"host": null, "handle": handle, "rule": rule}),
+        )
+    };
+    assert_eq!(notify(0), Ok(json!(false)));
+    notices.set_focused(false);
+    assert_eq!(notify(0), Ok(json!(true)));
+    assert_eq!(notify(0), Ok(json!(false)));
+    assert_eq!(
+        shown.lock().unwrap().as_slice(),
+        [(
+            "Tauminus: deploy done".to_owned(),
+            "Matched in a terminal".to_owned()
+        )]
+    );
+    // A rule that does not notify cannot be made to.
+    assert!(notify(2).is_err());
+}

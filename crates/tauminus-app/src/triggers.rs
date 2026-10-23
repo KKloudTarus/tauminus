@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 
 use tauminus_domain::{
-    Highlight, Hit, HostsError, Matcher, TriggerError, TriggerLibrary, TriggerSetId,
+    Action, Fired, Highlight, Hit, HostsError, Label, Matcher, TriggerError, TriggerLibrary,
+    TriggerMatcher, TriggerSetId,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -38,9 +39,12 @@ pub enum TriggerBookError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub handle: u32,
-    /// How each rule colours, by the index hits carry. Empty when no rule
-    /// applies: the pane need not scan at all.
+    /// How each highlight rule colours, by the index hits carry. Empty when
+    /// none applies: the pane need not scan its screen.
     pub styles: Vec<Highlight>,
+    /// Each trigger rule's name and action, by the index fired triggers
+    /// carry. Empty when none applies: the pane need not watch its output.
+    pub triggers: Vec<(Label, Action)>,
 }
 
 struct Entry {
@@ -48,6 +52,7 @@ struct Entry {
     revision: u32,
     named: Vec<TriggerSetId>,
     matcher: Arc<Matcher>,
+    triggers: Arc<TriggerMatcher>,
 }
 
 /// The saved sets. As with [`crate::SnippetBook`], every change is saved
@@ -146,12 +151,12 @@ impl TriggerBook {
         drop(library);
         let compiled = tokio::task::spawn_blocking(move || {
             let refs: Vec<_> = rules.iter().collect();
-            Matcher::new(&refs)
+            Ok::<_, TriggerError>((Matcher::new(&refs)?, TriggerMatcher::new(&refs)?))
         })
         .await
         .map_err(|e| TriggerError::TooLarge(e.to_string()))?;
-        let matcher = match compiled {
-            Ok(matcher) => matcher,
+        let (matcher, triggers) = match compiled {
+            Ok(both) => both,
             Err(error) => {
                 let mut failures = self.failures();
                 if failures.len() == PREPARED {
@@ -161,6 +166,7 @@ impl TriggerBook {
                 return Err(error.into());
             }
         };
+        let prepared_triggers = triggers.actions();
         let styles = matcher.styles();
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
         let mut entries = self.entries();
@@ -172,8 +178,13 @@ impl TriggerBook {
             revision,
             named,
             matcher: Arc::new(matcher),
+            triggers: Arc::new(triggers),
         });
-        Ok(Prepared { handle, styles })
+        Ok(Prepared {
+            handle,
+            styles,
+            triggers: prepared_triggers,
+        })
     }
 
     /// The entry for these sets at this revision, moved to the back as the
@@ -187,6 +198,7 @@ impl TriggerBook {
         let prepared = Prepared {
             handle: entry.handle,
             styles: entry.matcher.styles(),
+            triggers: entry.triggers.actions(),
         };
         entries.push(entry);
         Some(prepared)
@@ -203,6 +215,32 @@ impl TriggerBook {
             .find(|e| e.handle == handle && e.revision == revision)
             .map(|e| Arc::clone(&e.matcher))?;
         Some(matcher.scan(lines))
+    }
+
+    /// Trigger rule `rule` of the rules behind `handle`: its name and
+    /// action; `None` when the handle is stale or the rule unknown.
+    pub fn trigger(&self, handle: u32, rule: u16) -> Option<(Label, Action)> {
+        let revision = self.revision.load(Ordering::Acquire);
+        let entries = self.entries();
+        let entry = entries
+            .iter()
+            .find(|e| e.handle == handle && e.revision == revision)?;
+        entry
+            .triggers
+            .action(usize::from(rule))
+            .map(|(name, action)| (name.clone(), action.clone()))
+    }
+
+    /// The triggers behind `handle` that `lines` fire; `None` when the
+    /// handle is stale or unknown. See [`TriggerMatcher::scan`].
+    pub fn fire(&self, handle: u32, lines: &[&str]) -> Option<Vec<Fired>> {
+        let revision = self.revision.load(Ordering::Acquire);
+        let triggers = self
+            .entries()
+            .iter()
+            .find(|e| e.handle == handle && e.revision == revision)
+            .map(|e| Arc::clone(&e.triggers))?;
+        Some(triggers.scan(lines))
     }
 
     fn failures(&self) -> std::sync::MutexGuard<'_, Vec<(u32, Vec<TriggerSetId>, TriggerError)>> {

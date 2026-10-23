@@ -68,6 +68,51 @@ impl HistoryEntry {
 /// is seen whole.
 const REDACT_SLACK: usize = 4096;
 
+/// `text` as it may be shown or kept outside the terminal: secrets of a
+/// known shape hidden, as the history hides them, control characters, line
+/// breaks, and characters that change how text reads unseen (bidi controls,
+/// zero-width ones, tags) out, at most `max` bytes. A line that is all
+/// base64 is hidden whole: one line of a private key's body, which the
+/// history finds between its BEGIN and END lines, comes alone here. O(n).
+pub(crate) fn shown_safely(text: &str, max: usize) -> String {
+    let trimmed = text.trim();
+    let base64 = trimmed.len() >= 40
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+    if base64 {
+        return "•••".to_owned();
+    }
+    // Read a little past what is kept, so a secret cut at the end is still
+    // recognised and hidden whole.
+    let visible: String = text
+        .chars()
+        .filter(|&c| !invisible(c))
+        .take(max + SHOWN_SLACK)
+        .collect();
+    clean(&redact::redact(&clean(&visible, max + SHOWN_SLACK)), max).replace(['\n', '\t'], " ")
+}
+
+/// Bytes past the kept text that [`shown_safely`] reads to find secrets.
+const SHOWN_SLACK: usize = 512;
+
+/// Characters that change how text reads without being seen.
+pub fn invisible(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{61c}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{fe00}'..='\u{fe0f}'
+            | '\u{feff}'
+            | '\u{fff9}'..='\u{fffb}'
+            | '\u{e0000}'..='\u{e007f}'
+    )
+}
+
 fn clean(text: &str, max: usize) -> String {
     let mut out = String::with_capacity(text.len().min(max));
     for c in text.chars() {

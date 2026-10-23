@@ -29,6 +29,8 @@ const COMMANDS: &[&str] = &[
     "trigger_pattern_check",
     "trigger_prepare",
     "trigger_scan",
+    "trigger_fire",
+    "trigger_notify",
     "telnet_connect",
     "mosh_connect",
     "recording_start",

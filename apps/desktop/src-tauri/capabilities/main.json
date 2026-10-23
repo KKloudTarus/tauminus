@@ -26,6 +26,8 @@
     "allow-trigger-pattern-check",
     "allow-trigger-prepare",
     "allow-trigger-scan",
+    "allow-trigger-fire",
+    "allow-trigger-notify",
     "allow-host-startup",
     "allow-telnet-connect",
     "allow-mosh-connect",

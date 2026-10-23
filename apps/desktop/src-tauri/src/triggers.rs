@@ -15,7 +15,7 @@ use specta::Type;
 use tauminus_app::{TriggerBook, TriggerBookError};
 use tauminus_domain::{
     Action, Colour, Highlight, HostId, Label, MAX_SCAN_BYTES, MAX_SCAN_LINES, RulePattern,
-    TriggerError, TriggerLibrary, TriggerRule, TriggerSet, TriggerSetId,
+    SendText, TriggerError, TriggerLibrary, TriggerRule, TriggerSet, TriggerSetId,
 };
 use tauri::State;
 
@@ -82,13 +82,44 @@ impl From<Highlight> for StyleSpec {
     }
 }
 
+/// What a rule does when it matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum ActionSpec {
+    /// Colours the match where it shows.
+    Highlight { style: StyleSpec },
+    /// Tells the user: in the app, and from the system while the window is
+    /// in the back.
+    Notify,
+    /// Keeps the line, for the user to read and copy.
+    Capture,
+    /// Types `text`, then Enter if `enter`, as the user would.
+    Send { text: String, enter: bool },
+}
+
+impl From<&Action> for ActionSpec {
+    fn from(action: &Action) -> Self {
+        match action {
+            Action::Highlight(style) => Self::Highlight {
+                style: (*style).into(),
+            },
+            Action::Notify => Self::Notify,
+            Action::Capture => Self::Capture,
+            Action::Send(send) => Self::Send {
+                text: send.text().to_owned(),
+                enter: send.enter(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuleSpec {
     pub(crate) name: String,
     pub(crate) pattern: String,
     pub(crate) enabled: bool,
-    pub(crate) style: StyleSpec,
+    pub(crate) action: ActionSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -121,14 +152,11 @@ pub(crate) fn view(library: &TriggerLibrary) -> Vec<TriggerSetView> {
             rules: set
                 .rules()
                 .iter()
-                .map(|rule| {
-                    let Action::Highlight(style) = rule.action;
-                    RuleSpec {
-                        name: rule.name.as_str().to_owned(),
-                        pattern: rule.pattern.as_str().to_owned(),
-                        enabled: rule.enabled,
-                        style: style.into(),
-                    }
+                .map(|rule| RuleSpec {
+                    name: rule.name.as_str().to_owned(),
+                    pattern: rule.pattern.as_str().to_owned(),
+                    enabled: rule.enabled,
+                    action: (&rule.action).into(),
                 })
                 .collect(),
             rank: library
@@ -167,16 +195,21 @@ fn parse(id: TriggerSetId, input: TriggerSetInput) -> Result<TriggerSet, Command
         .enumerate()
         .map(|(at, rule)| {
             let named = |e: &dyn std::fmt::Display| invalid(format!("rule {}: {e}", at + 1));
-            let style = Highlight::new(
-                colour(rule.style.fg)?,
-                colour(rule.style.bg)?,
-                rule.style.line,
-            )
-            .map_err(|e| named(&e))?;
+            let action = match rule.action {
+                ActionSpec::Highlight { style } => Action::Highlight(
+                    Highlight::new(colour(style.fg)?, colour(style.bg)?, style.line)
+                        .map_err(|e| named(&e))?,
+                ),
+                ActionSpec::Notify => Action::Notify,
+                ActionSpec::Capture => Action::Capture,
+                ActionSpec::Send { text, enter } => {
+                    Action::Send(SendText::new(text, enter).map_err(|e| named(&e))?)
+                }
+            };
             Ok(TriggerRule {
                 name: Label::parse(&rule.name).map_err(|e| named(&e))?,
                 pattern: RulePattern::checked(&rule.pattern).map_err(|e| named(&e))?,
-                action: Action::Highlight(style),
+                action,
                 enabled: rule.enabled,
             })
         })
@@ -269,12 +302,22 @@ pub(crate) async fn trigger_pattern_check(pattern: String) -> Option<String> {
     .unwrap_or_else(|e| Some(e.to_string()))
 }
 
+/// A trigger rule a pane runs, by the index fired triggers carry.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct TriggerView {
+    pub(crate) name: String,
+    pub(crate) action: ActionSpec,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 pub(crate) struct PreparedView {
     pub(crate) handle: u32,
-    /// By the index hits carry; empty when no rule applies, and the pane
-    /// need not scan.
+    /// By the index hits carry; empty when no highlight applies, and the
+    /// pane need not scan its screen.
     pub(crate) styles: Vec<StyleSpec>,
+    /// By the index fired triggers carry; empty when no trigger applies,
+    /// and the pane need not watch its output.
+    pub(crate) triggers: Vec<TriggerView>,
 }
 
 /// Compiles the rules for a pane: those of saved host `host` and its
@@ -302,6 +345,14 @@ pub(crate) async fn trigger_prepare(
     Ok(PreparedView {
         handle: prepared.handle,
         styles: prepared.styles.into_iter().map(StyleSpec::from).collect(),
+        triggers: prepared
+            .triggers
+            .iter()
+            .map(|(name, action)| TriggerView {
+                name: name.as_str().to_owned(),
+                action: action.into(),
+            })
+            .collect(),
     })
 }
 
@@ -350,6 +401,56 @@ pub(crate) async fn trigger_scan(
                 style: h.style,
                 start: h.start,
                 end: h.end,
+            })
+            .collect()
+    }))
+}
+
+/// A trigger that fired: rule `rule` matched line `line` first from
+/// `start` to `end`. `text` is the line with secrets of a known shape
+/// hidden and control characters out, for the app's notice or a capture.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct FiredView {
+    pub(crate) line: u32,
+    pub(crate) rule: u16,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) text: String,
+}
+
+/// The triggers prepared as `handle` that `lines`, finished lines of
+/// output, fire; `null` when the rules changed since, and the pane should
+/// prepare again. Bounded as `trigger_scan` is.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn trigger_fire(
+    triggers: State<'_, Triggers>,
+    handle: u32,
+    lines: Vec<String>,
+) -> Result<Option<Vec<FiredView>>, CommandError> {
+    let bytes: usize = lines.iter().map(String::len).sum();
+    if lines.len() > MAX_SCAN_LINES || bytes > 4 * MAX_SCAN_BYTES {
+        return Err(invalid("too much text to scan at once"));
+    }
+    let book = Arc::clone(match &*triggers {
+        Triggers::Ready(book) => book,
+        Triggers::Unavailable(_) => return Ok(Some(Vec::new())),
+    });
+    let fired = tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        book.fire(handle, &refs)
+    })
+    .await
+    .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
+    Ok(fired.map(|fired| {
+        fired
+            .into_iter()
+            .map(|f| FiredView {
+                line: f.line,
+                rule: f.rule,
+                start: f.start,
+                end: f.end,
+                text: f.text,
             })
             .collect()
     }))

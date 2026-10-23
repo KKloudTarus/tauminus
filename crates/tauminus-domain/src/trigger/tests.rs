@@ -272,3 +272,87 @@ fn a_match_that_overlaps_an_earlier_rule_s_is_left_out_whole() {
     let matcher = Matcher::new(&[&rule("bc", false), &rule("abcd", false)]).unwrap();
     assert_eq!(spans(&matcher, &["abcd"]), vec![(0, 0, 1, 3)]);
 }
+
+fn trigger(pattern: &str, action: Action) -> TriggerRule {
+    TriggerRule {
+        name: Label::parse(pattern).unwrap(),
+        pattern: RulePattern::parse(pattern).unwrap(),
+        action,
+        enabled: true,
+    }
+}
+
+#[test]
+fn text_to_send_is_plain_and_enter_is_its_own_choice() {
+    assert!(SendText::new("yes".into(), true).is_ok());
+    assert!(SendText::new(String::new(), true).is_ok());
+    assert_eq!(
+        SendText::new(String::new(), false),
+        Err(TriggerError::EmptySend)
+    );
+    assert_eq!(
+        SendText::new("y\r".into(), false),
+        Err(TriggerError::SendControl)
+    );
+    assert_eq!(
+        SendText::new("\u{1b}[201~rm -rf ~".into(), false),
+        Err(TriggerError::SendControl)
+    );
+    assert_eq!(
+        SendText::new("x".repeat(MAX_SEND + 1), false),
+        Err(TriggerError::LongSend)
+    );
+}
+
+#[test]
+fn each_trigger_fires_once_per_line_and_highlights_are_not_triggers() {
+    let rules = [
+        trigger("ERROR", Action::Notify),
+        rule("ERROR", false),
+        trigger(r"ERROR \d+", Action::Capture),
+    ];
+    let refs: Vec<&TriggerRule> = rules.iter().collect();
+    let triggers = TriggerMatcher::new(&refs).unwrap();
+    let names: Vec<Action> = triggers.actions().into_iter().map(|(_, a)| a).collect();
+    assert_eq!(names, [Action::Notify, Action::Capture]);
+    let fired = triggers.scan(&["ERROR 1 and ERROR 2", "fine", "an ERROR"]);
+    let summary: Vec<(u32, u16, u32, u32)> = fired
+        .iter()
+        .map(|f| (f.line, f.rule, f.start, f.end))
+        .collect();
+    // Both rules on the first line, each at its first match; one on the third.
+    assert_eq!(summary, [(0, 0, 0, 5), (0, 1, 0, 7), (2, 0, 3, 8)]);
+    // The highlights' own matcher leaves the triggers out.
+    let highlights = Matcher::new(&refs).unwrap();
+    assert_eq!(highlights.styles().len(), 1);
+}
+
+#[test]
+fn a_fired_line_hides_secrets_and_controls_before_it_leaves() {
+    let triggers = TriggerMatcher::new(&[&trigger("export", Action::Capture)]).unwrap();
+    let fired = triggers
+        .scan(&["export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\u{7}"]);
+    let text = &fired[0].text;
+    assert!(!text.contains("wJalrXUtnFEMI"), "{text}");
+    assert!(!text.contains('\u{7}'));
+    let long = format!("export {}", "x".repeat(MAX_FIRED_TEXT * 2));
+    assert!(triggers.scan(&[long.as_str()])[0].text.len() <= MAX_FIRED_TEXT);
+}
+
+#[test]
+fn a_scan_fires_at_most_a_bounded_number() {
+    let triggers = TriggerMatcher::new(&[&trigger("x", Action::Notify)]).unwrap();
+    let lines: Vec<&str> = vec!["x"; MAX_SCAN_LINES];
+    assert_eq!(triggers.scan(&lines).len(), MAX_FIRED);
+}
+
+#[test]
+fn a_private_key_line_alone_and_unseen_characters_do_not_leave() {
+    let triggers = TriggerMatcher::new(&[&trigger(".", Action::Capture)]).unwrap();
+    let fired = triggers.scan(&[
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+        "evil\u{202e}txt.exe\u{200b}",
+    ]);
+    assert_eq!(fired[0].text, "•••");
+    assert_eq!(fired[1].text, "eviltxt.exe");
+}

@@ -45,10 +45,12 @@ fn rule(pattern: &str, fg: Option<&str>, bg: Option<&str>) -> RuleSpec {
         name: pattern.to_owned(),
         pattern: pattern.to_owned(),
         enabled: true,
-        style: StyleSpec {
-            fg: fg.map(str::to_owned),
-            bg: bg.map(str::to_owned),
-            line: false,
+        action: ActionSpec::Highlight {
+            style: StyleSpec {
+                fg: fg.map(str::to_owned),
+                bg: bg.map(str::to_owned),
+                line: false,
+            },
         },
     }
 }
@@ -74,11 +76,13 @@ async fn a_set_reads_back_as_the_view_sent_it() {
     assert_eq!(views.len(), 1);
     assert_eq!(views[0].name, "Errors");
     assert_eq!(
-        views[0].rules[0].style,
-        StyleSpec {
-            fg: Some("1".into()),
-            bg: Some("#200000".into()),
-            line: false,
+        views[0].rules[0].action,
+        ActionSpec::Highlight {
+            style: StyleSpec {
+                fg: Some("1".into()),
+                bg: Some("#200000".into()),
+                line: false,
+            }
         }
     );
     assert_eq!(views[0].rank, None);
@@ -131,4 +135,20 @@ async fn the_view_carries_the_order_of_the_sets_every_session_gets() {
             ("c".into(), Some(0))
         ]
     );
+}
+
+#[test]
+fn text_to_send_holds_no_control_characters() {
+    let send = |text: &str, enter: bool| RuleSpec {
+        action: ActionSpec::Send {
+            text: text.to_owned(),
+            enter,
+        },
+        ..rule("x", None, None)
+    };
+    assert!(parse(id("s"), input("s", vec![send("yes", true)])).is_ok());
+    for (text, enter) in [("y\r", false), ("\u{1b}[201~", false), ("", false)] {
+        let error = parse(id("s"), input("s", vec![send(text, enter)])).unwrap_err();
+        assert!(error.message.starts_with("rule 1:"), "{}", error.message);
+    }
 }

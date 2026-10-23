@@ -77,6 +77,12 @@ pub enum TriggerError {
     NoSuch(TriggerSetId),
     #[error("these rules together are too large to match: {0}")]
     TooLarge(String),
+    #[error("text to send is at most {MAX_SEND} bytes")]
+    LongSend,
+    #[error("text to send holds no control characters; Enter is its own choice")]
+    SendControl,
+    #[error("a rule sends text, Enter, or both")]
+    EmptySend,
 }
 
 /// A colour: one of the terminal's 16 palette colours, so it follows the
@@ -156,10 +162,67 @@ impl Highlight {
     }
 }
 
+/// Longest text a rule sends, in bytes.
+pub const MAX_SEND: usize = 1024;
+/// Longest text of a line a trigger hands on (to a notice or a capture),
+/// in bytes.
+pub const MAX_FIRED_TEXT: usize = 1024;
+/// Most triggers one scan fires.
+pub const MAX_FIRED: usize = 256;
+
+/// Text a rule types into the session, then Enter if `enter`. It holds no
+/// control characters: they act as editing keys in a shell, and an escape
+/// could end a bracketed paste. Nothing from the match goes into it: the
+/// host would choose what runs.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SendText {
+    text: String,
+    enter: bool,
+}
+
+impl SendText {
+    pub fn new(text: String, enter: bool) -> Result<Self, TriggerError> {
+        if text.len() > MAX_SEND {
+            return Err(TriggerError::LongSend);
+        }
+        if text.chars().any(char::is_control) {
+            return Err(TriggerError::SendControl);
+        }
+        if text.is_empty() && !enter {
+            return Err(TriggerError::EmptySend);
+        }
+        Ok(Self { text, enter })
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn enter(&self) -> bool {
+        self.enter
+    }
+}
+
 /// What a rule does when it matches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Action {
+    /// Colours the match where it shows.
     Highlight(Highlight),
+    /// Tells the user, in the app and, while the window is in the back, the
+    /// system's notifications.
+    Notify,
+    /// Keeps the line, for the user to read and copy later.
+    Capture,
+    /// Types text into the session, as the user would.
+    Send(SendText),
+}
+
+impl Action {
+    /// A highlight colours what shows; the rest are triggers, run once per
+    /// line as output comes.
+    pub fn is_highlight(&self) -> bool {
+        matches!(self, Self::Highlight(_))
+    }
 }
 
 /// A pattern whose syntax was checked. Compiling waits until a pane needs
@@ -284,8 +347,10 @@ impl TriggerSet {
         if rules.len() > MAX_SET_RULES {
             return Err(TriggerError::TooManyRules);
         }
-        let refs: Vec<&TriggerRule> = rules.iter().collect();
-        Matcher::within(&refs, size)?;
+        for rule in &rules {
+            rule.pattern.compile()?;
+        }
+        compile_set(rules.iter().map(|r| r.pattern.as_str()), size)?;
         Ok(Self { id, name, rules })
     }
 
@@ -424,19 +489,19 @@ impl Matcher {
     }
 
     /// As [`Matcher::new`], with the rules' compiled size limited to `size`.
+    /// Rules that are not highlights are left out.
     fn within(rules: &[&TriggerRule], size: usize) -> Result<Self, TriggerError> {
-        let set = RegexSetBuilder::new(rules.iter().map(|r| r.pattern.as_str()))
-            .size_limit(size)
-            .dfa_size_limit(SET_DFA_SIZE)
-            .nest_limit(NEST_LIMIT)
-            .build()
-            .map_err(|e| TriggerError::TooLarge(first_line(&e.to_string())))?;
-        let rules = rules
+        let rules: Vec<(&TriggerRule, Highlight)> = rules
             .iter()
-            .map(|r| {
-                let Action::Highlight(style) = r.action;
-                Ok((r.pattern.compile()?, style))
+            .filter_map(|r| match r.action {
+                Action::Highlight(style) => Some((*r, style)),
+                _ => None,
             })
+            .collect();
+        let set = compile_set(rules.iter().map(|(r, _)| r.pattern.as_str()), size)?;
+        let rules = rules
+            .into_iter()
+            .map(|(r, style)| Ok((r.pattern.compile()?, style)))
             .collect::<Result<_, TriggerError>>()?;
         Ok(Self { set, rules })
     }
@@ -520,6 +585,136 @@ impl Matcher {
             }
         }
         hits
+    }
+}
+
+/// The rules' patterns as one set, within `size`.
+fn compile_set<'a>(
+    patterns: impl Iterator<Item = &'a str>,
+    size: usize,
+) -> Result<RegexSet, TriggerError> {
+    RegexSetBuilder::new(patterns)
+        .size_limit(size)
+        .dfa_size_limit(SET_DFA_SIZE)
+        .nest_limit(NEST_LIMIT)
+        .build()
+        .map_err(|e| TriggerError::TooLarge(first_line(&e.to_string())))
+}
+
+/// A trigger that fired: rule `rule` (an index into
+/// [`TriggerMatcher::actions`]) matched line `line` first from `start` to
+/// `end`, in code points. `text` is the line as it may be shown or kept:
+/// secrets of a known shape hidden, control characters out, at most
+/// [`MAX_FIRED_TEXT`] bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fired {
+    pub line: u32,
+    pub rule: u16,
+    pub start: u32,
+    pub end: u32,
+    pub text: String,
+}
+
+/// One session's trigger rules (all but highlights), compiled together.
+#[derive(Clone)]
+pub struct TriggerMatcher {
+    set: RegexSet,
+    rules: Vec<(Regex, Action, Label)>,
+}
+
+impl fmt::Debug for TriggerMatcher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TriggerMatcher")
+            .field("rules", &self.rules.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TriggerMatcher {
+    /// Compiles the rules of `rules` that are not highlights, in precedence
+    /// order, within the size limit.
+    pub fn new(rules: &[&TriggerRule]) -> Result<Self, TriggerError> {
+        let rules: Vec<&TriggerRule> = rules
+            .iter()
+            .copied()
+            .filter(|r| !r.action.is_highlight())
+            .collect();
+        let set = compile_set(rules.iter().map(|r| r.pattern.as_str()), SET_SIZE)?;
+        let rules = rules
+            .into_iter()
+            .map(|r| Ok((r.pattern.compile()?, r.action.clone(), r.name.clone())))
+            .collect::<Result<_, TriggerError>>()?;
+        Ok(Self { set, rules })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
+    }
+
+    /// Rule `index`'s name and action. O(1).
+    pub fn action(&self, index: usize) -> Option<(&Label, &Action)> {
+        self.rules
+            .get(index)
+            .map(|(_, action, name)| (name, action))
+    }
+
+    /// Each rule's name and what it does, by the index fired triggers
+    /// carry.
+    pub fn actions(&self) -> Vec<(Label, Action)> {
+        self.rules
+            .iter()
+            .map(|(_, action, name)| (name.clone(), action.clone()))
+            .collect()
+    }
+
+    /// Each rule that matches each line, once per line, at its first
+    /// match, in rule order. Rules do not hide each other: each does its
+    /// own thing. Bounded as [`Matcher::scan`] is, and at most
+    /// [`MAX_FIRED`]. O(Σ n · m) for m rules that match a line.
+    pub fn scan(&self, lines: &[&str]) -> Vec<Fired> {
+        let mut fired = Vec::new();
+        let mut budget = MAX_SCAN_BYTES;
+        for (index, line) in lines.iter().take(MAX_SCAN_LINES).enumerate() {
+            let line = cut(line, MAX_SCAN_LINE.min(budget));
+            if line.is_empty() && budget == 0 {
+                break;
+            }
+            budget -= line.len();
+            let matched = self.set.matches(line);
+            if !matched.matched_any() {
+                continue;
+            }
+            // Made only for a rule that hands the line on: send rules do not.
+            let mut text: Option<String> = None;
+            for rule in &matched {
+                if fired.len() == MAX_FIRED {
+                    return fired;
+                }
+                let Some(m) = self.rules[rule].0.find(line) else {
+                    continue;
+                };
+                let chars = code_points(line, [m.start(), m.end()].into_iter());
+                let at = |byte: usize| {
+                    chars
+                        .binary_search_by_key(&byte, |&(b, _)| b)
+                        .map_or(0, |i| chars[i].1)
+                };
+                let shown = if matches!(self.rules[rule].1, Action::Send(_)) {
+                    String::new()
+                } else {
+                    text.get_or_insert_with(|| crate::history::shown_safely(line, MAX_FIRED_TEXT))
+                        .clone()
+                };
+                fired.push(Fired {
+                    line: u32::try_from(index).unwrap_or(u32::MAX),
+                    rule: u16::try_from(rule).unwrap_or(u16::MAX),
+                    start: at(m.start()),
+                    end: at(m.end()),
+                    text: shown,
+                });
+            }
+        }
+        fired
     }
 }
 
