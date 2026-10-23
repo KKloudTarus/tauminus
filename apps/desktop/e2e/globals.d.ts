@@ -5,4 +5,6 @@
 // A script file, so this merges into the global Window type.
 interface Window {
   tauminusOpenedLinks?: string[];
+  /** Pretends files were dropped on the window; see src/ipc/fake-files.ts. */
+  tauminusTestDrop?: (paths: string[]) => void;
 }

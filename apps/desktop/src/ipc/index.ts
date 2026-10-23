@@ -4,6 +4,7 @@
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
 import type { TextClipboard } from "./clipboard.ts";
+import type { FilesClient } from "./files.ts";
 import type { ForwardsClient } from "./forwards.ts";
 import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
@@ -27,6 +28,17 @@ export {
   tauriHosts,
 } from "./hosts.ts";
 export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
+export {
+  type ChangeSpec,
+  type DroppedFiles,
+  type EditView,
+  type EntryView,
+  type FilesClient,
+  type Listing,
+  type SftpHandle,
+  type TransferView,
+  tauriFiles,
+} from "./files.ts";
 export {
   type ForwardKindSpec,
   type ForwardSpec,
@@ -128,4 +140,12 @@ export async function forwardsClient(
     return (await import("./fake-forwards.ts")).fakeForwards(ruleLabel);
   }
   return (await import("./forwards.ts")).tauriForwards;
+}
+
+/** Files on hosts and here; the `e2e` build keeps both sides in memory. */
+export async function filesClient(): Promise<FilesClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-files.ts")).fakeFiles();
+  }
+  return (await import("./files.ts")).tauriFiles;
 }

@@ -129,8 +129,8 @@ Goal: Termius Starter parity on desktop.
 
 ### Scope
 
-- [ ] SFTP dual pane, drag and drop from the OS, edit remote file with re-upload, chmod, resume on reconnect
-- [ ] Local, remote, and dynamic forwarding; saved rules; start and stop from the palette
+- [x] SFTP dual pane, drag and drop from the OS, edit remote file with re-upload, chmod, resume on reconnect
+- [x] Local, remote, and dynamic forwarding; saved rules; start and stop from the palette
 - [ ] Snippets with folders and `{{variable}}` placeholders; startup snippets per host
 - [ ] Run a snippet on many hosts; broadcast input to selected panes with instant Ctrl+C
 - [ ] Workspaces: save and restore layouts with their hosts
@@ -143,8 +143,8 @@ Goal: Termius Starter parity on desktop.
 
 ### Exit criteria
 
-- [ ] SFTP: 1 GB upload and download checksum match; interrupted transfer resumes
-- [ ] Forwarding tests in CI for all three types
+- [x] SFTP: 1 GB upload and download checksum match; interrupted transfer resumes
+- [x] Forwarding tests in CI for all three types
 - [ ] Reconnect test: kill the network for 30 s, session resumes and `tmux` reattaches
 - [ ] Telnet test against a local `telnetd`; serial test against a virtual port pair
 

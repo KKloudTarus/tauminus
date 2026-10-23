@@ -6,6 +6,9 @@
 
 mod clipboard;
 mod commands;
+mod drops;
+mod edit;
+mod files;
 mod forwards;
 mod history;
 mod hosts;
@@ -50,6 +53,20 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         forwards::forward_start,
         forwards::forward_stop,
         forwards::forwards_status,
+        files::sftp_open,
+        files::sftp_close,
+        files::sftp_list,
+        files::sftp_change,
+        files::local_list,
+        files::local_home,
+        files::transfer_download,
+        files::transfer_upload,
+        files::transfers_status,
+        files::transfer_cancel,
+        drops::file_drops,
+        edit::sftp_edit,
+        edit::edit_done,
+        edit::edits_status,
         hosts::guard_check,
         links::open_link,
         clipboard::clipboard_read_text,
@@ -104,6 +121,11 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         AgentSource::Environment,
     ));
     let connections = Arc::new(tauminus_app::Connections::new(Arc::clone(&connector)));
+    app.manage(Arc::new(tauminus_app::Files::new(Arc::clone(&connections))));
+    app.manage(files::UploadState(config_dir.join("transfers")));
+    app.manage(files::Home(home.clone()));
+    app.manage(drops::Drops::default());
+    app.manage(Arc::new(edit::Edits::new(edit::edit_root())));
     app.manage(Arc::new(tauminus_app::Forwards::new(connections)));
     app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
     app.manage(sessions);
@@ -167,6 +189,25 @@ pub fn run() -> anyhow::Result<()> {
                 home: app.path().home_dir().ok(),
             };
             install(app, paths);
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = app.handle().clone();
+                let this = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop {
+                        paths,
+                        position,
+                    }) = event
+                    {
+                        // Per drop: the window may have moved to another screen.
+                        let scale = this.scale_factor().unwrap_or(1.0);
+                        handle.state::<drops::Drops>().dropped(
+                            paths,
+                            position.x / scale,
+                            position.y / scale,
+                        );
+                    }
+                });
+            }
             Ok(())
         })
         // A reload or navigation destroys every view, and nothing can attach

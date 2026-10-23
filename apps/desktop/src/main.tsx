@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "@/app/App.tsx";
 import { AppShell } from "@/app/shell.ts";
 import {
+  filesClient,
   forwardsClient,
   historyClient,
   hostsClient,
@@ -29,6 +30,7 @@ const shell = new AppShell({
   vault: await vaultClient(),
   history: await historyClient(),
   forwards: await forwardsClient((host, rule) => ruleLabel(host, rule)),
+  files: await filesClient(),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),

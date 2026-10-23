@@ -17,7 +17,9 @@ import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
+import { FilesStore } from "@/features/files/files-store.ts";
 import type {
+  FilesClient,
   ForwardsClient,
   HistoryClient,
   HostView,
@@ -60,6 +62,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "vault.lock": "Lock the vault",
   "history.open": "Search the command history",
   "forwards.open": "Port forwarding",
+  "files.open": "Files on this host (SFTP)",
 };
 
 interface ShellState {
@@ -68,6 +71,8 @@ interface ShellState {
   vaultOpen: boolean;
   historyOpen: boolean;
   forwardsOpen: boolean;
+  /** The host whose files are open, if any. */
+  files: { host: HostView; store: FilesStore } | undefined;
   sidebarOpen: boolean;
   theme: ThemePreference;
 }
@@ -81,6 +86,8 @@ export class AppShell {
   readonly workspace: Workspace<TerminalController, SessionSpec>;
   readonly hosts: HostsStore;
   readonly vault: VaultStore;
+  /** Files on hosts, when this window has a backend for them. */
+  readonly files: FilesClient | undefined;
   /** Port forwarding, when this window has a backend for it. */
   readonly forwards: ForwardsStore | undefined;
   /** A connect waiting for the vault to unlock. */
@@ -102,6 +109,7 @@ export class AppShell {
     /** Where commands are recorded; none keeps no history. */
     history?: HistoryClient;
     forwards?: ForwardsClient;
+    files?: FilesClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -121,6 +129,7 @@ export class AppShell {
     this.keymap = keymap;
     this.hosts = new HostsStore(options.hosts);
     this.vault = new VaultStore(options.vault, undefined, options.storage);
+    this.files = options.files;
     this.forwards = options.forwards
       ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
       : undefined;
@@ -130,6 +139,7 @@ export class AppShell {
       vaultOpen: false,
       historyOpen: false,
       forwardsOpen: false,
+      files: undefined,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
     };
@@ -199,6 +209,21 @@ export class AppShell {
     if (this.#state.historyOpen === open) return;
     this.#set({ ...this.#state, historyOpen: open });
     if (!open) this.#focusActivePane();
+  }
+
+  /** Opens the files of a saved host, closing any others first. */
+  openFiles(host: HostView): void {
+    if (!this.files) return;
+    this.#state.files?.store.close();
+    const store = new FilesStore(this.files, host.id, (retry) => this.unlockVaultThen(retry));
+    this.#set({ ...this.#state, files: { host, store } });
+    void store.open();
+  }
+
+  closeFiles(): void {
+    this.#state.files?.store.close();
+    this.#set({ ...this.#state, files: undefined });
+    this.#focusActivePane();
   }
 
   setForwardsOpen(open: boolean): void {
@@ -293,6 +318,16 @@ export class AppShell {
       case "forwards.open":
         this.setForwardsOpen(true);
         return;
+      case "files.open": {
+        const spec = this.workspace.focusedSpec();
+        const host =
+          spec?.kind === "host"
+            ? this.hosts.getSnapshot().view.hosts.find((h) => h.id === spec.hostId)
+            : undefined;
+        if (host) this.openFiles(host);
+        else this.hosts.notify("Open files from a saved host: its ▤ button in the sidebar");
+        return;
+      }
       case "vault.lock":
         this.vault.lock().catch((error: unknown) => console.warn("lock failed", error));
         return;

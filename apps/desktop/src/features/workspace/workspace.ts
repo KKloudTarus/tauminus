@@ -94,6 +94,12 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
   }
 
   /** Opens a tab with one pane and makes it active. Returns false at the pane limit. */
+  /** What the focused pane of the active tab was opened with. O(t). */
+  focusedSpec(): S | undefined {
+    const tab = this.#snapshot.tabs.find((t) => t.id === this.#snapshot.activeTabId);
+    return tab ? this.#terminals.get(tab.focused)?.spec : undefined;
+  }
+
   newTab(spec?: S): boolean {
     if (this.#disposed || this.#terminals.size >= MAX_PANES) {
       return false;
