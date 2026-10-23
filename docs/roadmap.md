@@ -159,7 +159,7 @@ Goal: beat Termius Pro.
 - [x] Triggers: regex match runs highlight, notify, send text, or capture
 - [x] Highlight sets per host and group
 - [ ] Autocomplete from forked Fig specs for bash and zsh hosts
-- [ ] Password suggestion at detected prompts from identities
+- [x] Password suggestion at detected prompts from identities
 - [ ] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
 - [ ] `tmux` control mode: `tmux` windows as native tabs
 - [ ] FIDO2 `sk-` keys through the agent, then direct signing with `ctap-hid-fido2`
