@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
+    AiKey, HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
     RecordingKeys, VaultBackend, VaultError,
 };
 use zeroize::Zeroizing;
@@ -389,6 +389,37 @@ impl OpenPort for Opened {
         Ok((recording_keys(&pair), true))
     }
 
+    /// Kept as the origin, a NUL, and the key.
+    fn ai_key(&self) -> Result<Option<AiKey>, VaultError> {
+        let Some(stored) = self.vault.get(AI_KEY) else {
+            return Ok(None);
+        };
+        let corrupt = || VaultError::Corrupt("the AI key record is damaged".into());
+        let split = stored.iter().position(|&b| b == 0).ok_or_else(corrupt)?;
+        let origin = std::str::from_utf8(&stored[..split]).map_err(|_| corrupt())?;
+        let key = std::str::from_utf8(&stored[split + 1..]).map_err(|_| corrupt())?;
+        Ok(Some(AiKey {
+            origin: origin.to_owned(),
+            key: Secret::new(key.to_owned()),
+        }))
+    }
+
+    fn set_ai_key(&mut self, key: Option<&AiKey>) -> Result<(), VaultError> {
+        let Some(key) = key else {
+            self.vault.remove(AI_KEY);
+            return Ok(());
+        };
+        if key.origin.contains('\0') {
+            return Err(VaultError::Invalid("the origin holds a NUL".into()));
+        }
+        let mut plain = Vec::with_capacity(key.origin.len() + 1 + key.key.len());
+        plain.extend_from_slice(key.origin.as_bytes());
+        plain.push(0);
+        plain.extend_from_slice(key.key.as_bytes());
+        // `put` wipes what it is given.
+        self.vault.put(AI_KEY, plain).map_err(port_error)
+    }
+
     /// Saves, then brings the keychain in line with the file.
     fn save(&mut self) -> Result<(), VaultError> {
         self.vault.save(&self.file).map_err(port_error)?;
@@ -529,6 +560,8 @@ impl Opened {
     }
 }
 
+/// The AI assistant's API key.
+const AI_KEY: &str = "ai-key";
 /// Vault records holding the history's keys.
 const HISTORY_DATABASE: &str = "history-database";
 /// Never rotated: every recording made is sealed to it.

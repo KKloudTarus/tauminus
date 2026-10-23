@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "@/app/App.tsx";
 import { AppShell } from "@/app/shell.ts";
 import {
+  aiClient,
   filesClient,
   forwardsClient,
   historyClient,
@@ -37,6 +38,7 @@ const shell = new AppShell({
   files: await filesClient(),
   serial: await serialClient(),
   recordings: await recordingsClient(),
+  ai: await aiClient(),
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),

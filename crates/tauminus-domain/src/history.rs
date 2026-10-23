@@ -8,6 +8,8 @@ use thiserror::Error;
 
 mod redact;
 
+pub(crate) use redact::redact;
+
 /// Longest command kept; a longer one is cut. 4 KiB covers a pasted
 /// one-liner, not a pasted file.
 pub const MAX_COMMAND: usize = 4 * 1024;
@@ -45,13 +47,13 @@ impl HistoryEntry {
         // Hidden before the cut, so a token the cut ends short of a known
         // shape is hidden whole.
         let command = clean(
-            &redact::redact(&clean(&self.command, MAX_COMMAND + REDACT_SLACK)),
+            &redact(&clean(&self.command, MAX_COMMAND + REDACT_SLACK)),
             MAX_COMMAND,
         )
         .replace(['\n', '\t'], " ");
         command.trim().clone_into(&mut self.command);
         self.output = clean(
-            &redact::redact(&clean(&self.output, MAX_OUTPUT + REDACT_SLACK)),
+            &redact(&clean(&self.output, MAX_OUTPUT + REDACT_SLACK)),
             MAX_OUTPUT,
         );
         self.label = clean(&self.label, 256);
@@ -90,7 +92,7 @@ pub(crate) fn shown_safely(text: &str, max: usize) -> String {
         .filter(|&c| !invisible(c))
         .take(max + SHOWN_SLACK)
         .collect();
-    clean(&redact::redact(&clean(&visible, max + SHOWN_SLACK)), max).replace(['\n', '\t'], " ")
+    clean(&redact(&clean(&visible, max + SHOWN_SLACK)), max).replace(['\n', '\t'], " ")
 }
 
 /// Bytes past the kept text that [`shown_safely`] reads to find secrets.
@@ -98,18 +100,27 @@ const SHOWN_SLACK: usize = 512;
 
 /// Characters that change how text reads without being seen.
 pub fn invisible(c: char) -> bool {
+    // Unicode's default-ignorable code points, and the Hangul fillers that
+    // draw as blanks.
     matches!(
         c,
         '\u{ad}'
+            | '\u{34f}'
             | '\u{61c}'
-            | '\u{180e}'
+            | '\u{115f}'..='\u{1160}'
+            | '\u{17b4}'..='\u{17b5}'
+            | '\u{180b}'..='\u{180f}'
             | '\u{200b}'..='\u{200f}'
             | '\u{2028}'..='\u{202e}'
             | '\u{2060}'..='\u{206f}'
+            | '\u{3164}'
             | '\u{fe00}'..='\u{fe0f}'
             | '\u{feff}'
-            | '\u{fff9}'..='\u{fffb}'
-            | '\u{e0000}'..='\u{e007f}'
+            | '\u{ffa0}'
+            | '\u{fff0}'..='\u{fffb}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0000}'..='\u{e0fff}'
     )
 }
 

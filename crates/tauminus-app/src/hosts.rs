@@ -136,6 +136,11 @@ impl HostBook {
         self.inventory.lock().await.records_history(id)
     }
 
+    /// Whether the AI assistant may read what a host printed. O(d).
+    pub async fn sends_output_to_ai(&self, id: &HostId) -> Result<bool, HostsError> {
+        self.inventory.lock().await.sends_output_to_ai(id)
+    }
+
     /// The address a host is saved with now. O(log H).
     pub async fn address(&self, id: &HostId) -> Option<HostName> {
         self.inventory

@@ -280,9 +280,29 @@ pub trait OpenVault: Send {
     /// just made and the vault must be saved. It outlives password changes:
     /// a recording is sealed to it for good.
     fn recording_keys(&mut self) -> Result<(RecordingKeys, bool), VaultError>;
+    /// The AI assistant's API key, if one is saved.
+    fn ai_key(&self) -> Result<Option<AiKey>, VaultError>;
+    /// Saves the AI assistant's API key, or removes it.
+    fn set_ai_key(&mut self, key: Option<&AiKey>) -> Result<(), VaultError>;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
+}
+
+/// An API key for the AI assistant, and the one origin it may be sent to.
+/// Wiped when dropped.
+#[derive(Clone)]
+pub struct AiKey {
+    pub origin: String,
+    pub key: Secret,
+}
+
+impl std::fmt::Debug for AiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AiKey")
+            .field("origin", &self.origin)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The key pair recordings are sealed to. Wiped when dropped.
@@ -689,6 +709,22 @@ impl Vault {
                 private_key: identity.private_key,
                 passphrase: identity.passphrase,
             })
+        })
+        .await
+    }
+
+    /// The AI assistant's API key. Needs the vault unlocked, and counts as
+    /// use.
+    pub async fn ai_key(&self) -> Result<Option<AiKey>, VaultError> {
+        self.with_open(|vault| Ok(vault.ai_key()?)).await
+    }
+
+    /// Saves the AI assistant's API key, or removes it, and saves the vault.
+    pub async fn save_ai_key(&self, key: Option<AiKey>) -> Result<(), VaultError> {
+        self.with_open(move |vault| {
+            vault.set_ai_key(key.as_ref())?;
+            vault.save()?;
+            Ok(())
         })
         .await
     }

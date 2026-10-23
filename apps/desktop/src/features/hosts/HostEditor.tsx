@@ -121,6 +121,8 @@ function encodingChoice(value: string): EncodingSpec | "inherit" {
 export interface SessionFieldsState {
   forwardAgent: GuardChoice;
   history: GuardChoice;
+  /** Whether the AI assistant may read the output. */
+  aiOutput: GuardChoice;
   /** The shell's character set, or `inherit`. */
   encoding: EncodingSpec | "inherit";
   /** A tmux session name; `inherit`, or `off` to turn a group's off. */
@@ -132,9 +134,11 @@ export interface SessionFieldsState {
 export function sessionFields(settings: SettingsSpec | undefined): SessionFieldsState {
   const agent = settings?.forwardAgent;
   const history = settings?.history;
+  const aiOutput = settings?.aiOutput;
   return {
     forwardAgent: agent == null ? "inherit" : agent ? "on" : "off",
     history: history == null ? "inherit" : history ? "on" : "off",
+    aiOutput: aiOutput == null ? "inherit" : aiOutput ? "on" : "off",
     encoding: settings?.encoding ?? "inherit",
     tmux: settings?.tmux == null ? "inherit" : settings.tmux === "" ? "off" : settings.tmux,
     env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
@@ -161,6 +165,7 @@ export function withSession(base: SettingsSpec, fields: SessionFieldsState): Set
     ...base,
     forwardAgent: fields.forwardAgent === "inherit" ? null : fields.forwardAgent === "on",
     history: fields.history === "inherit" ? null : fields.history === "on",
+    aiOutput: fields.aiOutput === "inherit" ? null : fields.aiOutput === "on",
     encoding: fields.encoding === "inherit" ? null : fields.encoding,
     tmux:
       fields.tmux.trim() === "" || fields.tmux === "inherit"
@@ -702,6 +707,17 @@ function SessionFields({
             className={FIELD}
           >
             <option value="inherit">Inherit (on by default)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </Field>
+        <Field label="Let the AI assistant read this host's output">
+          <select
+            value={value.aiOutput}
+            onChange={(e) => set({ aiOutput: guardChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">Inherit (off by default)</option>
             <option value="on">On</option>
             <option value="off">Off</option>
           </select>

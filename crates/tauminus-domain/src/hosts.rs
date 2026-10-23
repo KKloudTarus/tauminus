@@ -282,6 +282,9 @@ pub struct Settings {
     /// Whether commands run here go into the history; `None` inherits, and
     /// the root default is on.
     pub history: Option<bool>,
+    /// Whether the AI assistant may read what this host printed; `None`
+    /// inherits, and the root default is off.
+    pub ai_output: Option<bool>,
     /// The terminal's character set; `None` inherits, and the root default
     /// is UTF-8.
     pub encoding: Option<Encoding>,
@@ -675,6 +678,16 @@ impl Inventory {
             .unwrap_or(true))
     }
 
+    /// Whether the AI assistant may read what a host printed. Off unless the
+    /// host or a group turns it on, unlike the history. O(d).
+    pub fn sends_output_to_ai(&self, id: &HostId) -> Result<bool, HostsError> {
+        Ok(self
+            .chain(id)?
+            .iter()
+            .find_map(|s| s.ai_output)
+            .unwrap_or(false))
+    }
+
     /// The highlight and trigger sets a host names, its own first, then
     /// each group's from the nearest up, each once. O(d·k).
     pub fn triggers(&self, id: &HostId) -> Result<Vec<TriggerSetId>, HostsError> {
@@ -854,6 +867,7 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         forward_agent,
         identity,
         history,
+        ai_output,
         encoding,
         tmux
     );

@@ -16,6 +16,7 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates
+tauminus-ai = { path = "crates/tauminus-ai" }
 tauminus-app = { path = "crates/tauminus-app" }
 tauminus-charset = { path = "crates/tauminus-charset" }
 tauminus-domain = { path = "crates/tauminus-domain" }
@@ -32,6 +33,13 @@ anyhow = "1.0.104"
 # The OS clipboard, text only; WebKitGTK refuses navigator.clipboard reads.
 arboard = { version = "3.7.0", default-features = false }
 portable-pty = "0.9.0"
+# HTTPS for the AI assistant's server, in tauminus-ai only. No default
+# features: no proxy from the environment, no charset guessing, and rustls
+# on ring, which russh already brings, instead of aws-lc.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+# The OS's certificate store and checks, as reqwest's own rustls uses.
+rustls-platform-verifier = "0.7.1"
 # Highlight and trigger patterns: linear-time matching, so output a host
 # sends cannot make a pattern backtrack.
 regex = "1.13.1"

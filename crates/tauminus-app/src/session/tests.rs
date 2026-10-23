@@ -780,3 +780,43 @@ async fn the_tail_keeps_the_last_output_across_chunks_and_counts_it_all() {
     let (_, after) = h.sessions.tail(id).unwrap();
     assert!(h.sessions.mark_filled(id, after).unwrap());
 }
+
+#[test]
+fn recent_output_keeps_the_last_bytes_in_order_across_the_wrap() {
+    let mut recent = Recent::default();
+    let mut all = Vec::new();
+    // Chunks of odd sizes, crossing the end of the ring many times.
+    for (i, size) in [1, 700, RECENT_OUTPUT - 3, 5000, 1, RECENT_OUTPUT, 9000, 7]
+        .into_iter()
+        .enumerate()
+    {
+        let chunk: Vec<u8> = (0..size)
+            .map(|j| u8::try_from((i * 31 + j) % 251).unwrap())
+            .collect();
+        recent.push(&chunk);
+        all.extend_from_slice(&chunk);
+        let keep = all.len().min(RECENT_OUTPUT);
+        assert_eq!(
+            recent.last(RECENT_OUTPUT),
+            all[all.len() - keep..],
+            "after {i}"
+        );
+        assert_eq!(
+            recent.last(PROMPT_TAIL),
+            all[all.len() - keep.min(PROMPT_TAIL)..],
+            "tail after {i}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn recent_output_holds_what_the_session_showed() {
+    let h = Harness::new(config());
+    let (id, remote) = h.open_ok();
+    output(&remote, b"make: *** [all] Error 2\r\n").await;
+    settle().await;
+    assert_eq!(
+        h.sessions.recent(id).unwrap(),
+        b"make: *** [all] Error 2\r\n"
+    );
+}

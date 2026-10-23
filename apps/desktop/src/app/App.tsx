@@ -17,6 +17,7 @@ import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
 import { WorkspacesDialog } from "@/features/workspace/WorkspacesDialog.tsx";
 import { SnippetsDialog } from "@/features/snippets/SnippetsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
+import { AiDialog } from "@/features/ai/AiDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
@@ -41,6 +42,7 @@ export function App({ shell }: { shell: AppShell }) {
     recordingsOpen,
     triggersOpen,
     capturesOpen,
+    assistant,
     snippetToFill,
     snippetHosts,
     files,
@@ -110,6 +112,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.recordingsOpen ||
         state.triggersOpen ||
         state.capturesOpen ||
+        state.assistant !== undefined ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -191,6 +194,17 @@ export function App({ shell }: { shell: AppShell }) {
           hosts={savedHosts}
           onClose={() => shell.setHistoryOpen(false)}
           onInsert={(command) => shell.insertText(command)}
+          onCopy={(text) => shell.copyText(text)}
+          onUnlock={(retry) => shell.unlockVaultThen(retry)}
+        />
+      )}
+      {assistant && shell.ai && (
+        <AiDialog
+          client={shell.ai}
+          mode={assistant.mode}
+          session={assistant.session}
+          onClose={() => shell.closeAssistant()}
+          onInsert={(command) => shell.insertSuggestion(assistant.pane, command)}
           onCopy={(text) => shell.copyText(text)}
           onUnlock={(retry) => shell.unlockVaultThen(retry)}
         />

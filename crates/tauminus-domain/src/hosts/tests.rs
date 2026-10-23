@@ -655,6 +655,25 @@ fn history_is_on_unless_the_nearest_level_turns_it_off() {
 }
 
 #[test]
+fn the_ai_reads_output_only_where_the_nearest_level_turns_it_on() {
+    let mut root = group("root", None);
+    root.settings.ai_output = Some(true);
+    let mut team = group("team", Some("root"));
+    team.settings.ai_output = Some(false);
+    let open = host("open", Some("root"));
+    let shut = host("shut", Some("team"));
+    let mut own = host("own", Some("team"));
+    own.settings.ai_output = Some(true);
+    let free = host("free", None);
+    let inventory = Inventory::new(vec![root, team], vec![open, shut, own, free]).unwrap();
+    let reads = |id: &str| inventory.sends_output_to_ai(&hid(id)).unwrap();
+    assert!(reads("open"));
+    assert!(!reads("shut"));
+    assert!(reads("own"));
+    assert!(!reads("free"), "off by default");
+}
+
+#[test]
 fn a_host_starts_with_at_most_8_snippets_each_once() {
     use crate::{MAX_STARTUP, SnippetId};
     let id = |n: usize| SnippetId::parse(&format!("s{n}")).unwrap();

@@ -3,6 +3,7 @@
 
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
+import type { AiClient } from "./ai.ts";
 import type { TextClipboard } from "./clipboard.ts";
 import type { FilesClient } from "./files.ts";
 import type { ForwardsClient } from "./forwards.ts";
@@ -33,6 +34,14 @@ export {
   type SettingsSpec,
   tauriHosts,
 } from "./hosts.ts";
+export {
+  type AiClient,
+  type AiPreviewView,
+  type AiReplyView,
+  type AiSettingsSpec,
+  type AiSettingsView,
+  tauriAi,
+} from "./ai.ts";
 export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
 export {
   type ChangeSpec,
@@ -245,4 +254,12 @@ export async function recordingsClient(): Promise<RecordingsClient> {
     return fake;
   }
   return (await import("./recordings.ts")).tauriRecordings;
+}
+
+/** The AI assistant; the `e2e` build answers from a script. */
+export async function aiClient(): Promise<AiClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-ai.ts")).fakeAi();
+  }
+  return (await import("./ai.ts")).tauriAi;
 }

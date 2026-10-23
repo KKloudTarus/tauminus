@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 to 8. Domain types stay free of serde; these types
+//! The file format, versions 1 to 9. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
@@ -17,10 +17,12 @@ use tauminus_domain::{
 /// build refuses a newer file instead of dropping fields it does not know.
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
 /// encodings, version 5 Telnet hosts, version 6 tmux sessions, version 7
-/// Mosh hosts, and version 8 highlight sets; a file is written as the lowest version that
+/// Mosh hosts, version 8 highlight sets, and version 9 the AI's leave
+/// to read output; a file is written as the lowest version that
 /// holds what it has, so a build from before a feature keeps reading files
 /// that do not use it.
-const VERSION: u32 = 8;
+const VERSION: u32 = 9;
+const VERSION_WITHOUT_AI: u32 = 8;
 const VERSION_WITHOUT_TRIGGERS: u32 = 7;
 const VERSION_WITHOUT_MOSH: u32 = 6;
 const VERSION_WITHOUT_TMUX: u32 = 5;
@@ -131,6 +133,8 @@ struct SettingsRecord {
     identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ai_output: Option<bool>,
     /// A WHATWG label from the list the app offers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     encoding: Option<String>,
@@ -173,6 +177,7 @@ impl SettingsRecord {
             && self.forward_agent.is_none()
             && self.identity.is_none()
             && self.history.is_none()
+            && self.ai_output.is_none()
             && self.encoding.is_none()
             && self.tmux.is_none()
             && self.triggers.is_empty()
@@ -206,6 +211,8 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let ai = inventory.hosts().any(|h| h.settings.ai_output.is_some())
+        || inventory.groups().any(|g| g.settings.ai_output.is_some());
     let triggers = inventory.hosts().any(|h| !h.settings.triggers.is_empty())
         || inventory.groups().any(|g| !g.settings.triggers.is_empty());
     let mosh = inventory.hosts().any(|h| h.protocol == Protocol::Mosh);
@@ -217,8 +224,10 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if triggers {
+        version: if ai {
             VERSION
+        } else if triggers {
+            VERSION_WITHOUT_AI
         } else if mosh {
             VERSION_WITHOUT_TRIGGERS
         } else if tmux {
@@ -385,6 +394,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         forward_agent: s.forward_agent,
         identity: s.identity.as_ref().map(ToString::to_string),
         history: s.history,
+        ai_output: s.ai_output,
         encoding: s.encoding.map(|e| e.label().to_owned()),
         tmux: s.tmux.as_ref().map(|t| {
             t.session()
@@ -482,6 +492,7 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         guard: guard(r.guard)?,
         forward_agent: r.forward_agent,
         history: r.history,
+        ai_output: r.ai_output,
         encoding: r
             .encoding
             .map(|label| {

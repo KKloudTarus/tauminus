@@ -184,6 +184,7 @@ async fn settings_survive_a_round_trip_through_the_view() {
         }),
         forward_agent: Some(true),
         history: Some(false),
+        ai_output: Some(true),
         identity: Some("work-1".into()),
         encoding: Some(EncodingSpec::EucKr),
         tmux: Some("work".into()),

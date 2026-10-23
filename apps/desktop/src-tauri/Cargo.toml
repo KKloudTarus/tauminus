@@ -27,6 +27,7 @@ serde.workspace = true
 sha2 = "0.11"
 specta.workspace = true
 specta-typescript.workspace = true
+tauminus-ai.workspace = true
 tauminus-app.workspace = true
 tauminus-domain.workspace = true
 tauminus-pty.workspace = true

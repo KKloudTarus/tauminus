@@ -71,6 +71,10 @@ pub(crate) struct SettingsSpec {
     /// Record commands in the history; `null` inherits (on at the root).
     #[serde(default)]
     pub(crate) history: Option<bool>,
+    /// Let the AI assistant read this host's output; `null` inherits (off
+    /// at the root).
+    #[serde(default)]
+    pub(crate) ai_output: Option<bool>,
     /// Variables sent before the shell starts. A host's value for a name
     /// wins over its groups'.
     #[serde(default)]
@@ -416,6 +420,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         identities_only: s.identities_only,
         forward_agent: s.forward_agent,
         history: s.history,
+        ai_output: s.ai_output,
         encoding: s.encoding.map(EncodingSpec::from),
         tmux: s.tmux.as_ref().map(|t| {
             t.session()
@@ -491,6 +496,10 @@ fn tmux(name: Option<String>) -> Result<Option<Tmux>, CommandError> {
     .map_err(invalid)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one check per setting the view may send, in the order Settings has them"
+)]
 fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
     let too_long = |what: &str| invalid(format!("at most {MAX_LIST} {what}"));
     if spec.jumps.as_ref().is_some_and(|j| j.len() > MAX_LIST) {
@@ -575,6 +584,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         guard: guard_settings(spec.guard)?,
         forward_agent: spec.forward_agent,
         history: spec.history,
+        ai_output: spec.ai_output,
         encoding: spec.encoding.map(Encoding::from),
         tmux: tmux(spec.tmux)?,
         triggers: spec

@@ -11,6 +11,7 @@
 //! A file that does not parse is reported and never overwritten, so a bug
 //! or a newer version cannot destroy a user's list by saving over it.
 
+mod ai;
 mod format;
 pub mod history;
 mod history_backend;
@@ -33,7 +34,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rand::TryRng;
-use tauminus_app::ports::{BoxFuture, HostStore, SnippetStore, StoreError, TriggerStore};
+use tauminus_app::AiSettings;
+use tauminus_app::ports::{
+    AiSettingsStore, BoxFuture, HostStore, SnippetStore, StoreError, TriggerStore,
+};
 use tauminus_domain::{Inventory, Library};
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -200,6 +204,28 @@ impl TriggerStore for JsonTriggerStore {
 
     fn new_id(&self) -> String {
         new_id()
+    }
+}
+
+/// The AI assistant's settings, kept in `path`, usually `ai.json` in the
+/// app's config directory.
+#[derive(Debug, Clone)]
+pub struct JsonAiSettingsStore(JsonFile);
+
+impl JsonAiSettingsStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self(JsonFile::new(path, "AI settings"))
+    }
+}
+
+impl AiSettingsStore for JsonAiSettingsStore {
+    fn load(&self) -> BoxFuture<'_, Result<AiSettings, StoreError>> {
+        Box::pin(self.0.load(AiSettings::default, ai::from_json))
+    }
+
+    fn save<'a>(&'a self, settings: &'a AiSettings) -> BoxFuture<'a, Result<(), StoreError>> {
+        let bytes = ai::to_json(settings);
+        Box::pin(self.0.save(bytes))
     }
 }
 

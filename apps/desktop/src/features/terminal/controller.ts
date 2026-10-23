@@ -243,6 +243,8 @@ export class TerminalController {
   readonly #turn = (): boolean => this.#attempt();
   /** Set while a pointer event is being handled, so its keys stay here. */
   #fromPointer = false;
+  /** Set while a command an AI suggested is pasted: it is for this pane. */
+  #inserting = false;
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
@@ -456,7 +458,7 @@ export class TerminalController {
       this.#checkFill();
       // Wheel scrolling and Alt+click send arrow keys worked out from this
       // pane's screen; they mean nothing in another.
-      if (!this.#fromPointer) this.#onInput?.(data);
+      if (!this.#fromPointer && !this.#inserting) this.#onInput?.(data);
       if (data === "\u0003") this.interrupt();
       else this.type(data);
     });
@@ -642,6 +644,36 @@ export class TerminalController {
     if (!this.canSendFromTrigger) return false;
     this.type(data);
     return true;
+  }
+
+  /**
+   * Puts a command an AI suggested on the line, as a paste, without Enter:
+   * the user reads it and presses Enter, and the prod guard checks it then.
+   * `false`, and nothing typed, when it holds a control character or the
+   * pane is not waiting at an empty prompt (`canInsertCommand`).
+   */
+  insertCommand(command: string): boolean {
+    // oxlint-disable-next-line no-control-regex -- control characters are what it refuses
+    if (command === "" || /[\u0000-\u001f\u007f-\u009f]/u.test(command)) return false;
+    if (!this.canInsertCommand) return false;
+    // Not broadcast: the checks above were for this pane only. xterm.js
+    // hands a paste to `onData` before `paste` returns.
+    this.#inserting = true;
+    try {
+      this.terminal.paste(command);
+    } finally {
+      this.#inserting = false;
+    }
+    return true;
+  }
+
+  /**
+   * Whether a suggested command may go on the line: as for a trigger, and,
+   * where the shell marks its prompts, at one. Elsewhere it may only be
+   * copied.
+   */
+  get canInsertCommand(): boolean {
+    return this.canSendFromTrigger && this.#recorder?.atPrompt !== false;
   }
 
   /**

@@ -8,6 +8,7 @@
 //! commands. Nothing in this crate knows about Tauri or a specific transport
 //! library.
 
+mod ai;
 mod connections;
 #[cfg(test)]
 mod fakes;
@@ -28,6 +29,7 @@ mod telnet;
 mod triggers;
 pub mod vault;
 
+pub use ai::{AiSettings, AiSettingsInput, Assistant, AssistantError, Preview, Reply};
 pub use connections::{Connections, Login, LoginError};
 pub use files::{
     Direction, Files, FilesError, MAX_RUNNING, MAX_SESSIONS, PER_SESSION, TransferState,
@@ -39,7 +41,7 @@ pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;
 pub use mosh::{MoshOpenError, MoshSessions};
 pub use serial::SerialSessions;
-pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
+pub use session::{RECENT_OUTPUT, SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
 pub use telnet::TelnetSessions;

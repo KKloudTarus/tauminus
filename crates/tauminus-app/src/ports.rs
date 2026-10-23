@@ -666,3 +666,42 @@ pub trait SftpPort: Send + Sync + 'static {
         cancel: watch::Receiver<()>,
     ) -> BoxFuture<'a, Result<u64, SftpError>>;
 }
+
+/// Where the AI assistant's settings are kept. Holds no secret: the key is
+/// in the vault.
+pub trait AiSettingsStore: Send + Sync + 'static {
+    /// The defaults (off) when nothing was saved yet.
+    fn load(&self) -> BoxFuture<'_, Result<crate::ai::AiSettings, StoreError>>;
+    fn save<'a>(
+        &'a self,
+        settings: &'a crate::ai::AiSettings,
+    ) -> BoxFuture<'a, Result<(), StoreError>>;
+}
+
+/// Why a model could not answer. Never holds the server's body, which may
+/// echo the request.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AiTransportError {
+    #[error("the AI server could not be reached: {0}")]
+    Unreachable(String),
+    #[error("the AI server took too long to answer")]
+    Timeout,
+    #[error("the AI server refused the key (HTTP {0})")]
+    Unauthorized(u16),
+    #[error("the AI server answered HTTP {0}")]
+    Status(u16),
+    #[error("the AI server's answer could not be read: {0}")]
+    Malformed(String),
+}
+
+/// Asks a model one question.
+pub trait AiTransport: Send + Sync + 'static {
+    /// Posts `prompt` to `endpoint`, with `key` as the bearer token if
+    /// given, and returns the answer's text.
+    fn complete<'a>(
+        &'a self,
+        endpoint: &'a tauminus_domain::AiEndpoint,
+        key: Option<&'a Secret>,
+        prompt: &'a tauminus_domain::AiPrompt,
+    ) -> BoxFuture<'a, Result<String, AiTransportError>>;
+}
