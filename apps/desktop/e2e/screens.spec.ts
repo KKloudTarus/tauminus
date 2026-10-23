@@ -123,6 +123,12 @@ for (const size of SIZES) {
       await page.keyboard.press("Escape");
 
       await page.locator("body").press("Control+Shift+P");
+      await page.getByPlaceholder("Type a command").fill("Ask AI for a command");
+      await page.keyboard.press("Enter");
+      await shot(page, `${prefix}-13-ai`);
+      await page.keyboard.press("Escape");
+
+      await page.locator("body").press("Control+Shift+P");
       await page.getByPlaceholder("Type a command").fill("connect to ssh host");
       await page.keyboard.press("Enter");
       await shot(page, `${prefix}-10-connect`);
