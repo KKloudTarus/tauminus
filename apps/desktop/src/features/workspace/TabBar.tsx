@@ -4,7 +4,11 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { SessionSpec } from "@/ipc/index.ts";
 
-import type { TerminalController } from "@/features/terminal/controller.ts";
+import {
+  type Activity,
+  type TerminalController,
+  mostUrgent,
+} from "@/features/terminal/controller.ts";
 
 import { paneIds } from "./layout.ts";
 import type { Tab, Workspace } from "./workspace.ts";
@@ -91,6 +95,21 @@ function TabButton({
   const guarded = useSyncExternalStore(subscribeGuards, () =>
     paneIds(tab.root).some((id) => workspace.terminal(id)?.guarded ?? false),
   );
+  // The most urgent thing that happened in any of its panes while hidden.
+  const subscribePanes = useCallback(
+    (listener: () => void) => {
+      const stops = paneIds(tab.root).map(
+        (id) => workspace.terminal(id)?.subscribe(listener) ?? (() => {}),
+      );
+      return () => {
+        for (const stop of stops) stop();
+      };
+    },
+    [workspace, tab.root],
+  );
+  const activity = useSyncExternalStore(subscribePanes, () =>
+    mostUrgent(paneIds(tab.root).map((id) => workspace.terminal(id)?.getActivity() ?? "idle")),
+  );
 
   return (
     <div
@@ -100,6 +119,7 @@ function TabButton({
       draggable
       data-tab-id={tab.id}
       data-guarded={guarded}
+      data-activity={activity}
       className={`group flex max-w-56 min-w-28 items-center gap-2 border-r border-current/10 px-3 ${
         active ? "bg-current/[0.06]" : "opacity-70 hover:opacity-100"
       } ${guarded ? "border-b-2 border-b-[var(--prod)]" : ""}`}
@@ -124,6 +144,7 @@ function TabButton({
         </span>
       )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
+      <ActivityDot activity={activity} />
       <button
         type="button"
         aria-label={`Close ${label}`}
@@ -136,5 +157,23 @@ function TabButton({
         ×
       </button>
     </div>
+  );
+}
+
+const DOTS: Record<Exclude<Activity, "idle">, { label: string; className: string }> = {
+  unread: { label: "New output", className: "bg-sky-500" },
+  waiting: { label: "Waiting for input", className: "bg-amber-500" },
+  error: { label: "Failed", className: "bg-red-500" },
+};
+
+/** One dot for what happened in a tab while it was hidden. */
+function ActivityDot({ activity }: { activity: Activity }) {
+  if (activity === "idle") return null;
+  const dot = DOTS[activity];
+  return (
+    <span title={dot.label} data-testid="activity-dot" className="flex shrink-0 items-center">
+      <span aria-hidden className={`size-2 rounded-full ${dot.className}`} />
+      <span className="sr-only">{dot.label}</span>
+    </span>
   );
 }

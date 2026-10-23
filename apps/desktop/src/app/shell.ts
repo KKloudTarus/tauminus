@@ -212,6 +212,16 @@ export class AppShell {
       if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
       return controller;
     });
+    // Panes of the shown tab are watched; the others collect activity.
+    // O(P) per change, P ≤ 64.
+    this.workspace.subscribe(() => {
+      const { tabs, activeTabId } = this.workspace.getSnapshot();
+      for (const tab of tabs) {
+        for (const pane of paneIds(tab.root)) {
+          this.workspace.terminal(pane)?.setWatched(tab.id === activeTabId);
+        }
+      }
+    });
     // A closed pane leaves the broadcast. Read from the layout, which
     // changes before the pane is disposed. O(P), P ≤ 64.
     this.workspace.subscribe(() => {
