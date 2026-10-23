@@ -14,6 +14,7 @@ mod history;
 mod hosts;
 mod keys;
 mod output;
+mod serial;
 mod session;
 mod sftp;
 mod snippet;
@@ -40,6 +41,9 @@ pub use hosts::{
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};
+pub use serial::{
+    BAUD_RATES, Parity, SerialError, SerialFlow, SerialPortInfo, SerialSettings, StopBits,
+};
 pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
 pub use sftp::{
     LocalOs, MAX_NAME, NameError as SftpNameError, Source, Start, TAIL_CHECK, local_name, plan,

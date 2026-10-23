@@ -12,6 +12,7 @@ import {
   historyClient,
   hostsClient,
   linkOpener,
+  serialClient,
   sessionClient,
   snippetsClient,
   textClipboard,
@@ -32,6 +33,7 @@ const shell = new AppShell({
   history: await historyClient(),
   forwards: await forwardsClient((host, rule) => ruleLabel(host, rule)),
   files: await filesClient(),
+  serial: await serialClient(),
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),

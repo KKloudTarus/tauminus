@@ -14,6 +14,7 @@ mod history;
 mod hosts;
 mod ipc;
 mod links;
+mod serial;
 mod snippets;
 mod ssh;
 mod telnet;
@@ -60,6 +61,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         snippets::snippet_command,
         snippets::host_startup,
         telnet::telnet_connect,
+        serial::serial_ports,
+        serial::serial_open,
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
         forwards::forward_start,
@@ -139,6 +142,10 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     app.manage(drops::Drops::default());
     app.manage(Arc::new(edit::Edits::new(edit::edit_root())));
     app.manage(Arc::new(tauminus_app::Forwards::new(connections)));
+    app.manage(tauminus_app::SerialSessions::new(
+        Arc::new(tauminus_serial::NativeSerialPorts::default()),
+        Arc::clone(&sessions),
+    ));
     app.manage(tauminus_app::TelnetSessions::new(
         Arc::new(tauminus_telnet::TcpTelnetConnector::default()),
         Arc::clone(&sessions),

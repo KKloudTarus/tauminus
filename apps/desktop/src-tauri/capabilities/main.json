@@ -20,6 +20,8 @@
     "allow-snippet-command",
     "allow-host-startup",
     "allow-telnet-connect",
+    "allow-serial-ports",
+    "allow-serial-open",
     "allow-host-save",
     "allow-host-delete",
     "allow-group-save",

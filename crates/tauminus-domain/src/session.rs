@@ -33,6 +33,7 @@ pub enum SessionKind {
     Local,
     Ssh,
     Telnet,
+    Serial,
 }
 
 /// Facts about a session that policies need, independent of its transport.

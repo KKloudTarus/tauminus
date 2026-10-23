@@ -31,6 +31,8 @@ import type {
   LinkOpener,
   SessionClient,
   SessionSpec,
+  SerialClient,
+  SerialSpec,
   SnippetView,
   SnippetsClient,
   TextClipboard,
@@ -79,6 +81,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "broadcast.tab": "Broadcast input to every pane in this tab",
   "broadcast.off": "Stop broadcasting input",
   "workspaces.open": "Workspaces: save or open a set of tabs",
+  "serial.open": "Open a serial port",
 };
 
 interface ShellState {
@@ -89,6 +92,7 @@ interface ShellState {
   forwardsOpen: boolean;
   snippetsOpen: boolean;
   workspacesOpen: boolean;
+  serialOpen: boolean;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -121,6 +125,8 @@ export class AppShell {
   readonly broadcast = new Broadcast();
   /** Sets of tabs saved to open again. */
   readonly workspaces: SavedWorkspaces;
+  /** Serial ports, when this window can reach them. */
+  readonly serial: SerialClient | undefined;
   /** Settles once a host pane's session is up and its startup snippets typed. */
   readonly #ready = new WeakMap<
     TerminalController,
@@ -155,6 +161,7 @@ export class AppShell {
     forwards?: ForwardsClient;
     files?: FilesClient;
     snippets?: SnippetsClient;
+    serial?: SerialClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -180,6 +187,7 @@ export class AppShell {
       : undefined;
     this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
     this.workspaces = new SavedWorkspaces(options.storage);
+    this.serial = options.serial;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -188,6 +196,7 @@ export class AppShell {
       forwardsOpen: false,
       snippetsOpen: false,
       workspacesOpen: false,
+      serialOpen: false,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -636,6 +645,18 @@ export class AppShell {
     });
   }
 
+  setSerialOpen(open: boolean): void {
+    if (this.#state.serialOpen === open || (open && !this.serial)) return;
+    this.#set({ ...this.#state, serialOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Opens a serial port in a new tab. */
+  openSerial(port: SerialSpec): void {
+    this.setSerialOpen(false);
+    this.connect({ kind: "serial", port });
+  }
+
   setWorkspacesOpen(open: boolean): void {
     if (this.#state.workspacesOpen === open) return;
     this.#set({ ...this.#state, workspacesOpen: open });
@@ -653,6 +674,7 @@ export class AppShell {
     const saved = (spec: SessionSpec | undefined): SavedSpec => {
       const hostId = savedHostId(spec);
       if (hostId) return { kind: "host", hostId };
+      if (spec?.kind === "serial") return { kind: "serial", port: spec.port };
       if (spec?.kind === "ssh") {
         if (spec.target.route.kind === "direct") {
           return {
@@ -692,6 +714,7 @@ export class AppShell {
     const hosts = this.hosts.getSnapshot().view.hosts;
     const missing = new Set<string>();
     const open = (spec: SavedSpec): SessionSpec => {
+      if (spec.kind === "serial") return { kind: "serial", port: spec.port };
       if (spec.kind === "ssh") {
         return {
           kind: "ssh",
@@ -819,6 +842,9 @@ export class AppShell {
       }
       case "workspaces.open":
         this.setWorkspacesOpen(true);
+        return;
+      case "serial.open":
+        this.setSerialOpen(true);
         return;
       case "broadcast.off":
         this.broadcast.clear();

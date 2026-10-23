@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import type { EndpointSpec } from "@/ipc/index.ts";
+import {
+  type EncodingSpec,
+  type EndpointSpec,
+  type SerialSpec,
+  describePort,
+} from "@/ipc/index.ts";
 
 import type { Direction, Template } from "./layout.ts";
 import { MAX_PANES } from "./workspace.ts";
@@ -26,7 +31,9 @@ export type SavedSpec =
       readonly kind: "ssh";
       readonly destination: EndpointSpec;
       readonly jumps: readonly EndpointSpec[];
-    };
+    }
+  /** A serial port and its line settings; the backend checks them when it opens. */
+  | { readonly kind: "serial"; readonly port: SerialSpec };
 
 export interface SavedWorkspace {
   readonly id: string;
@@ -166,8 +173,12 @@ function isDirection(value: unknown): value is Direction {
 
 function savedSpec(value: unknown): SavedSpec | undefined {
   if (!isObject(value)) return undefined;
-  const { kind, hostId, destination, jumps } = value;
+  const { kind, hostId, destination, jumps, port } = value;
   if (kind === "local") return { kind: "local" };
+  if (kind === "serial") {
+    const parsed = serialPort(port);
+    return parsed ? { kind: "serial", port: parsed } : undefined;
+  }
   if (kind === "host" && typeof hostId === "string" && hostId.length <= MAX_ID) {
     return { kind: "host", hostId };
   }
@@ -182,6 +193,32 @@ function savedSpec(value: unknown): SavedSpec | undefined {
   return to ? { kind: "ssh", destination: to, jumps: via } : undefined;
 }
 
+const ENCODINGS: readonly EncodingSpec[] = [
+  "UTF-8",
+  "windows-1252",
+  "ISO-8859-2",
+  "windows-1251",
+  "KOI8-R",
+  "Shift_JIS",
+  "EUC-JP",
+  "gb18030",
+  "Big5",
+  "EUC-KR",
+];
+
+function serialPort(value: unknown): SerialSpec | undefined {
+  if (!isObject(value)) return undefined;
+  const { path, baud, dataBits, parity, stopBits, flow, encoding } = value;
+  if (typeof path !== "string" || !path || path.length > 256) return undefined;
+  if (typeof baud !== "number" || typeof dataBits !== "number" || typeof stopBits !== "number") {
+    return undefined;
+  }
+  if (parity !== "none" && parity !== "odd" && parity !== "even") return undefined;
+  if (flow !== "none" && flow !== "software" && flow !== "hardware") return undefined;
+  const charset = ENCODINGS.find((name) => name === encoding) ?? null;
+  return { path, baud, dataBits, parity, stopBits, flow, encoding: charset };
+}
+
 function endpoint(value: unknown): EndpointSpec | undefined {
   if (!isObject(value)) return undefined;
   const { user, host, port } = value;
@@ -194,7 +231,8 @@ function endpoint(value: unknown): EndpointSpec | undefined {
 }
 
 /**
- * Where a workspace connects to directly, as `user@host:port via jump`:
+ * Where a workspace connects to directly, as `user@host:port via jump`,
+ * and the serial ports it opens:
  * shown before it opens, since what storage holds decides where it goes.
  */
 export function directConnections(workspace: SavedWorkspace): string[] {
@@ -207,6 +245,8 @@ export function directConnections(workspace: SavedWorkspace): string[] {
       out.push(
         via ? `${show(template.spec.destination)} via ${via}` : show(template.spec.destination),
       );
+    } else if (template.spec.kind === "serial") {
+      out.push(`serial ${describePort(template.spec.port)}`);
     }
   };
   for (const tab of workspace.tabs) visit(tab);

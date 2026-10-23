@@ -62,6 +62,13 @@ export const commands = {
 	 *  remote shell's own prompt.
 	 */
 	telnetConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("telnet_connect", { id, size, onOutput, onExit })),
+	/**  The ports attached now, and the speeds offered. */
+	serialPorts: () => typedError<SerialPortsView, CommandError>(__TAURI_INVOKE("serial_ports")),
+	/**
+	 *  Opens a serial port in a pane. Output arrives on `on_output`, and
+	 *  `on_exit` fires when the port closes or is unplugged.
+	 */
+	serialOpen: (spec: SerialSpec, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("serial_open", { spec, onOutput, onExit })),
 	/**
 	 *  Imports `~/.ssh/config` into the "SSH config" group. Hosts already saved
 	 *  are skipped, so importing again adds only new ones.
@@ -259,6 +266,12 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 "unavailable" | "internal";
 
 export type ExitFilterSpec = "any" | "success" | "failure";
+
+export type FlowSpec = "none" | 
+/**  XON/XOFF. */
+"software" | 
+/**  RTS/CTS. */
+"hardware";
 
 export type ForwardKindSpec = "local" | "remote" | "dynamic";
 
@@ -474,6 +487,8 @@ export type Listing = {
 	entries: EntryView[],
 };
 
+export type ParitySpec = "none" | "odd" | "even";
+
 /**
  *  The OS's presence check: what it is called, and why it cannot run
  *  here, when it cannot.
@@ -499,6 +514,30 @@ export type ProtocolSpec = "ssh" |
 export type RecordedSpec = "stored" | "sealed" | "dropped";
 
 export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
+
+export type SerialPortView = {
+	path: string,
+	/**  What the system says the port is; empty when it says nothing. */
+	description: string,
+};
+
+export type SerialPortsView = {
+	ports: SerialPortView[],
+	/**  The speeds a session may use. */
+	baudRates: number[],
+};
+
+/**  A port and its line settings, as the view sends them. */
+export type SerialSpec = {
+	path: string,
+	baud: number,
+	dataBits: number,
+	parity: ParitySpec,
+	/**  1 or 2. */
+	stopBits: number,
+	flow: FlowSpec,
+	encoding?: EncodingSpec | null,
+};
 
 /**  Sent once when a session ends. */
 export type SessionExit = {

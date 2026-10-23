@@ -14,6 +14,7 @@ import {
   type RouteSpec,
   type SessionExit,
   type SshTargetSpec,
+  type SerialSpec,
   commands,
 } from "./bindings.ts";
 
@@ -30,7 +31,9 @@ export type SessionSpec =
   | { kind: "ssh"; target: SshTargetSpec }
   | { kind: "host"; hostId: string; label: string; target: SshTargetSpec }
   /** A saved Telnet host: clear text, no host key, no prompts. */
-  | { kind: "telnet"; hostId: string; label: string };
+  | { kind: "telnet"; hostId: string; label: string }
+  /** A serial port and its line settings. */
+  | { kind: "serial"; port: SerialSpec };
 
 /** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
 export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
@@ -101,6 +104,8 @@ export const tauriSessions: SessionClient = {
       opening = commands.sessionOpen(size, output, exit);
     } else if (spec.kind === "telnet") {
       opening = commands.telnetConnect(spec.hostId, size, output, exit);
+    } else if (spec.kind === "serial") {
+      opening = commands.serialOpen(spec.port, output, exit);
     } else {
       const prompts = new Channel<PromptRequest>();
       prompts.onmessage = ({ id, prompt }) => {
