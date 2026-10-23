@@ -8,6 +8,8 @@ import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
+import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
+import { SnippetsDialog } from "@/features/snippets/SnippetsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
@@ -22,11 +24,17 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen, files } = useSyncExternalStore(
-    shell.subscribe,
-    shell.getState,
-  );
+  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen, snippetsOpen, snippetToFill, files } =
+    useSyncExternalStore(shell.subscribe, shell.getState);
   const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
+  const snippetList = useSyncExternalStore(
+    shell.snippets?.subscribe ?? noSubscribe,
+    // Only a loaded library: an empty one would show every startup snippet as deleted.
+    () => {
+      const state = shell.snippets?.getSnapshot();
+      return state?.loaded ? state.snippets : undefined;
+    },
+  );
   const savedHosts = useSyncExternalStore(shell.hosts.subscribe, shell.hosts.getSnapshot).view
     .hosts;
   const keyTools = useMemo(
@@ -37,6 +45,7 @@ export function App({ shell }: { shell: AppShell }) {
   const connectHost = useCallback((host: HostView) => shell.connectHost(host), [shell]);
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
   const openFiles = useCallback((host: HostView) => shell.openFiles(host), [shell]);
+  const chooseSnippet = useCallback((id: string) => shell.chooseSnippet(id), [shell]);
 
   // Typing and clicking keep an open vault from locking. Capture phase: the
   // terminal handles its keys before they would bubble here.
@@ -67,6 +76,8 @@ export function App({ shell }: { shell: AppShell }) {
         state.vaultOpen ||
         state.historyOpen ||
         state.forwardsOpen ||
+        state.snippetsOpen ||
+        state.snippetToFill !== undefined ||
         state.files !== undefined;
       if (!event.defaultPrevented && !modal) {
         shell.handleKey(event);
@@ -97,6 +108,7 @@ export function App({ shell }: { shell: AppShell }) {
             onOpenVault={openVault}
             {...(shell.files ? { onFiles: openFiles } : {})}
             identities={vault.identities}
+            snippets={snippetList}
           />
         )}
         <div className="min-w-0 flex-1">
@@ -162,6 +174,20 @@ export function App({ shell }: { shell: AppShell }) {
           onClose={() => shell.setForwardsOpen(false)}
         />
       )}
+      {snippetsOpen && shell.snippets && (
+        <SnippetsDialog
+          store={shell.snippets}
+          onRun={chooseSnippet}
+          onClose={() => shell.setSnippetsOpen(false)}
+        />
+      )}
+      {snippetToFill && (
+        <SnippetForm
+          snippet={snippetToFill}
+          onRun={(values) => void shell.runSnippet(snippetToFill.id, values)}
+          onClose={() => shell.closeSnippetForm()}
+        />
+      )}
       {vaultOpen && (
         <VaultDialog
           store={shell.vault}
@@ -173,3 +199,5 @@ export function App({ shell }: { shell: AppShell }) {
     </main>
   );
 }
+
+const noSubscribe = (): (() => void) => () => {};

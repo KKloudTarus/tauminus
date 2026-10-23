@@ -6,6 +6,7 @@
 import type { TextClipboard } from "./clipboard.ts";
 import type { FilesClient } from "./files.ts";
 import type { ForwardsClient } from "./forwards.ts";
+import type { SnippetsClient } from "./snippets.ts";
 import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
@@ -46,6 +47,15 @@ export {
   type ForwardsClient,
   tauriForwards,
 } from "./forwards.ts";
+export {
+  type SkippedView,
+  type SnippetInput,
+  type SnippetView,
+  type SnippetsClient,
+  type StartupView,
+  type VariableView,
+  tauriSnippets,
+} from "./snippets.ts";
 export {
   type ExitFilterSpec,
   type HistoryClient,
@@ -140,6 +150,16 @@ export async function forwardsClient(
     return (await import("./fake-forwards.ts")).fakeForwards(ruleLabel);
   }
   return (await import("./forwards.ts")).tauriForwards;
+}
+
+/** Saved snippets; the `e2e` build keeps them in memory. */
+export async function snippetsClient(
+  startupOf: (host: string) => readonly string[],
+): Promise<SnippetsClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-snippets.ts")).fakeSnippets(startupOf);
+  }
+  return (await import("./snippets.ts")).tauriSnippets;
 }
 
 /** Files on hosts and here; the `e2e` build keeps both sides in memory. */

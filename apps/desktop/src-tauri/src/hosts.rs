@@ -12,8 +12,8 @@ use specta::Type;
 use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError,
-    IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName,
-    env_list,
+    IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, SnippetId, Tag,
+    UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -149,6 +149,8 @@ pub(crate) struct HostView {
     /// The agent is forwarded, by the host's setting or a group's.
     pub(crate) forwards_agent: bool,
     pub(crate) forwards: Vec<ForwardSpec>,
+    /// Ids of the snippets typed into each new shell, in order.
+    pub(crate) startup: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -174,6 +176,9 @@ pub(crate) struct HostInput {
     /// Absent keeps the rules saved now.
     #[serde(default)]
     pub(crate) forwards: Option<Vec<ForwardSpec>>,
+    /// Absent keeps the startup snippets saved now.
+    #[serde(default)]
+    pub(crate) startup: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -255,6 +260,7 @@ fn view(inventory: &Inventory) -> HostsView {
                     guarded: inventory.guarded(&h.id).unwrap_or(false),
                     forwards_agent,
                     forwards: h.forwards.iter().map(ForwardSpec::from).collect(),
+                    startup: h.startup.iter().map(ToString::to_string).collect(),
                 }
             })
             .collect(),
@@ -480,20 +486,38 @@ fn parse_host(book: &HostBook, input: HostInput) -> Result<Host, CommandError> {
             .map(|spec| parse_rule(spec, || book.new_forward_id().map_err(invalid)))
             .collect::<Result<_, _>>()?;
     }
+    if let Some(startup) = input.startup {
+        if startup.len() > tauminus_domain::MAX_STARTUP {
+            return Err(invalid(HostsError::Startup));
+        }
+        host.startup = startup
+            .iter()
+            .map(|id| SnippetId::parse(id))
+            .collect::<Result<_, _>>()
+            .map_err(invalid)?;
+    }
     Ok(host)
 }
 
+/// What a save leaves as stored because the view did not send it.
+#[derive(Debug, Clone, Copy)]
+struct Keep {
+    forwards: bool,
+    startup: bool,
+}
+
 /// Saves `host`, keeping its stored `ProxyCommand` and, when the view sent
-/// no rules, its stored forwarding rules.
-fn put_host(
-    inventory: &mut Inventory,
-    mut host: Host,
-    keep_forwards: bool,
-) -> Result<(), HostsError> {
+/// none, its stored forwarding rules and startup snippets.
+fn put_host(inventory: &mut Inventory, mut host: Host, keep: Keep) -> Result<(), HostsError> {
     let stored = inventory.host(&host.id);
     keep_proxy_command(&host.settings, stored.map(|h| &h.settings))?;
-    if keep_forwards && let Some(stored) = stored {
-        host.forwards.clone_from(&stored.forwards);
+    if let Some(stored) = stored {
+        if keep.forwards {
+            host.forwards.clone_from(&stored.forwards);
+        }
+        if keep.startup {
+            host.startup.clone_from(&stored.startup);
+        }
     }
     inventory.put_host(host)
 }
@@ -530,14 +554,17 @@ pub(crate) async fn host_save(
     host: HostInput,
 ) -> Result<HostsView, CommandError> {
     let book = hosts.book()?;
-    let keep_forwards = host.forwards.is_none();
+    let keep = Keep {
+        forwards: host.forwards.is_none(),
+        startup: host.startup.is_none(),
+    };
     let host = parse_host(book, host)?;
     let id = host.id.clone();
     let mut before = Inventory::default();
     let inventory = book
         .edit(|inventory| {
             before = inventory.clone();
-            put_host(inventory, host, keep_forwards)
+            put_host(inventory, host, keep)
         })
         .await?;
     // A running rule that was removed or changed stops, so nothing keeps

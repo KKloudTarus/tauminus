@@ -44,6 +44,18 @@ export const commands = {
 	 *  files only; nothing runs.
 	 */
 	sshConfigAliases: () => typedError<number, CommandError>(__TAURI_INVOKE("ssh_config_aliases")),
+	snippetsList: () => typedError<SnippetView[], CommandError>(__TAURI_INVOKE("snippets_list")),
+	/**  Adds a snippet with a new id, or replaces the saved one `id` names. */
+	snippetSave: (snippet: SnippetInput) => typedError<SnippetView[], CommandError>(__TAURI_INVOKE("snippet_save", { snippet })),
+	/**  Removes a snippet. Hosts that start with it skip it from then on. */
+	snippetDelete: (id: string) => typedError<SnippetView[], CommandError>(__TAURI_INVOKE("snippet_delete", { id })),
+	/**
+	 *  The text to type to run a snippet: placeholders filled from `values`
+	 *  or their defaults, each line ended by Enter.
+	 */
+	snippetCommand: (id: string, values: { [key in string]: string }) => typedError<string, CommandError>(__TAURI_INVOKE("snippet_command", { id, values })),
+	/**  What to type into a new shell on a saved host. */
+	hostStartup: (host: string) => typedError<StartupView, CommandError>(__TAURI_INVOKE("host_startup", { host })),
 	/**
 	 *  Imports `~/.ssh/config` into the "SSH config" group. Hosts already saved
 	 *  are skipped, so importing again adds only new ones.
@@ -372,6 +384,8 @@ export type HostInput = {
 	settings?: SettingsSpec,
 	/**  Absent keeps the rules saved now. */
 	forwards?: ForwardSpec[] | null,
+	/**  Absent keeps the startup snippets saved now. */
+	startup?: string[] | null,
 };
 
 export type HostView = {
@@ -392,6 +406,8 @@ export type HostView = {
 	/**  The agent is forwarded, by the host's setting or a group's. */
 	forwardsAgent: boolean,
 	forwards: ForwardSpec[],
+	/**  Ids of the snippets typed into each new shell, in order. */
+	startup: string[],
 };
 
 export type HostsView = {
@@ -517,6 +533,28 @@ export type SkippedHost = {
 	reason: string,
 };
 
+export type SkippedView = {
+	id: string,
+	reason: string,
+};
+
+export type SnippetInput = {
+	/**  Absent for a new snippet. */
+	id?: string | null,
+	name: string,
+	folder?: string | null,
+	body: string,
+};
+
+export type SnippetView = {
+	id: string,
+	name: string,
+	folder: string | null,
+	body: string,
+	/**  Its placeholders in first-use order, for the form that fills them. */
+	variables: VariableView[],
+};
+
 /**
  *  Where and how to connect. Omitted auth fields take the defaults: agent,
  *  default key files, keyboard-interactive, then password.
@@ -530,6 +568,12 @@ export type SshTargetSpec = {
 	identitiesOnly?: boolean,
 };
 
+/**  What a host's startup snippets type, and those skipped with why. */
+export type StartupView = {
+	text: string,
+	skipped: SkippedView[],
+};
+
 export type TransferStatusSpec = { kind: "waiting" } | { kind: "running" } | { kind: "done" } | { kind: "cancelled" } | { kind: "failed"; reason: string };
 
 export type TransferView = {
@@ -541,6 +585,11 @@ export type TransferView = {
 	total: number | null,
 	resumedFrom: number | null,
 	status: TransferStatusSpec,
+};
+
+export type VariableView = {
+	name: string,
+	default: string | null,
 };
 
 export type VaultStatusSpec = {

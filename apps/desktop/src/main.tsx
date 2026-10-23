@@ -13,6 +13,7 @@ import {
   hostsClient,
   linkOpener,
   sessionClient,
+  snippetsClient,
   textClipboard,
   vaultClient,
 } from "@/ipc/index.ts";
@@ -31,6 +32,9 @@ const shell = new AppShell({
   history: await historyClient(),
   forwards: await forwardsClient((host, rule) => ruleLabel(host, rule)),
   files: await filesClient(),
+  snippets: await snippetsClient(
+    (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
+  ),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),
@@ -42,6 +46,7 @@ const shell = new AppShell({
 });
 shell.workspace.newTab();
 void shell.hosts.load();
+void shell.snippets?.load();
 // Only a benchmark build has this flag; other builds drop the import.
 if (import.meta.env.VITE_TAUMINUS_BENCH === "1") {
   void import("@/bench/run.ts").then(({ runBenchmark }) => runBenchmark(shell));

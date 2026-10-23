@@ -4,7 +4,7 @@
 import { useDeferredValue, useMemo, useState, useSyncExternalStore } from "react";
 
 import { formatEndpoint } from "@/features/ssh/destination.ts";
-import type { GroupView, HostView, IdentityView } from "@/ipc/index.ts";
+import type { GroupView, HostView, IdentityView, SnippetView } from "@/ipc/index.ts";
 
 import { type Editing, EditorDialog } from "./HostEditor.tsx";
 import type { HostsStore } from "./hosts-store.ts";
@@ -18,6 +18,8 @@ interface SidebarProps {
   onFiles?: (host: HostView) => void;
   /** Identities to pick from in the editors; empty while the vault is locked. */
   identities?: readonly IdentityView[];
+  /** Snippets a host can run when it connects; without them there is no choice. */
+  snippets?: readonly SnippetView[] | undefined;
 }
 
 interface Tree {
@@ -58,6 +60,7 @@ export function Sidebar({
   onOpenVault,
   onFiles,
   identities = NO_IDENTITIES,
+  snippets,
 }: SidebarProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [query, setQuery] = useState("");
@@ -223,6 +226,7 @@ export function Sidebar({
           store={store}
           editing={editing}
           identities={identities}
+          {...(snippets ? { snippets } : {})}
           onClose={() => setEditing(undefined)}
         />
       )}
