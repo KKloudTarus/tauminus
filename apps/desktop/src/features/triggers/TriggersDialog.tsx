@@ -22,9 +22,8 @@ import type {
 
 import type { TriggersStore } from "./triggers-store.ts";
 
-const BUTTON = "rounded px-2 py-0.5 hover:bg-current/10 disabled:opacity-40";
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1 outline-none focus:border-current/50";
+const BUTTON = "btn btn-ghost btn-xs";
+const FIELD = "field";
 
 /** The terminal palette's colours, by the index rules store. */
 export const PALETTE_NAMES = [
@@ -69,7 +68,7 @@ export function TriggersDialog({ store, onClose }: { store: TriggersStore; onClo
   );
 
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[8vh]">
+    <div className="overlay">
       <dialog
         ref={dialog}
         open
@@ -82,7 +81,7 @@ export function TriggersDialog({ store, onClose }: { store: TriggersStore; onClo
             else onClose();
           }
         }}
-        className="static m-0 max-h-[80vh] w-[min(760px,94vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl outline-none"
+        className="panel static m-0 max-h-[80vh] w-[min(760px,94vw)] overflow-y-auto p-4 outline-none"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 id={titleId} className="text-base font-medium">
@@ -98,7 +97,7 @@ export function TriggersDialog({ store, onClose }: { store: TriggersStore; onClo
           </div>
         </div>
         {state.error && (
-          <p role="alert" className="mb-2 text-red-600 dark:text-red-400">
+          <p role="alert" className="mb-2 text-error">
             {state.error}
           </p>
         )}
@@ -253,7 +252,7 @@ function SetEditor({
     <form
       aria-label={set ? `Edit ${set.name}` : "New highlight set"}
       onSubmit={submit}
-      className="mb-4 flex flex-col gap-2 rounded border border-current/15 p-3"
+      className="mb-4 flex flex-col gap-2 rounded-lg border border-line bg-surface-1 p-3"
     >
       <label htmlFor={nameId} className="text-xs opacity-70">
         Name
@@ -345,7 +344,10 @@ function RuleEditor({
     }
   };
   return (
-    <li aria-label={label} className="flex flex-col gap-1 rounded bg-current/5 p-2">
+    <li
+      aria-label={label}
+      className="flex flex-col gap-1 rounded-lg border border-line bg-surface-2 p-2"
+    >
       <div className="flex items-center gap-2">
         <input
           aria-label={`${label} pattern`}
@@ -367,7 +369,7 @@ function RuleEditor({
         </button>
       </div>
       {problem && (
-        <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+        <p role="alert" className="text-xs text-error">
           {problem}
         </p>
       )}
@@ -379,7 +381,7 @@ function RuleEditor({
             const kind = ACTIONS.find((a) => a.kind === e.target.value)?.kind;
             if (kind) onChange({ ...rule, action: actionOf(kind, action) });
           }}
-          className="rounded border border-current/20 bg-transparent px-1 py-0.5"
+          className="field w-auto min-h-7 py-0.5 text-xs"
         >
           {ACTIONS.map((a) => (
             <option key={a.kind} value={a.kind}>
@@ -419,7 +421,7 @@ function RuleEditor({
               aria-label={`${label} text to send`}
               value={action.text}
               onChange={(e) => onChange({ ...rule, action: { ...action, text: e.target.value } })}
-              className="min-w-0 flex-1 rounded border border-current/20 bg-transparent px-1 py-0.5 font-mono"
+              className="field min-h-7 min-w-0 flex-1 py-0.5 font-mono text-xs"
               placeholder="yes (never a password: keep those in the vault)"
               spellCheck={false}
             />
@@ -471,7 +473,7 @@ function ColourPicker({
           const chosen = e.target.value;
           onChange(chosen === "" ? null : chosen === "custom" ? "#ff8800" : chosen);
         }}
-        className="rounded border border-current/20 bg-transparent px-1 py-0.5"
+        className="field w-auto min-h-7 py-0.5 text-xs"
       >
         <option value="">None</option>
         {PALETTE_NAMES.map((name, index) => (

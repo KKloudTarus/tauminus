@@ -115,6 +115,14 @@ for (const size of SIZES) {
       await page.keyboard.press("Escape");
 
       await page.locator("body").press("Control+Shift+P");
+      await page.getByPlaceholder("Type a command").fill("Highlight sets and triggers");
+      await page.keyboard.press("Enter");
+      await page.getByRole("button", { name: "New set" }).click();
+      await shot(page, `${prefix}-12-highlights`);
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Escape");
+
+      await page.locator("body").press("Control+Shift+P");
       await page.getByPlaceholder("Type a command").fill("connect to ssh host");
       await page.keyboard.press("Enter");
       await shot(page, `${prefix}-10-connect`);

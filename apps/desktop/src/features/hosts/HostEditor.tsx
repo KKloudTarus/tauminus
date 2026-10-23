@@ -927,7 +927,7 @@ export function HighlightFields({
   const byId = new Map(sets.map((s) => [s.id, s]));
   const left = sets.filter((s) => !value.includes(s.id));
   return (
-    <details className="mb-3 rounded border border-current/15 px-3 py-2" open={value.length > 0}>
+    <details className="disclosure mb-3" open={value.length > 0}>
       <summary className="cursor-pointer select-none">Highlight sets</summary>
       <div className="mt-2 flex flex-col gap-1">
         {value.length === 0 && (
@@ -944,7 +944,7 @@ export function HighlightFields({
                 <span className="min-w-0 flex-1 truncate">{name}</span>
                 <button
                   type="button"
-                  className="rounded px-2 hover:bg-current/10 disabled:opacity-40"
+                  className="btn btn-ghost btn-xs"
                   aria-label={`Put ${name} first`}
                   disabled={i === 0}
                   onClick={() => onChange([id, ...value.filter((other) => other !== id)])}
@@ -953,7 +953,7 @@ export function HighlightFields({
                 </button>
                 <button
                   type="button"
-                  className="rounded px-2 hover:bg-current/10"
+                  className="btn btn-ghost btn-xs"
                   aria-label={`Remove highlight set ${name}`}
                   onClick={() => onChange(value.filter((other) => other !== id))}
                 >

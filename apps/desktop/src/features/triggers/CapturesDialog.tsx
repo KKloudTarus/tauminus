@@ -7,7 +7,7 @@ import { visibleText } from "@/features/terminal/visible-text.ts";
 
 import type { Capture, CapturesStore } from "./captures-store.ts";
 
-const BUTTON = "rounded px-2 py-0.5 hover:bg-current/10 disabled:opacity-40";
+const BUTTON = "btn btn-ghost btn-xs";
 
 /** The lines capture rules kept, newest first: read, copy, or clear them. */
 export function CapturesDialog({
@@ -24,7 +24,7 @@ export function CapturesDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => dialog.current?.focus(), []);
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[8vh]">
+    <div className="overlay">
       <dialog
         ref={dialog}
         open
@@ -36,7 +36,7 @@ export function CapturesDialog({
             onClose();
           }
         }}
-        className="static m-0 max-h-[80vh] w-[min(760px,94vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl outline-none"
+        className="panel static m-0 max-h-[80vh] w-[min(760px,94vw)] overflow-y-auto p-4 outline-none"
       >
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 id={titleId} className="text-base font-medium">
