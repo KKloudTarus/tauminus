@@ -203,6 +203,9 @@ export type EditView = {
 	state: EditState,
 };
 
+/**  A character set a host's shell may speak, by its WHATWG name. */
+export type EncodingSpec = "UTF-8" | "windows-1252" | "windows-1251" | "KOI8-R" | "ISO-8859-2" | "Shift_JIS" | "EUC-JP" | "gb18030" | "Big5" | "EUC-KR";
+
 /**  `user@host:port` as the view sends it. */
 export type EndpointSpec = {
 	/**  Empty means the local user name, as `ssh` does. */
@@ -520,6 +523,8 @@ export type SettingsSpec = {
 	env?: EnvSpec[] | null,
 	/**  The vault identity to log in with; `null` inherits. */
 	identity?: string | null,
+	/**  The shell's character set; `null` inherits (UTF-8 at the root). */
+	encoding?: EncodingSpec | null,
 };
 
 export type SftpHandle = {

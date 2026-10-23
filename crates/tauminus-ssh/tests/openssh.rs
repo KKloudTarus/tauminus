@@ -860,6 +860,86 @@ async fn environment_variables_reach_the_shell_the_server_accepts() {
 }
 
 #[tokio::test]
+async fn a_host_in_another_charset_reads_and_types_in_it() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    target.session.encoding = tauminus_domain::Encoding::Windows1252;
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    // The shell prints byte E9, é in Windows-1252, and receives what was
+    // typed as é the same way.
+    stream
+        .input
+        .send(TerminalInput::Text(
+            "printf '[ol\\351]'; printf 'é' | od -An -tx1; exit 0\n".into(),
+        ))
+        .await
+        .unwrap();
+    let (output, code) = collect(&mut stream).await;
+    assert_eq!(code, Some(0), "{output}");
+    assert!(output.contains("[olé]"), "{output}");
+    assert!(output.contains(" e9"), "{output}");
+    assert!(!output.contains(" c3 a9"), "{output}");
+}
+
+#[tokio::test]
+async fn a_character_cut_off_by_the_end_shows_and_raw_bytes_pass_as_they_are() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, key_auth(&[key]));
+    target.session.encoding = tauminus_domain::Encoding::Big5;
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    // Bytes sent as they are reach the shell untouched, not converted.
+    stream
+        .input
+        .send(TerminalInput::Text("od -An -tx1 -N2; ".into()))
+        .await
+        .unwrap();
+    stream
+        .input
+        // `exec`: nothing, not even "logout", comes after the lone byte.
+        .send(TerminalInput::Text("exec printf '[\\244'\n".into()))
+        .await
+        .unwrap();
+    stream
+        .input
+        .send(TerminalInput::Data(vec![0xc3, 0xa9]))
+        .await
+        .unwrap();
+    let (output, code) = collect(&mut stream).await;
+    assert_eq!(code, Some(0), "{output}");
+    assert!(output.contains(" c3 a9"), "{output}");
+    // A Big5 lead byte with nothing after it: shown, not lost.
+    assert!(output.contains("[\u{fffd}"), "{output}");
+}
+
+#[tokio::test]
 async fn a_forwarded_agent_request_with_no_local_agent_fails_fast() {
     let Some(sshd_bin) = sshd_binary() else {
         return;

@@ -49,7 +49,7 @@ pub(crate) async fn session_write(
     id: SessionHandle,
     data: String,
 ) -> Result<(), CommandError> {
-    Ok(sessions.write(id.into(), data.into_bytes()).await?)
+    Ok(sessions.write_text(id.into(), data).await?)
 }
 
 /// Sends bytes that are not valid UTF-8, such as legacy mouse reports.

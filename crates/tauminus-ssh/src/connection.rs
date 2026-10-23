@@ -109,7 +109,7 @@ impl Connection {
             channel.agent_forward(false).await.map_err(protocol)?;
         }
         channel.request_shell(true).await.map_err(protocol)?;
-        Ok(bridge::spawn(channel, self.lease()))
+        Ok(bridge::spawn(channel, self.lease(), options.encoding))
     }
 }
 

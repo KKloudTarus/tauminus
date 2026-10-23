@@ -139,7 +139,7 @@ Goal: Termius Starter parity on desktop.
 - [ ] Telnet transport (RFC 854, NAWS, TTYPE, ECHO)
 - [ ] Serial transport with port enumeration, baud and framing settings
 - [ ] Mosh on macOS and Linux through the upstream `mosh-client`
-- [ ] Character encoding per host
+- [x] Character encoding per host
 
 ### Exit criteria
 

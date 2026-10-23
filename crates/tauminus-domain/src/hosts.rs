@@ -16,7 +16,9 @@ use thiserror::Error;
 
 use crate::forward::{ForwardError, ForwardRule, check_rules};
 use crate::guard::{GuardSettings, PatternError, Policy};
-use crate::ssh::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
+use crate::ssh::{
+    AuthMethod, AuthOptions, Encoding, Endpoint, HostName, Route, SshTarget, UserName,
+};
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
@@ -274,6 +276,9 @@ pub struct Settings {
     /// Whether commands run here go into the history; `None` inherits, and
     /// the root default is on.
     pub history: Option<bool>,
+    /// The terminal's character set; `None` inherits, and the root default
+    /// is UTF-8.
+    pub encoding: Option<Encoding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -554,6 +559,7 @@ impl Inventory {
         Ok(SessionOptions {
             forward_agent: chain.iter().find_map(|s| s.forward_agent).unwrap_or(false),
             env: env.into_values().cloned().collect(),
+            encoding: chain.iter().find_map(|s| s.encoding).unwrap_or_default(),
         })
     }
 
@@ -734,7 +740,8 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         identities_only,
         forward_agent,
         identity,
-        history
+        history,
+        encoding
     );
     let mut env = child.env.clone();
     env.extend(parent.env.iter().cloned());

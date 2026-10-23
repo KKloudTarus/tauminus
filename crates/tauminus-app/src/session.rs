@@ -182,6 +182,12 @@ impl SessionManager {
         self.send(id, TerminalInput::Data(data)).await
     }
 
+    /// Sends typed or pasted text, which the stream converts to its
+    /// shell's character set. Waits as [`Self::write`] does.
+    pub async fn write_text(&self, id: SessionId, text: String) -> Result<(), SessionError> {
+        self.send(id, TerminalInput::Text(text)).await
+    }
+
     pub async fn resize(&self, id: SessionId, size: TerminalSize) -> Result<(), SessionError> {
         self.send(id, TerminalInput::Resize(size)).await
     }

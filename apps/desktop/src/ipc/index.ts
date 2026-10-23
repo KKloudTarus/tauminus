@@ -15,6 +15,7 @@ import type { SessionClient } from "./sessions.ts";
 
 export {
   type GroupInput,
+  type EncodingSpec,
   type EnvSpec,
   type GroupView,
   type GuardFinding,

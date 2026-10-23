@@ -301,6 +301,71 @@ pub fn env_list(mut vars: Vec<EnvVar>) -> Result<Vec<EnvVar>, EnvError> {
     Ok(vars)
 }
 
+/// The character set a host's terminal speaks. Each one keeps ASCII as it
+/// is, so escape sequences and control keys pass through untouched; only
+/// text outside ASCII is converted to and from UTF-8.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Encoding {
+    #[default]
+    Utf8,
+    /// Western European: Windows-1252, which ISO-8859-1 hosts also read.
+    Windows1252,
+    /// Cyrillic.
+    Windows1251,
+    /// Cyrillic, as older Unix hosts use it.
+    Koi8R,
+    /// Central European.
+    Iso8859_2,
+    /// Japanese.
+    ShiftJis,
+    /// Japanese, as Unix hosts use it.
+    EucJp,
+    /// Simplified Chinese: GB18030, which covers GBK and GB2312.
+    Gb18030,
+    /// Traditional Chinese.
+    Big5,
+    /// Korean.
+    EucKr,
+}
+
+impl Encoding {
+    pub const ALL: [Self; 10] = [
+        Self::Utf8,
+        Self::Windows1252,
+        Self::Windows1251,
+        Self::Koi8R,
+        Self::Iso8859_2,
+        Self::ShiftJis,
+        Self::EucJp,
+        Self::Gb18030,
+        Self::Big5,
+        Self::EucKr,
+    ];
+
+    /// The WHATWG name, as stored and shown.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Windows1252 => "windows-1252",
+            Self::Windows1251 => "windows-1251",
+            Self::Koi8R => "KOI8-R",
+            Self::Iso8859_2 => "ISO-8859-2",
+            Self::ShiftJis => "Shift_JIS",
+            Self::EucJp => "EUC-JP",
+            Self::Gb18030 => "gb18030",
+            Self::Big5 => "Big5",
+            Self::EucKr => "EUC-KR",
+        }
+    }
+
+    /// One of [`Self::label`], ignoring case. O(1).
+    pub fn parse(label: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|e| e.label().eq_ignore_ascii_case(label.trim()))
+    }
+}
+
 /// What the session asks of the server once connected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionOptions {
@@ -309,6 +374,8 @@ pub struct SessionOptions {
     pub forward_agent: bool,
     /// Sorted by name, one per name.
     pub env: Vec<EnvVar>,
+    /// What the shell's bytes are in; the app converts to UTF-8 and back.
+    pub encoding: Encoding,
 }
 
 /// A complete connection: jump hosts in order, then the target.

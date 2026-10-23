@@ -667,3 +667,55 @@ fn a_host_starts_with_at_most_8_snippets_each_once() {
     db.startup = vec![id(1), id(1)];
     assert_eq!(inventory.put_host(db), Err(HostsError::Startup));
 }
+
+#[test]
+fn the_nearest_encoding_set_wins_and_utf8_is_the_default() {
+    use crate::Encoding;
+    let mut inventory = Inventory::default();
+    let mut group = Group {
+        id: GroupId::parse("g").unwrap(),
+        name: Label::parse("g").unwrap(),
+        parent: None,
+        settings: Settings::default(),
+    };
+    group.settings.encoding = Some(Encoding::ShiftJis);
+    inventory.put_group(group).unwrap();
+    let plain = host("plain", None);
+    let mut inside = host("inside", Some("g"));
+    let mut own = host("own", Some("g"));
+    own.settings.encoding = Some(Encoding::Koi8R);
+    inventory.put_host(plain).unwrap();
+    inventory.put_host(inside.clone()).unwrap();
+    inventory.put_host(own).unwrap();
+    assert_eq!(encoding(&inventory, "plain"), Encoding::Utf8);
+    assert_eq!(encoding(&inventory, "inside"), Encoding::ShiftJis);
+    assert_eq!(encoding(&inventory, "own"), Encoding::Koi8R);
+    inside.settings.encoding = Some(Encoding::Utf8);
+    inventory.put_host(inside).unwrap();
+    assert_eq!(
+        encoding(&inventory, "inside"),
+        Encoding::Utf8,
+        "a host can set UTF-8 back"
+    );
+}
+
+#[test]
+fn encodings_parse_by_label_ignoring_case() {
+    use crate::Encoding;
+    for encoding in Encoding::ALL {
+        assert_eq!(Encoding::parse(encoding.label()), Some(encoding));
+        assert_eq!(
+            Encoding::parse(&encoding.label().to_lowercase()),
+            Some(encoding)
+        );
+    }
+    assert_eq!(Encoding::parse("UTF-16"), None);
+    assert_eq!(Encoding::parse(""), None);
+}
+
+fn encoding(inventory: &Inventory, id: &str) -> Encoding {
+    inventory
+        .session(&HostId::parse(id).unwrap())
+        .unwrap()
+        .encoding
+}
