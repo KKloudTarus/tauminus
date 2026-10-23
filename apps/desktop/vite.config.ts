@@ -12,6 +12,11 @@ export default defineConfig({
   plugins: [react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss()],
   resolve: { tsconfigPaths: true },
   clearScreen: false,
+  // The player worker's packages, bundled when the dev server starts: found
+  // later, when a worker first loads, they make Vite reload the page.
+  optimizeDeps: {
+    include: ["@xterm/headless", "@xterm/addon-serialize", "@xterm/addon-unicode11"],
+  },
   server: {
     port: 1420,
     strictPort: true,
