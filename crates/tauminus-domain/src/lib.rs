@@ -49,7 +49,7 @@ pub use snippet::{
     SnippetError, Variable, fill, variables,
 };
 pub use ssh::{
-    AuthMethod, AuthOptions, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,
+    AuthMethod, AuthOptions, Encoding, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,
     ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, UserName, env_list,
     expand_proxy_command,
 };

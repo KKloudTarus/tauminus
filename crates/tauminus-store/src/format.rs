@@ -1,24 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 to 3. Domain types stay free of serde; these types
+//! The file format, versions 1 to 4. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    AuthMethod, Bind, BindAddress, Destination, EnvVar, Forward, ForwardId, ForwardRule, Group,
-    GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label, Pattern,
-    Route, Settings, SnippetId, Tag, UserName,
+    AuthMethod, Bind, BindAddress, Destination, Encoding, EnvVar, Forward, ForwardId, ForwardRule,
+    Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label,
+    Pattern, Route, Settings, SnippetId, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
-/// Version 2 adds forwarding rules and version 3 startup snippets; a file
-/// is written as the lowest version that holds what it has, so a build
-/// from before a feature keeps reading files that do not use it.
-const VERSION: u32 = 3;
+/// Version 2 adds forwarding rules, version 3 startup snippets, and
+/// version 4 encodings; a file is written as the lowest version that holds
+/// what it has, so a build from before a feature keeps reading files that
+/// do not use it.
+const VERSION: u32 = 4;
+const VERSION_WITHOUT_ENCODING: u32 = 3;
 const VERSION_WITHOUT_STARTUP: u32 = 2;
 const VERSION_WITHOUT_FORWARDS: u32 = 1;
 
@@ -114,6 +116,9 @@ struct SettingsRecord {
     identity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history: Option<bool>,
+    /// A WHATWG label from the list the app offers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    encoding: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -147,6 +152,7 @@ impl SettingsRecord {
             && self.forward_agent.is_none()
             && self.identity.is_none()
             && self.history.is_none()
+            && self.encoding.is_none()
             && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
@@ -177,11 +183,15 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let encoding = inventory.hosts().any(|h| h.settings.encoding.is_some())
+        || inventory.groups().any(|g| g.settings.encoding.is_some());
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if startup {
+        version: if encoding {
             VERSION
+        } else if startup {
+            VERSION_WITHOUT_ENCODING
         } else if forwards {
             VERSION_WITHOUT_STARTUP
         } else {
@@ -328,6 +338,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         forward_agent: s.forward_agent,
         identity: s.identity.as_ref().map(ToString::to_string),
         history: s.history,
+        encoding: s.encoding.map(|e| e.label().to_owned()),
         env: s
             .env
             .iter()
@@ -419,6 +430,12 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         guard: guard(r.guard)?,
         forward_agent: r.forward_agent,
         history: r.history,
+        encoding: r
+            .encoding
+            .map(|label| {
+                Encoding::parse(&label).ok_or_else(|| format!("unknown encoding {label:?}"))
+            })
+            .transpose()?,
         identity: r
             .identity
             .map(|i| IdentityId::parse(&i))

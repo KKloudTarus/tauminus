@@ -4,6 +4,7 @@
 import { type FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import type {
+  EncodingSpec,
   EnvSpec,
   GroupView,
   GuardSpec,
@@ -97,9 +98,29 @@ export function withGuard(base: SettingsSpec, fields: GuardFieldsState): Setting
   return { ...base, guard: empty ? null : guard };
 }
 
+/** The character sets a host's shell may speak, with what each is for. */
+const ENCODINGS: readonly (readonly [EncodingSpec, string])[] = [
+  ["UTF-8", "UTF-8"],
+  ["windows-1252", "Western (Windows-1252, ISO-8859-1)"],
+  ["ISO-8859-2", "Central European (ISO-8859-2)"],
+  ["windows-1251", "Cyrillic (Windows-1251)"],
+  ["KOI8-R", "Cyrillic (KOI8-R)"],
+  ["Shift_JIS", "Japanese (Shift_JIS)"],
+  ["EUC-JP", "Japanese (EUC-JP)"],
+  ["gb18030", "Simplified Chinese (GB18030, GBK)"],
+  ["Big5", "Traditional Chinese (Big5)"],
+  ["EUC-KR", "Korean (EUC-KR)"],
+];
+
+function encodingChoice(value: string): EncodingSpec | "inherit" {
+  return ENCODINGS.find(([spec]) => spec === value)?.[0] ?? "inherit";
+}
+
 export interface SessionFieldsState {
   forwardAgent: GuardChoice;
   history: GuardChoice;
+  /** The shell's character set, or `inherit`. */
+  encoding: EncodingSpec | "inherit";
   /** One `NAME=value` per line. */
   env: string;
 }
@@ -110,6 +131,7 @@ export function sessionFields(settings: SettingsSpec | undefined): SessionFields
   return {
     forwardAgent: agent == null ? "inherit" : agent ? "on" : "off",
     history: history == null ? "inherit" : history ? "on" : "off",
+    encoding: settings?.encoding ?? "inherit",
     env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
   };
 }
@@ -134,6 +156,7 @@ export function withSession(base: SettingsSpec, fields: SessionFieldsState): Set
     ...base,
     forwardAgent: fields.forwardAgent === "inherit" ? null : fields.forwardAgent === "on",
     history: fields.history === "inherit" ? null : fields.history === "on",
+    encoding: fields.encoding === "inherit" ? null : fields.encoding,
     env: env.length > 0 ? env : null,
   };
 }
@@ -612,6 +635,20 @@ function SessionFields({
             <option value="inherit">Inherit (on by default)</option>
             <option value="on">On</option>
             <option value="off">Off</option>
+          </select>
+        </Field>
+        <Field label="Character set">
+          <select
+            value={value.encoding}
+            onChange={(e) => set({ encoding: encodingChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">Inherit (UTF-8 by default)</option>
+            {ENCODINGS.map(([spec, name]) => (
+              <option key={spec} value={spec}>
+                {name}
+              </option>
+            ))}
           </select>
         </Field>
         <Field label="Environment variables (one per line, as LANG=C.UTF-8)">

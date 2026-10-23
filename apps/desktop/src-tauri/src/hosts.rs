@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
-    EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError,
-    IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, SnippetId, Tag,
-    UserName, env_list,
+    Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
+    HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings,
+    SnippetId, Tag, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -78,6 +78,68 @@ pub(crate) struct SettingsSpec {
     /// The vault identity to log in with; `null` inherits.
     #[serde(default)]
     pub(crate) identity: Option<String>,
+    /// The shell's character set; `null` inherits (UTF-8 at the root).
+    #[serde(default)]
+    pub(crate) encoding: Option<EncodingSpec>,
+}
+
+/// A character set a host's shell may speak, by its WHATWG name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub(crate) enum EncodingSpec {
+    #[serde(rename = "UTF-8")]
+    Utf8,
+    #[serde(rename = "windows-1252")]
+    Windows1252,
+    #[serde(rename = "windows-1251")]
+    Windows1251,
+    #[serde(rename = "KOI8-R")]
+    Koi8R,
+    #[serde(rename = "ISO-8859-2")]
+    Iso8859_2,
+    #[serde(rename = "Shift_JIS")]
+    ShiftJis,
+    #[serde(rename = "EUC-JP")]
+    EucJp,
+    #[serde(rename = "gb18030")]
+    Gb18030,
+    #[serde(rename = "Big5")]
+    Big5,
+    #[serde(rename = "EUC-KR")]
+    EucKr,
+}
+
+impl From<EncodingSpec> for Encoding {
+    fn from(spec: EncodingSpec) -> Self {
+        match spec {
+            EncodingSpec::Utf8 => Self::Utf8,
+            EncodingSpec::Windows1252 => Self::Windows1252,
+            EncodingSpec::Windows1251 => Self::Windows1251,
+            EncodingSpec::Koi8R => Self::Koi8R,
+            EncodingSpec::Iso8859_2 => Self::Iso8859_2,
+            EncodingSpec::ShiftJis => Self::ShiftJis,
+            EncodingSpec::EucJp => Self::EucJp,
+            EncodingSpec::Gb18030 => Self::Gb18030,
+            EncodingSpec::Big5 => Self::Big5,
+            EncodingSpec::EucKr => Self::EucKr,
+        }
+    }
+}
+
+impl From<Encoding> for EncodingSpec {
+    fn from(encoding: Encoding) -> Self {
+        match encoding {
+            Encoding::Utf8 => Self::Utf8,
+            Encoding::Windows1252 => Self::Windows1252,
+            Encoding::Windows1251 => Self::Windows1251,
+            Encoding::Koi8R => Self::Koi8R,
+            Encoding::Iso8859_2 => Self::Iso8859_2,
+            Encoding::ShiftJis => Self::ShiftJis,
+            Encoding::EucJp => Self::EucJp,
+            Encoding::Gb18030 => Self::Gb18030,
+            Encoding::Big5 => Self::Big5,
+            Encoding::EucKr => Self::EucKr,
+        }
+    }
 }
 
 /// One environment variable, as OpenSSH `SetEnv NAME=value`.
@@ -289,6 +351,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         identities_only: s.identities_only,
         forward_agent: s.forward_agent,
         history: s.history,
+        encoding: s.encoding.map(EncodingSpec::from),
         identity: s.identity.as_ref().map(ToString::to_string),
         env: (!s.env.is_empty()).then(|| {
             s.env
@@ -427,6 +490,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         guard: guard_settings(spec.guard)?,
         forward_agent: spec.forward_agent,
         history: spec.history,
+        encoding: spec.encoding.map(Encoding::from),
         env: env_vars(spec.env)?,
         identity: spec
             .identity

@@ -23,6 +23,10 @@ pub use crate::vault::Credentials;
 /// Messages from the use case to a terminal stream, applied in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalInput {
+    /// Text the user typed or pasted. A stream whose shell speaks another
+    /// character set converts it; the rest send it as UTF-8.
+    Text(String),
+    /// Bytes as they are, such as legacy mouse reports.
     Data(Vec<u8>),
     Resize(TerminalSize),
 }

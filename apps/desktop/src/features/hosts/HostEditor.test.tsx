@@ -57,6 +57,7 @@ describe("withSession", () => {
     const settings = {
       forwardAgent: true,
       history: false,
+      encoding: "Shift_JIS" as const,
       env: [
         { name: "LANG", value: "C.UTF-8" },
         { name: "MOTD", value: "a=b c" },
@@ -66,6 +67,7 @@ describe("withSession", () => {
     expect(withSession(settings, sessionFields({}))).toEqual({
       forwardAgent: null,
       history: null,
+      encoding: null,
       env: null,
     });
   });
@@ -73,7 +75,12 @@ describe("withSession", () => {
   it("keeps spaces at the end of a value and takes CRLF lines", () => {
     const result = withSession(
       {},
-      { forwardAgent: "inherit", history: "inherit", env: "X=a \r\nY=b=c\r\n" },
+      {
+        forwardAgent: "inherit",
+        history: "inherit",
+        encoding: "inherit",
+        env: "X=a \r\nY=b=c\r\n",
+      },
     );
     expect(result).toMatchObject({
       env: [
@@ -84,12 +91,18 @@ describe("withSession", () => {
   });
 
   it("reports a line that is not NAME=value", () => {
-    expect(withSession({}, { forwardAgent: "inherit", history: "inherit", env: "LANG" })).toBe(
-      '"LANG" is not NAME=value',
-    );
-    expect(withSession({}, { forwardAgent: "inherit", history: "inherit", env: "=x" })).toMatch(
-      /not NAME=value/,
-    );
+    expect(
+      withSession(
+        {},
+        { forwardAgent: "inherit", history: "inherit", encoding: "inherit", env: "LANG" },
+      ),
+    ).toBe('"LANG" is not NAME=value');
+    expect(
+      withSession(
+        {},
+        { forwardAgent: "inherit", history: "inherit", encoding: "inherit", env: "=x" },
+      ),
+    ).toMatch(/not NAME=value/);
   });
 });
 

@@ -278,6 +278,16 @@ fn write_loop(
                     return;
                 }
             }
+            // A local shell speaks the system's UTF-8.
+            TerminalInput::Text(text) => {
+                if let Err(e) = writer
+                    .write_all(text.as_bytes())
+                    .and_then(|()| writer.flush())
+                {
+                    debug!(error = %e, "pty write failed; shell has exited");
+                    return;
+                }
+            }
             TerminalInput::Resize(size) => {
                 let resized = master
                     .lock()

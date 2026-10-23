@@ -14,9 +14,11 @@ use std::sync::Arc;
 use russh::client::Msg;
 use russh::{Channel, ChannelMsg, ChannelWriteHalf};
 use tauminus_app::ports::{TerminalEvent, TerminalInput, TerminalStream, Terminator};
+use tauminus_domain::Encoding;
 use tokio::sync::{Notify, mpsc};
 use tracing::debug;
 
+use crate::codec::Transcoder;
 use crate::connection::Connection;
 
 /// Output chunks queued toward the session pump before the bridge stops
@@ -27,7 +29,11 @@ const INPUT_QUEUE: usize = 64;
 
 /// Starts the bridge. It holds `connection` until the shell ends; the
 /// connection closes when nothing else holds it either.
-pub(crate) fn spawn(channel: Channel<Msg>, connection: Arc<Connection>) -> TerminalStream {
+pub(crate) fn spawn(
+    channel: Channel<Msg>,
+    connection: Arc<Connection>,
+    encoding: Encoding,
+) -> TerminalStream {
     let (events_tx, events_rx) = mpsc::channel(EVENT_QUEUE);
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
     let close = Arc::new(Notify::new());
@@ -37,6 +43,7 @@ pub(crate) fn spawn(channel: Channel<Msg>, connection: Arc<Connection>) -> Termi
         input_rx,
         events_tx,
         Arc::clone(&close),
+        encoding,
     ));
     TerminalStream {
         input: input_tx,
@@ -68,10 +75,18 @@ async fn run(
     input: mpsc::Receiver<TerminalInput>,
     events: mpsc::Sender<TerminalEvent>,
     close: Arc<Notify>,
+    encoding: Encoding,
 ) {
     let (mut reader, writer) = channel.split();
     let writer = Arc::new(writer);
-    let writing = tokio::spawn(forward_input(Arc::clone(&writer), input));
+    // Each direction keeps its own: output's decoder holds a character
+    // split across chunks.
+    let mut output = Transcoder::new(encoding);
+    let writing = tokio::spawn(forward_input(
+        Arc::clone(&writer),
+        input,
+        Transcoder::new(encoding),
+    ));
     let mut code: Option<u32> = None;
     // Output goes out in the order it arrived; while the pump has no room,
     // the channel is not read, but a terminate still gets through.
@@ -89,7 +104,7 @@ async fn run(
                 tokio::select! {
                     biased;
                     () = close.notified() => break,
-                    sent = events.send(TerminalEvent::Output(data.to_vec())) => {
+                    sent = events.send(TerminalEvent::Output(output.decode(&data, false))) => {
                         if sent.is_err() {
                             break;
                         }
@@ -105,15 +120,22 @@ async fn run(
     writing.abort();
     let _ = writer.close().await;
     drop(connection);
+    // A character cut off by the end shows as a replacement, not nothing.
+    let rest = output.decode(&[], true);
+    if !rest.is_empty() {
+        let _ = events.send(TerminalEvent::Output(rest)).await;
+    }
     let _ = events.send(TerminalEvent::Exited { code }).await;
 }
 
 async fn forward_input(
     writer: Arc<ChannelWriteHalf<Msg>>,
     mut input: mpsc::Receiver<TerminalInput>,
+    codec: Transcoder,
 ) {
     while let Some(message) = input.recv().await {
         let sent = match message {
+            TerminalInput::Text(text) => writer.data_bytes(codec.encode(&text)).await,
             TerminalInput::Data(bytes) => writer.data_bytes(bytes).await,
             TerminalInput::Resize(size) => {
                 writer

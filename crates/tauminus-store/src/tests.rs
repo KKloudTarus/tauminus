@@ -185,6 +185,46 @@ async fn startup_snippets_load_back_and_raise_the_version_to_3() {
 }
 
 #[tokio::test]
+async fn an_encoding_loads_back_and_raises_the_version_to_4() {
+    use tauminus_domain::Encoding;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut host = inventory
+        .host(&HostId::parse("db1").unwrap())
+        .unwrap()
+        .clone();
+    host.settings.encoding = Some(Encoding::EucJp);
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 4);
+    assert!(String::from_utf8_lossy(&bytes).contains("\"encoding\": \"EUC-JP\""));
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
+async fn an_encoding_set_on_a_group_alone_raises_the_version_too() {
+    use tauminus_domain::Encoding;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut prod = inventory
+        .groups()
+        .find(|g| g.id.as_str() == "prod")
+        .unwrap()
+        .clone();
+    prod.settings.encoding = Some(Encoding::Koi8R);
+    inventory.put_group(prod).unwrap();
+    store.save(&inventory).await.unwrap();
+    let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 4);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -197,7 +237,11 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 4, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 5, "hosts": []}"#.to_owned()),
+        (
+            "unknown encoding",
+            r#"{"version": 4, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"encoding": "UTF-7"}}]}"#.to_owned(),
+        ),
         (
             "startup snippet id",
             r#"{"version": 3, "hosts": [{"id": "a", "label": "a", "address": "a", "startup": ["no spaces"]}]}"#.to_owned(),

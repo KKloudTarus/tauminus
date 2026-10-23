@@ -3,6 +3,7 @@
 
 import {
   type GroupInput,
+  type EncodingSpec,
   type EnvSpec,
   type GroupView,
   type GuardFinding,
@@ -18,6 +19,7 @@ import {
 import { SessionCommandError } from "./sessions.ts";
 
 export type {
+  EncodingSpec,
   EnvSpec,
   GroupInput,
   GroupView,
