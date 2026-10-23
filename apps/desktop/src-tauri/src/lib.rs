@@ -6,6 +6,7 @@
 
 mod clipboard;
 mod commands;
+mod forwards;
 mod history;
 mod hosts;
 mod ipc;
@@ -46,6 +47,9 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         hosts::ssh_config_aliases,
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
+        forwards::forward_start,
+        forwards::forward_stop,
+        forwards::forwards_status,
         hosts::guard_check,
         links::open_link,
         clipboard::clipboard_read_text,
@@ -94,8 +98,14 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     // OpenSSH files are read but never written.
     let remember_in = config_dir.join("known_hosts");
     let store = HostKeyStore::new(HostKeyStore::openssh_files(home.as_deref()), remember_in);
-    let connector = RusshConnector::new(store, home.clone(), AgentSource::Environment);
-    app.manage(SshSessions::new(Arc::new(connector), Arc::clone(&sessions)));
+    let connector: Arc<dyn tauminus_app::ports::SshConnector> = Arc::new(RusshConnector::new(
+        store,
+        home.clone(),
+        AgentSource::Environment,
+    ));
+    let connections = Arc::new(tauminus_app::Connections::new(Arc::clone(&connector)));
+    app.manage(Arc::new(tauminus_app::Forwards::new(connections)));
+    app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
     app.manage(sessions);
 
     let store = Arc::new(JsonHostStore::new(config_dir.join("hosts.json")));

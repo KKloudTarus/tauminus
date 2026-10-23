@@ -39,7 +39,8 @@ export type Action =
   | "hosts.import"
   | "vault.open"
   | "vault.lock"
-  | "history.open";
+  | "history.open"
+  | "forwards.open";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -66,6 +67,7 @@ export const ACTIONS: readonly Action[] = [
   "vault.open",
   "vault.lock",
   "history.open",
+  "forwards.open",
 ];
 
 export type Platform = "mac" | "other";
@@ -98,6 +100,7 @@ const OTHER: Bindings = {
   "vault.open": [],
   "vault.lock": [],
   "history.open": ["ctrl+shift+r"],
+  "forwards.open": [],
 };
 
 const MAC: Bindings = {
@@ -126,6 +129,7 @@ const MAC: Bindings = {
   "vault.open": [],
   "vault.lock": [],
   "history.open": ["meta+shift+r"],
+  "forwards.open": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

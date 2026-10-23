@@ -16,7 +16,9 @@ import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
+import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import type {
+  ForwardsClient,
   HistoryClient,
   HostView,
   HostsClient,
@@ -57,6 +59,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "vault.open": "Open the vault",
   "vault.lock": "Lock the vault",
   "history.open": "Search the command history",
+  "forwards.open": "Port forwarding",
 };
 
 interface ShellState {
@@ -64,6 +67,7 @@ interface ShellState {
   connectOpen: boolean;
   vaultOpen: boolean;
   historyOpen: boolean;
+  forwardsOpen: boolean;
   sidebarOpen: boolean;
   theme: ThemePreference;
 }
@@ -77,6 +81,8 @@ export class AppShell {
   readonly workspace: Workspace<TerminalController, SessionSpec>;
   readonly hosts: HostsStore;
   readonly vault: VaultStore;
+  /** Port forwarding, when this window has a backend for it. */
+  readonly forwards: ForwardsStore | undefined;
   /** A connect waiting for the vault to unlock. */
   #afterUnlock: (() => void) | undefined;
   readonly keymap: Keymap;
@@ -95,6 +101,7 @@ export class AppShell {
     clipboard: TextClipboard | undefined;
     /** Where commands are recorded; none keeps no history. */
     history?: HistoryClient;
+    forwards?: ForwardsClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -114,11 +121,15 @@ export class AppShell {
     this.keymap = keymap;
     this.hosts = new HostsStore(options.hosts);
     this.vault = new VaultStore(options.vault, undefined, options.storage);
+    this.forwards = options.forwards
+      ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
+      : undefined;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
       vaultOpen: false,
       historyOpen: false,
+      forwardsOpen: false,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
     };
@@ -188,6 +199,19 @@ export class AppShell {
     if (this.#state.historyOpen === open) return;
     this.#set({ ...this.#state, historyOpen: open });
     if (!open) this.#focusActivePane();
+  }
+
+  setForwardsOpen(open: boolean): void {
+    if (this.#state.forwardsOpen === open) return;
+    this.#set({ ...this.#state, forwardsOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Starts or stops a saved rule, with the forwarding list open to show it. */
+  toggleForward(hostId: string, ruleId: string): void {
+    if (!this.forwards) return;
+    this.setForwardsOpen(true);
+    void this.forwards.toggle(hostId, ruleId);
   }
 
   /** The history client, when this window keeps one. */
@@ -265,6 +289,9 @@ export class AppShell {
         return;
       case "history.open":
         this.setHistoryOpen(true);
+        return;
+      case "forwards.open":
+        this.setForwardsOpen(true);
         return;
       case "vault.lock":
         this.vault.lock().catch((error: unknown) => console.warn("lock failed", error));

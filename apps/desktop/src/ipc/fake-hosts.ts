@@ -100,6 +100,10 @@ export function fakeHosts(): HostsClient {
       group: input.group ?? null,
       tags: [...new Set((input.tags ?? []).map((t) => t.toLowerCase()))].toSorted(),
       settings: input.settings ?? {},
+      // Absent keeps the saved rules, as the backend does.
+      forwards: (input.forwards ?? hosts.find((h) => h.id === input.id)?.forwards ?? []).map(
+        (rule) => Object.assign({}, rule, { id: rule.id ?? id() }),
+      ),
     };
     if (!host.label || !host.address) throw new Error("label and address are required");
     hosts = [...hosts.filter((h) => h.id !== host.id), host];
@@ -162,6 +166,7 @@ export function fakeHosts(): HostsClient {
           address: entry.address,
           group: group.id,
           settings: { user: entry.user },
+          forwards: [],
         });
         added += 1;
       }

@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "@/app/App.tsx";
 import { AppShell } from "@/app/shell.ts";
 import {
+  forwardsClient,
   historyClient,
   hostsClient,
   linkOpener,
@@ -27,6 +28,7 @@ const shell = new AppShell({
   hosts: await hostsClient(),
   vault: await vaultClient(),
   history: await historyClient(),
+  forwards: await forwardsClient((host, rule) => ruleLabel(host, rule)),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
   storage: safeLocalStorage(),
@@ -48,6 +50,12 @@ createRoot(root).render(
     <App shell={shell} />
   </StrictMode>,
 );
+
+/** A rule's name, for the `e2e` build's fake forwarding. */
+function ruleLabel(host: string, rule: string): string {
+  const saved = shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host);
+  return saved?.forwards.find((r) => r.id === rule)?.label ?? "";
+}
 
 function rendererOverride(): "auto" | "dom" | "webgl" {
   const value = import.meta.env.VITE_TAUMINUS_RENDERER;

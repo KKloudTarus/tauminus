@@ -12,7 +12,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::{Answer, BoxFuture, ConnectError, Credentials, Prompt, Prompter};
-use tauminus_app::{SshOpenError, SshSessions};
+use tauminus_app::{Forwards, Login, LoginError, SshOpenError, SshSessions};
 use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
 use tauri::State;
 use tauri::ipc::Channel;
@@ -518,53 +518,63 @@ pub(crate) async fn host_connect(
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    forwards: State<'_, Arc<Forwards>>,
     id: String,
     size: GridSize,
     on_output: Channel<OutputChunk>,
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
-    let (target, credentials) = host_target(&hosts, &vault, &id).await?;
-    open_target_with(
-        &ssh,
-        &broker,
-        &target,
-        size,
-        Channels {
-            output: on_output,
-            exit: on_exit,
-            prompt: on_prompt,
-        },
-        Arc::new(credentials),
-    )
-    .await
+    // Before resolving: an edit that moves the host from here on voids
+    // the rules that would start with it on what was resolved.
+    let mark = tauminus_domain::HostId::parse(&id)
+        .ok()
+        .map(|host| forwards.host_mark(&host));
+    let login = login(&hosts, &vault, &id).await?;
+    let prompter = prompter(&broker, on_prompt);
+    let sink = ChannelSink {
+        output: on_output,
+        exit: on_exit,
+    };
+    let session = ssh
+        .open_saved(&login, size.try_into()?, sink, Arc::clone(&prompter))
+        .await?;
+    if let Some(mark) = mark {
+        crate::forwards::start_with_host(&hosts, &forwards, login, mark, prompter);
+    }
+    SessionHandle::try_from(session)
 }
 
-/// A saved host's target and the credentials of its identity, if any. A
-/// host with an identity needs the vault open: the view asks to unlock on
-/// `vault_locked` and tries again. The identity's user replaces the host's.
-async fn host_target(
+/// A saved host resolved for one login. A host with an identity needs the
+/// vault open: the view asks to unlock on `vault_locked` and tries again.
+pub(crate) async fn login(
     hosts: &crate::hosts::Hosts,
     vault: &tauminus_app::vault::Vault,
     id: &str,
-) -> Result<(SshTarget, Credentials), CommandError> {
+) -> Result<Login, CommandError> {
     let invalid =
         |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
     let id = tauminus_domain::HostId::parse(id).map_err(|e| invalid(&e))?;
     let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
-    let book = hosts.book()?;
-    let mut target = book.resolve(&id, &me).await.map_err(|e| invalid(&e))?;
-    let credentials = match book.identity(&id).await.map_err(|e| invalid(&e))? {
-        Some(identity) => vault.credentials(identity.as_str()).await?,
-        None => Credentials::default(),
-    };
-    if let Some(user) = credentials.user.as_deref() {
-        let user = UserName::parse(user).map_err(|e| invalid(&e))?;
-        let destination = &target.destination;
-        target.destination = Endpoint::new(user, destination.host.clone(), destination.port)
-            .map_err(|e| invalid(&e))?;
-    }
-    Ok((target, credentials))
+    Login::resolve(hosts.book()?, vault, &id, &me)
+        .await
+        .map_err(|error| match error {
+            LoginError::Vault(error) => error.into(),
+            LoginError::Hosts(error) => invalid(&error),
+            LoginError::Name(error) => invalid(&error),
+        })
+}
+
+/// Asks the view, on `channel`, whatever a login needs answered.
+pub(crate) fn prompter(
+    broker: &Arc<PromptBroker>,
+    channel: Channel<PromptRequest>,
+) -> Arc<dyn Prompter> {
+    Arc::new(ChannelPrompter {
+        broker: Arc::clone(broker),
+        channel,
+        timeout: PROMPT_TIMEOUT,
+    })
 }
 
 /// Adds an identity's public key to `~/.ssh/authorized_keys` on a saved
@@ -587,17 +597,12 @@ pub(crate) async fn identity_install(
         .ok_or_else(|| invalid("this identity has no key to install".into()))?;
     let line =
         tauminus_domain::PublicKeyLine::installable(&line).map_err(|e| invalid(e.to_string()))?;
-    let (target, credentials) = host_target(&hosts, &vault, &host).await?;
-    let prompter = Arc::new(ChannelPrompter {
-        broker: Arc::clone(&broker),
-        channel: on_prompt,
-        timeout: PROMPT_TIMEOUT,
-    });
+    let login = login(&hosts, &vault, &host).await?;
     let outcome = ssh
         .run_script(
-            &target,
-            prompter,
-            Arc::new(credentials),
+            &login.target,
+            prompter(&broker, on_prompt),
+            login.credentials,
             &tauminus_domain::install_script(&line),
         )
         .await

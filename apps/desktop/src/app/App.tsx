@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
+import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
@@ -20,7 +21,7 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen, vaultOpen, historyOpen } = useSyncExternalStore(
+  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen } = useSyncExternalStore(
     shell.subscribe,
     shell.getState,
   );
@@ -58,7 +59,12 @@ export function App({ shell }: { shell: AppShell }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const state = shell.getState();
-      const modal = state.paletteOpen || state.connectOpen || state.vaultOpen || state.historyOpen;
+      const modal =
+        state.paletteOpen ||
+        state.connectOpen ||
+        state.vaultOpen ||
+        state.historyOpen ||
+        state.forwardsOpen;
       if (!event.defaultPrevented && !modal) {
         shell.handleKey(event);
       }
@@ -135,6 +141,13 @@ export function App({ shell }: { shell: AppShell }) {
           onInsert={(command) => shell.insertText(command)}
           onCopy={(text) => shell.copyText(text)}
           onUnlock={(retry) => shell.unlockVaultThen(retry)}
+        />
+      )}
+      {forwardsOpen && shell.forwards && (
+        <ForwardsDialog
+          store={shell.forwards}
+          hosts={savedHosts}
+          onClose={() => shell.setForwardsOpen(false)}
         />
       )}
       {vaultOpen && (

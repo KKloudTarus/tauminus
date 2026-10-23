@@ -12,6 +12,9 @@ import type {
   SettingsSpec,
 } from "@/ipc/index.ts";
 
+import { ForwardFields } from "@/features/forwards/ForwardFields.tsx";
+import { ruleRow, rulesToSave } from "@/features/forwards/rules.ts";
+
 import { type HostsStore, messageOf } from "./hosts-store.ts";
 
 export type Editing =
@@ -255,6 +258,7 @@ function HostForm({
   );
   const [guard, setGuard] = useState(() => guardFields(host?.settings.guard));
   const [session, setSession] = useState(() => sessionFields(host?.settings));
+  const [rules, setRules] = useState(() => (host?.forwards ?? []).map(ruleRow));
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -262,6 +266,11 @@ function HostForm({
     event.preventDefault();
     if (port(portText) === null) {
       setError("Port must be a whole number");
+      return;
+    }
+    const forwards = rulesToSave(rules);
+    if (typeof forwards === "string") {
+      setError(forwards);
       return;
     }
     const withOptions = withSession({ ...host?.settings, identity: identity || null }, session);
@@ -287,6 +296,7 @@ function HostForm({
           }),
           guard,
         ),
+        forwards,
       });
       onDone();
     } catch (failure) {
@@ -398,6 +408,7 @@ function HostForm({
         inherited={host?.forwardsAgent ?? false}
       />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
+      <ForwardFields rows={rules} onChange={setRules} />
     </Form>
   );
 }
