@@ -17,6 +17,7 @@ publish = false
 [workspace.dependencies]
 # Internal crates
 tauminus-app = { path = "crates/tauminus-app" }
+tauminus-charset = { path = "crates/tauminus-charset" }
 tauminus-domain = { path = "crates/tauminus-domain" }
 tauminus-presence = { path = "crates/tauminus-presence" }
 tauminus-pty = { path = "crates/tauminus-pty" }

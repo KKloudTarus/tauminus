@@ -14,11 +14,11 @@ use std::sync::Arc;
 use russh::client::Msg;
 use russh::{Channel, ChannelMsg, ChannelWriteHalf};
 use tauminus_app::ports::{TerminalEvent, TerminalInput, TerminalStream, Terminator};
+use tauminus_charset::Transcoder;
 use tauminus_domain::Encoding;
 use tokio::sync::{Notify, mpsc};
 use tracing::debug;
 
-use crate::codec::Transcoder;
 use crate::connection::Connection;
 
 /// Output chunks queued toward the session pump before the bridge stops

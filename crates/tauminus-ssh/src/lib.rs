@@ -12,7 +12,6 @@
 
 mod auth;
 mod bridge;
-mod codec;
 mod config;
 mod connection;
 mod forward;
