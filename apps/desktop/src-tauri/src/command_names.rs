@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "session_write",
     "session_write_bytes",
     "session_resize",
+    "session_probe",
     "session_acknowledge",
     "session_close",
     "ssh_open",

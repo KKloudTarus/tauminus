@@ -225,6 +225,11 @@ export class AppShell {
       });
       controller.setKeyHandler((event) => this.handleKey(event));
       controller.setInputListener((data) => this.#broadcastFrom(paneId, data));
+      // A secret typed into a session that went away ends with it: the next
+      // session starts at its own prompt.
+      controller.subscribe(() => {
+        if (controller.getStatus().kind !== "running") this.#forget(paneId);
+      });
       // Not over Telnet: it reports running once TCP connects, and the text
       // would go to the device's login prompt.
       if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
@@ -541,6 +546,7 @@ export class AppShell {
         this.#secret.delete(pane);
         controller.interrupt();
       } else if (!this.#takesKeys(controller)) {
+        if (ends) this.#secret.delete(pane);
         continue;
       } else if (secret && !(this.#secret.has(pane) || controller.atSecretPrompt)) {
         this.#secretHeldBack(controller);
@@ -583,6 +589,16 @@ export class AppShell {
     );
   }
 
+  /** Drops `pane`'s secret latch and any keys held for it. */
+  #forget(pane: PaneId): void {
+    this.#secret.delete(pane);
+    const held = this.#held.get(pane);
+    if (held) {
+      clearTimeout(held.timer);
+      this.#held.delete(pane);
+    }
+  }
+
   /** Says once per secret which pane did not get it. */
   #secretHeldBack(controller: TerminalController): void {
     const now = Date.now();
@@ -594,8 +610,9 @@ export class AppShell {
   }
 
   /**
-   * Types a host's startup snippets each time its session comes up,
-   * including after a reconnect. A host with none costs no call.
+   * Types a host's startup snippets each time the user brings its session
+   * up: not after an automatic reconnect, and never into a tmux session.
+   * A host with none costs no call.
    */
   #startupOn(controller: TerminalController, hostId: string): void {
     const { promise, done } = deferred<boolean>();
@@ -609,6 +626,9 @@ export class AppShell {
     controller.subscribe(() => {
       const now = controller.getStatus().kind;
       const started = now === "running" && was !== "running";
+      // Back on its own after a loss: nobody is watching what the text
+      // would land in (a `tmux attach` snippet's session, for one).
+      const automatic = was === "reconnecting";
       was = now;
       // A session that ends before it ever came up never gets its keys:
       // a retry an hour later is not the moment the user ran them for.
@@ -618,7 +638,9 @@ export class AppShell {
       }
       if (!started) return;
       const host = this.hosts.getSnapshot().view.hosts.find((h) => h.id === hostId);
-      if (!snippets || !host || host.startup.length === 0) {
+      // A tmux session may already be running, from another pane or an
+      // earlier run: the text would be typed into whatever it shows.
+      if (!snippets || !host || host.startup.length === 0 || host.joinsTmux || automatic) {
         this.#startupTyped.set(controller, true);
         done(true);
         return;

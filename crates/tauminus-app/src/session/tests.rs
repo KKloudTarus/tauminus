@@ -17,9 +17,14 @@ struct Remote {
     input: mpsc::Receiver<TerminalInput>,
     terminated: Arc<AtomicUsize>,
     killed: Arc<AtomicUsize>,
+    probed: Arc<AtomicUsize>,
 }
 
 impl Remote {
+    fn probes(&self) -> usize {
+        self.probed.load(Ordering::Relaxed)
+    }
+
     fn terminations(&self) -> usize {
         self.terminated.load(Ordering::Relaxed)
     }
@@ -32,6 +37,7 @@ impl Remote {
 struct CountingTerminator {
     terminated: Arc<AtomicUsize>,
     killed: Arc<AtomicUsize>,
+    probed: Arc<AtomicUsize>,
 }
 
 impl Terminator for CountingTerminator {
@@ -41,6 +47,10 @@ impl Terminator for CountingTerminator {
 
     fn kill(&self) {
         self.killed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn probe(&self) {
+        self.probed.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -87,16 +97,22 @@ impl PtyLauncher for FakeLauncher {
         let (input_tx, input_rx) = mpsc::channel(64);
         let terminated = Arc::new(AtomicUsize::new(0));
         let killed = Arc::new(AtomicUsize::new(0));
+        let probed = Arc::new(AtomicUsize::new(0));
         lock(&self.remotes).push_back(Remote {
             events: events_tx,
             input: input_rx,
             terminated: Arc::clone(&terminated),
             killed: Arc::clone(&killed),
+            probed: Arc::clone(&probed),
         });
         Ok(TerminalStream {
             input: input_tx,
             events: events_rx,
-            terminator: Box::new(CountingTerminator { terminated, killed }),
+            terminator: Box::new(CountingTerminator {
+                terminated,
+                killed,
+                probed,
+            }),
         })
     }
 }
@@ -105,6 +121,7 @@ impl PtyLauncher for FakeLauncher {
 struct RecordingSink {
     batches: Arc<Mutex<Vec<Vec<u8>>>>,
     exits: Arc<Mutex<Vec<Option<u32>>>>,
+    lost: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
 }
 
@@ -133,6 +150,10 @@ impl OutputSink for RecordingSink {
 
     fn send_exit(&self, code: Option<u32>) {
         lock(&self.exits).push(code);
+    }
+
+    fn send_lost(&self) {
+        self.lost.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -638,4 +659,30 @@ async fn in_flight_bytes_stay_within_high_watermark_plus_two_batches() {
     let in_flight = h.sink.output().len();
     assert!(in_flight > 8, "paused only after crossing H");
     assert!(in_flight <= 18, "in flight {in_flight} > H + F + C");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_probe_reaches_the_stream_and_a_lost_link_reaches_the_sink() {
+    let h = Harness::new(config());
+    let (id, remote) = h.open_ok();
+    // Every probe is let through, even with the input queue full.
+    for _ in 0..64 {
+        h.sessions.write(id, b"x".to_vec()).await.unwrap();
+    }
+    h.sessions.probe(id).unwrap();
+    settle().await;
+    assert_eq!(remote.probes(), 1);
+
+    output(&remote, b"last words").await;
+    remote.events.send(TerminalEvent::Lost).await.unwrap();
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // What came before the loss is shown first, then the loss, not an exit.
+    assert_eq!(h.sink.output(), b"last words");
+    assert_eq!(h.sink.lost.load(Ordering::Relaxed), 1);
+    assert_eq!(h.sink.exits(), Vec::<Option<u32>>::new());
+    assert!(matches!(
+        h.sessions.probe(id),
+        Err(SessionError::NotFound(_))
+    ));
 }

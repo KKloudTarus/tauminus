@@ -112,7 +112,7 @@ async fn wait_for(stream: &mut TerminalStream, seen: &mut String, needle: &str) 
                 Some(TerminalEvent::Output(chunk)) => {
                     seen.push_str(&String::from_utf8_lossy(&chunk));
                 }
-                Some(TerminalEvent::Exited { .. }) | None => {
+                Some(TerminalEvent::Exited { .. } | TerminalEvent::Lost) | None => {
                     panic!("ended before {needle:?}: {seen}")
                 }
             }
@@ -157,6 +157,7 @@ async fn a_shell_over_telnet_sees_the_window_size_echoes_and_ends() {
         loop {
             match stream.events.recv().await {
                 Some(TerminalEvent::Exited { code }) => return code,
+                Some(TerminalEvent::Lost) => panic!("the shell ended; nothing was lost"),
                 Some(TerminalEvent::Output(_)) => {}
                 None => panic!("stream closed without an exit"),
             }
@@ -222,7 +223,7 @@ async fn a_server_that_never_reads_cannot_keep_a_session_open() {
     let ended = tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             match stream.events.recv().await {
-                Some(TerminalEvent::Exited { .. }) | None => return,
+                Some(TerminalEvent::Exited { .. } | TerminalEvent::Lost) | None => return,
                 Some(TerminalEvent::Output(_)) => {}
             }
         }

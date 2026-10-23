@@ -52,8 +52,11 @@ export class SessionCommandError extends Error {
 export interface SessionEvents {
   /** Called with each batch of terminal output, in order. */
   onOutput(data: Uint8Array): void;
-  /** Called once when the session ends. */
-  onExit(exitCode: number | null): void;
+  /**
+   * Called once when the session ends. `lost` says the connection went
+   * away first: the remote shell may still be there to connect to again.
+   */
+  onExit(exitCode: number | null, lost?: boolean): void;
   /** Called for each question an SSH connect raises. Without it, every prompt is declined. */
   onPrompt?: PromptHandler;
 }
@@ -66,6 +69,8 @@ export interface TerminalSession {
   resize(size: GridSize): Promise<void>;
   /** Reports output bytes the terminal has parsed, so the backend can resume. */
   acknowledge(bytes: number): Promise<void>;
+  /** Checks the link still answers; a dead one ends the session as lost. */
+  probe(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -97,7 +102,7 @@ export const tauriSessions: SessionClient = {
     const output = new Channel<ArrayBuffer>();
     output.onmessage = (buffer) => events.onOutput(new Uint8Array(buffer));
     const exit = new Channel<SessionExit>();
-    exit.onmessage = (event) => events.onExit(event.exitCode);
+    exit.onmessage = (event) => events.onExit(event.exitCode, event.lost);
 
     let opening: CommandResult<number>;
     if (spec.kind === "local") {
@@ -127,6 +132,7 @@ export const tauriSessions: SessionClient = {
       writeBytes: (data) => done(commands.sessionWriteBytes(id, [...data])),
       resize: (next) => done(commands.sessionResize(id, next)),
       acknowledge: (bytes) => done(commands.sessionAcknowledge(id, bytes)),
+      probe: () => done(commands.sessionProbe(id)),
       close: () => done(commands.sessionClose(id)),
     };
   },

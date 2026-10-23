@@ -18,6 +18,7 @@ mod forward;
 mod host_keys;
 pub mod known_hosts;
 mod pipe;
+mod rejected;
 mod sftp;
 mod socks;
 mod transport;
@@ -68,6 +69,9 @@ pub struct RusshConnector {
     /// write to a local peer may make no progress.
     forward_budget: usize,
     forward_stall: Duration,
+    /// Shared by every connect, so a password one host turned down is not
+    /// sent to the next.
+    rejected: Arc<rejected::RejectedPasswords>,
 }
 
 impl RusshConnector {
@@ -80,6 +84,7 @@ impl RusshConnector {
             connect_timeout: CONNECT_TIMEOUT,
             forward_budget: pipe::BUDGET,
             forward_stall: pipe::STALL,
+            rejected: Arc::default(),
         }
     }
 
@@ -143,6 +148,7 @@ impl RusshConnector {
             };
             let known = self.host_keys.load().await?;
             let config = Arc::new(client_config(&known, hop));
+            let goodbye = Arc::new(std::sync::OnceLock::new());
             let reached = Arc::new(Notify::new());
             let last = index + 1 == hops.len();
             let handler = Client {
@@ -157,6 +163,7 @@ impl RusshConnector {
                 prompter: Arc::clone(&prompter),
                 reached: Arc::clone(&reached),
                 alive: alive.clone(),
+                goodbye: Arc::clone(&goodbye),
             };
             let mut handle =
                 handshake(config, io, handler, &reached, hop, self.connect_timeout).await?;
@@ -169,9 +176,21 @@ impl RusshConnector {
                 agent: &self.agent,
                 // A jump host is another login; the identity is for the target.
                 credentials: if last { &credentials } else { &none },
+                rejected: &self.rejected,
+                goodbye: &goodbye,
+                turn: None,
+                stored_last: false,
             }
             .run()
-            .await?;
+            .await
+            .map_err(|error| match (error, goodbye.get()) {
+                // However the sign-in noticed the link gone, a server that
+                // said goodbye first refused.
+                (ConnectError::Io(_), Some(said)) => {
+                    ConnectError::Protocol(format!("the server closed the connection: {said}"))
+                }
+                (error, _) => error,
+            })?;
             tracing::debug!(hop = %hop, index, "authenticated");
             connections.push(handle);
         }
@@ -317,8 +336,10 @@ fn client_config(known: &KnownHosts, hop: &Endpoint) -> client::Config {
         .is_empty();
     client::Config {
         preferred: preferred(&recorded, certificates),
-        // Notice a dead link within about 90 s instead of hanging forever.
-        keepalive_interval: Some(Duration::from_secs(30)),
+        // A quiet link is checked every 15 s and given up after about a
+        // minute: each keepalive wakes the radio, so they stay rare. A wake
+        // or a network change asks for a check at once instead (a probe).
+        keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 3,
         inactivity_timeout: None,
         channel_buffer_size: CHANNEL_BUFFER,
@@ -436,6 +457,9 @@ pub(crate) struct Client {
     reached: Arc<Notify>,
     /// Closed when the connect is abandoned.
     alive: watch::Receiver<()>,
+    /// What the server said when it closed the connection itself, as
+    /// after too many failed sign-in tries; a network drop says nothing.
+    goodbye: Arc<std::sync::OnceLock<String>>,
 }
 
 /// Errors from inside a handshake: russh's own, or our host key decision.
@@ -451,18 +475,66 @@ impl From<russh::Error> for HandlerError {
     }
 }
 
+/// The link went away (as a server at its `MaxStartups`, one restarting,
+/// or Wi-Fi dropping mid-login does), which is worth trying again, or the
+/// server broke the protocol, which is not.
+pub(crate) fn link_or_protocol(error: russh::Error) -> ConnectError {
+    match error {
+        russh::Error::IO(error) => ConnectError::Io(error),
+        error @ (russh::Error::Disconnect
+        | russh::Error::SendError
+        | russh::Error::RecvError
+        | russh::Error::ConnectionTimeout
+        | russh::Error::KeepaliveTimeout
+        | russh::Error::InactivityTimeout) => ConnectError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            error.to_string(),
+        )),
+        error => protocol(error),
+    }
+}
+
 impl HandlerError {
     fn into_connect_error(self) -> ConnectError {
         match self {
             Self::HostKey(error) => error,
-            Self::Russh(russh::Error::IO(error)) => ConnectError::Io(error),
-            Self::Russh(error) => protocol(error),
+            Self::Russh(error) => link_or_protocol(error),
         }
     }
 }
 
+/// Unicode format characters (bidi overrides, zero-width marks), which
+/// would let a server reorder how its message reads.
+fn is_format(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
+}
+
 impl client::Handler for Client {
     type Error = HandlerError;
+
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the trait is async; this answers at once"
+    )]
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                // Shown to the user: printable, and short.
+                let said: String = info
+                    .message
+                    .chars()
+                    .filter(|c| !c.is_control() && !is_format(*c))
+                    .take(200)
+                    .collect();
+                let _ = self.goodbye.set(said);
+                Ok(())
+            }
+            client::DisconnectReason::Error(error) => Err(error),
+        }
+    }
 
     async fn check_server_key(
         &mut self,

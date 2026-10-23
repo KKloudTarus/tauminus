@@ -106,6 +106,8 @@ export function fakeHosts(): HostsClient {
       ),
       startup: input.startup ?? hosts.find((h) => h.id === input.id)?.startup ?? [],
       protocol: input.protocol ?? "ssh",
+      // The fake reads only the host's own setting, not its groups'.
+      joinsTmux: (input.protocol ?? "ssh") === "ssh" && Boolean(input.settings?.tmux),
     };
     if (!host.label || !host.address) throw new Error("label and address are required");
     hosts = [...hosts.filter((h) => h.id !== host.id), host];

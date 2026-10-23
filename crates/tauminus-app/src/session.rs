@@ -105,6 +105,7 @@ struct SessionControl {
     acked_bytes: AtomicUsize,
     acked: Notify,
     closed: Notify,
+    probe: Notify,
 }
 
 impl SessionManager {
@@ -197,6 +198,14 @@ impl SessionManager {
         let control = self.control(id)?;
         control.acked_bytes.fetch_add(bytes, Ordering::Relaxed);
         control.acked.notify_one();
+        Ok(())
+    }
+
+    /// Asks the stream to check its link; a dead one ends the session as
+    /// lost. Never waits: it goes around the input queue, which a dead link
+    /// may have filled.
+    pub fn probe(&self, id: SessionId) -> Result<(), SessionError> {
+        self.control(id)?.probe.notify_one();
         Ok(())
     }
 
@@ -304,6 +313,10 @@ impl<S: OutputSink> Pump<S> {
                     self.finish(None);
                     Step::Stop
                 }
+                () = self.control.probe.notified(), if !self.closing => {
+                    self.terminator.probe();
+                    Step::Continue
+                }
                 () = self.control.acked.notified() => {
                     let acked = self.control.acked_bytes.swap(0, Ordering::Relaxed);
                     if self.flow.record_ack(acked) == FlowSignal::Resume {
@@ -353,6 +366,11 @@ impl<S: OutputSink> Pump<S> {
                 Some(TerminalEvent::Output(chunk)) => self.absorb_output(chunk),
                 Some(TerminalEvent::Exited { code }) => {
                     self.finish(code);
+                    Step::Stop
+                }
+                Some(TerminalEvent::Lost) => {
+                    self.flush_output();
+                    self.sink.send_lost();
                     Step::Stop
                 }
                 None => {
@@ -416,10 +434,14 @@ impl<S: OutputSink> Pump<S> {
     }
 
     fn finish(&mut self, code: Option<u32>) {
+        self.flush_output();
+        self.sink.send_exit(code);
+    }
+
+    fn flush_output(&mut self) {
         if let Some(batch) = self.batcher.take() {
             let _ = self.sink.send_output(batch);
         }
-        self.sink.send_exit(code);
     }
 }
 

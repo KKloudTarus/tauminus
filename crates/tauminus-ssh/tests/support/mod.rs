@@ -340,6 +340,7 @@ pub(crate) async fn collect(stream: &mut TerminalStream) -> (String, Option<u32>
             match stream.events.recv().await {
                 Some(TerminalEvent::Output(chunk)) => output.extend(chunk),
                 Some(TerminalEvent::Exited { code }) => return code,
+                Some(TerminalEvent::Lost) => panic!("connection lost before exit"),
                 None => panic!("stream closed before exit"),
             }
         }

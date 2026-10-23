@@ -58,6 +58,7 @@ describe("withSession", () => {
       forwardAgent: true,
       history: false,
       encoding: "Shift_JIS" as const,
+      tmux: "work",
       env: [
         { name: "LANG", value: "C.UTF-8" },
         { name: "MOTD", value: "a=b c" },
@@ -68,6 +69,7 @@ describe("withSession", () => {
       forwardAgent: null,
       history: null,
       encoding: null,
+      tmux: null,
       env: null,
     });
   });
@@ -79,6 +81,7 @@ describe("withSession", () => {
         forwardAgent: "inherit",
         history: "inherit",
         encoding: "inherit",
+        tmux: "inherit",
         env: "X=a \r\nY=b=c\r\n",
       },
     );
@@ -94,13 +97,25 @@ describe("withSession", () => {
     expect(
       withSession(
         {},
-        { forwardAgent: "inherit", history: "inherit", encoding: "inherit", env: "LANG" },
+        {
+          forwardAgent: "inherit",
+          history: "inherit",
+          encoding: "inherit",
+          tmux: "inherit",
+          env: "LANG",
+        },
       ),
     ).toBe('"LANG" is not NAME=value');
     expect(
       withSession(
         {},
-        { forwardAgent: "inherit", history: "inherit", encoding: "inherit", env: "=x" },
+        {
+          forwardAgent: "inherit",
+          history: "inherit",
+          encoding: "inherit",
+          tmux: "inherit",
+          env: "=x",
+        },
       ),
     ).toMatch(/not NAME=value/);
   });

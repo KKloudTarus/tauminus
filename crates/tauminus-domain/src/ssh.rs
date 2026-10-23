@@ -37,6 +37,8 @@ pub enum NameError {
     UserCharacter { found: char },
     #[error("port must be between 1 and 65535")]
     Port,
+    #[error("tmux session {0:?} must be 1 to 64 letters, digits, '_', '.' or '-'")]
+    Tmux(String),
 }
 
 impl HostName {
@@ -366,6 +368,64 @@ impl Encoding {
     }
 }
 
+/// A tmux session to start or join instead of a plain shell, so a
+/// connection that drops leaves the work running and the next one picks it
+/// up. Letters, digits, `_`, `.`, and `-`, at most 64: the command line it
+/// goes into needs no quoting.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TmuxSession(String);
+
+impl TmuxSession {
+    pub fn parse(name: &str) -> Result<Self, NameError> {
+        let valid = !name.is_empty()
+            && name.len() <= 64
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+        if valid {
+            Ok(Self(name.to_owned()))
+        } else {
+            Err(NameError::Tmux(name.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// What the server runs: joins the session, or makes it. It goes
+    /// through the user's login shell, which sets the `PATH` that finds
+    /// tmux (Homebrew's, for one); `-u` tells tmux the terminal is UTF-8
+    /// when the host's character set is. The name needs no quoting: it is
+    /// letters, digits, and `_.-` only.
+    pub fn command(&self, utf8: bool) -> String {
+        let flag = if utf8 { " -u" } else { "" };
+        format!(
+            "exec \"$SHELL\" -lc 'exec tmux{flag} new-session -A -s {}'",
+            self.0
+        )
+    }
+}
+
+/// A host's or group's tmux setting.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Tmux {
+    /// No tmux here, even where a group sets one.
+    Off,
+    /// Join this session on every connect, or make it.
+    Join(TmuxSession),
+}
+
+impl Tmux {
+    /// The session to join, if any.
+    pub fn session(&self) -> Option<&TmuxSession> {
+        match self {
+            Self::Off => None,
+            Self::Join(session) => Some(session),
+        }
+    }
+}
+
 /// What the session asks of the server once connected.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionOptions {
@@ -376,6 +436,8 @@ pub struct SessionOptions {
     pub env: Vec<EnvVar>,
     /// What the shell's bytes are in; the app converts to UTF-8 and back.
     pub encoding: Encoding,
+    /// Runs this tmux session instead of the login shell.
+    pub tmux: Option<TmuxSession>,
 }
 
 /// A complete connection: jump hosts in order, then the target.

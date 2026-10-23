@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
@@ -32,6 +32,7 @@ class FakeSessions implements SessionClient {
     writeBytes: vi.fn<TerminalSession["writeBytes"]>(async () => {}),
     resize: vi.fn<TerminalSession["resize"]>(async () => {}),
     acknowledge: vi.fn<TerminalSession["acknowledge"]>(async () => {}),
+    probe: vi.fn<TerminalSession["probe"]>(async () => {}),
     close: vi.fn<TerminalSession["close"]>(async () => {}),
   } satisfies TerminalSession;
   #resolve: ((session: TerminalSession) => void) | undefined;
@@ -61,6 +62,12 @@ class FakeSessions implements SessionClient {
 }
 
 const bytes = (length: number) => new Uint8Array(length).fill(0x61);
+const sshTo = (host: string): SessionSpec => ({
+  kind: "ssh",
+  target: { destination: { user: "ops", host, port: 22 }, route: { kind: "direct" } },
+});
+const offline = () =>
+  new SessionCommandError({ code: "connect_failed", message: "no route to host" });
 const controllers: TerminalController[] = [];
 
 function setup(options: ConstructorParameters<typeof TerminalController>[1] = {}) {
@@ -72,6 +79,15 @@ function setup(options: ConstructorParameters<typeof TerminalController>[1] = {}
 
 async function mount(controller: TerminalController) {
   return render(<TerminalView controller={controller} className="h-[300px] w-[600px]" />);
+}
+
+/** An SSH pane to `host`, connected. */
+async function running(host: string) {
+  const { sessions, controller } = setup({ spec: sshTo(host) });
+  await mount(controller);
+  sessions.resolveOpen();
+  await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+  return { sessions, controller };
 }
 
 afterEach(() => {
@@ -249,6 +265,292 @@ describe("TerminalController with TerminalView", () => {
     hidden.controller.setWatched(false);
     hidden.sessions.rejectOpen(new Error("no route"));
     await vi.waitFor(() => expect(hidden.controller.getActivity()).toBe("error"));
+  });
+
+  describe("after a lost connection", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // No jitter: each wait is the listed one.
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    it("tries again later while offline, and stops on a refusal", async () => {
+      const { sessions, controller } = await running("a1");
+      vi.setSystemTime(Date.now() + 120_000);
+      sessions.events.onExit(null, true);
+      expect(controller.status).toMatchObject({ kind: "reconnecting", attempt: 1 });
+      expect(await wholeScreen(controller)).toContain("[connection lost]");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sessions.opened).toHaveLength(2);
+      sessions.rejectOpen(offline());
+      await vi.waitFor(() =>
+        expect(controller.status).toMatchObject({ kind: "reconnecting", attempt: 2 }),
+      );
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(sessions.opened).toHaveLength(3);
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      expect(await wholeScreen(controller)).toContain("[connected again]");
+
+      // Up a while, lost again: the tries start over. A refusal ends them.
+      vi.setSystemTime(Date.now() + 120_000);
+      sessions.events.onExit(null, true);
+      expect(controller.status).toMatchObject({ kind: "reconnecting", attempt: 1 });
+      controller.reconnectNow();
+      sessions.rejectOpen(new SessionCommandError({ code: "auth_failed", message: "denied" }));
+      await vi.waitFor(() =>
+        expect(controller.status).toMatchObject({ kind: "failed", afterLoss: true }),
+      );
+      // Trying again keeps the screen.
+      controller.retry();
+      expect(await wholeScreen(controller)).toContain("[connection lost]");
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      sessions.events.onExit(0, false);
+      expect(controller.status).toEqual({ kind: "exited", code: 0 });
+    });
+
+    it("keeps counting for a link that drops right after connecting", async () => {
+      const { sessions, controller } = await running("a2");
+      vi.setSystemTime(Date.now() + 120_000);
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      // Lost again within a second: that was the second try, not a first.
+      sessions.events.onExit(null, true);
+      expect(controller.status).toMatchObject({ kind: "reconnecting", attempt: 2 });
+    });
+
+    it("stays reconnecting when the loss beats the open's reply", async () => {
+      const { sessions, controller } = await running("a3");
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      sessions.events.onExit(null, true);
+      sessions.resolveOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.status.kind).toBe("reconnecting");
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sessions.opened.length).toBeGreaterThan(2);
+    });
+
+    it("closes a session that opens after Stop, and types nothing into it", async () => {
+      const { sessions, controller } = await running("a4");
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      controller.stopReconnecting();
+      expect(controller.status).toEqual({ kind: "exited", code: null });
+      sessions.session.close.mockClear();
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(sessions.session.close).toHaveBeenCalled());
+      controller.type("rm -rf x\r");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(sessions.session.write).not.toHaveBeenCalledWith("rm -rf x\r");
+      expect(controller.status).toEqual({ kind: "exited", code: null });
+    });
+
+    it("drops keys typed while the session is gone", async () => {
+      const { sessions, controller } = await running("a5");
+      sessions.events.onExit(null, true);
+      controller.type("ls\r");
+      controller.reconnectNow();
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      await vi.advanceTimersByTimeAsync(10);
+      expect(sessions.session.write).not.toHaveBeenCalledWith("ls\r");
+    });
+
+    it("lets six panes of a host connect at a time, in turn, and stops them all on a refusal", async () => {
+      const panes: Awaited<ReturnType<typeof running>>[] = [];
+      for (let i = 0; i < 8; i += 1) {
+        // oxlint-disable-next-line no-await-in-loop -- each pane connects before the next
+        panes.push(await running("b1"));
+      }
+      for (const { sessions } of panes) sessions.events.onExit(null, true);
+      for (const { controller } of panes) controller.reconnectNow();
+      expect(panes.map(({ sessions }) => sessions.opened.length)).toEqual([2, 2, 2, 2, 2, 2, 1, 1]);
+      expect(panes[7]?.controller.status).toMatchObject({ kind: "reconnecting", queued: true });
+      // One connects: the first in line takes its slot, at once.
+      panes[0]?.sessions.resolveOpen();
+      await vi.waitFor(() => expect(panes[0]?.controller.status.kind).toBe("running"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(panes[6]?.sessions.opened).toHaveLength(2);
+      expect(panes[6]?.controller.status).not.toHaveProperty("queued");
+      expect(panes[7]?.sessions.opened).toHaveLength(1);
+      // One is refused: the pane next in line does not ask again.
+      panes[1]?.sessions.rejectOpen(
+        new SessionCommandError({ code: "auth_failed", message: "denied" }),
+      );
+      await vi.waitFor(() => expect(panes[1]?.controller.status.kind).toBe("failed"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(panes[7]?.sessions.opened).toHaveLength(1);
+      expect(panes[7]?.controller.status).toMatchObject({ kind: "failed", code: "auth_failed" });
+    });
+
+    it("keeps a stopped pane's slot until its connect is over", async () => {
+      const panes: Awaited<ReturnType<typeof running>>[] = [];
+      for (let i = 0; i < 7; i += 1) {
+        // oxlint-disable-next-line no-await-in-loop -- each pane connects before the next
+        panes.push(await running("b7"));
+      }
+      for (const { sessions } of panes) sessions.events.onExit(null, true);
+      for (const { controller } of panes) controller.reconnectNow();
+      // The backend is still signing in for the stopped pane.
+      panes[0]?.controller.stopReconnecting();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(panes[6]?.sessions.opened).toHaveLength(1);
+      panes[0]?.sessions.resolveOpen();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(panes[6]?.sessions.opened).toHaveLength(2);
+    });
+
+    it("lets one pane decline a question without stopping the others", async () => {
+      const one = await running("b2");
+      const two = await running("b2");
+      for (const { sessions } of [one, two]) sessions.events.onExit(null, true);
+      one.controller.reconnectNow();
+      one.sessions.rejectOpen(new SessionCommandError({ code: "cancelled", message: "declined" }));
+      await vi.waitFor(() => expect(one.controller.status.kind).toBe("failed"));
+      two.controller.reconnectNow();
+      expect(two.sessions.opened).toHaveLength(2);
+    });
+
+    it("keeps the screen through retries that fail after a loss", async () => {
+      const { sessions, controller } = await running("b3");
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      sessions.rejectOpen(new SessionCommandError({ code: "auth_failed", message: "denied" }));
+      await vi.waitFor(() => expect(controller.status.kind).toBe("failed"));
+      for (let i = 0; i < 2; i += 1) {
+        controller.retry();
+        sessions.rejectOpen(offline());
+        // oxlint-disable-next-line no-await-in-loop -- one retry after the other
+        await vi.waitFor(() =>
+          expect(controller.status).toMatchObject({ kind: "failed", afterLoss: true }),
+        );
+      }
+      expect(await wholeScreen(controller)).toContain("[connection lost]");
+    });
+
+    it("withdraws a connect question on Stop", async () => {
+      const { sessions, controller } = await running("b4");
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      const answer = sessions.events.onPrompt?.({ kind: "password", endpoint: "ops@b4" });
+      expect(controller.getPrompt()).toBeDefined();
+      controller.stopReconnecting();
+      expect(controller.getPrompt()).toBeUndefined();
+      await expect(answer).resolves.toEqual({ kind: "cancel" });
+    });
+
+    it("tries again when a loss beat the open's reply past the next try", async () => {
+      const { sessions, controller } = await running("b5");
+      sessions.events.onExit(null, true);
+      controller.reconnectNow();
+      sessions.events.onExit(null, true);
+      // The next try comes due while the first is still opening.
+      await vi.advanceTimersByTimeAsync(3000);
+      sessions.resolveOpen();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(sessions.opened.length).toBeGreaterThan(2);
+    });
+
+    it("gives up on a link that keeps dropping, however long each session lasts", async () => {
+      const { sessions, controller } = await running("b6");
+      for (let i = 0; i < 10; i += 1) {
+        vi.setSystemTime(Date.now() + 90_000);
+        sessions.events.onExit(null, true);
+        expect(controller.status.kind).toBe("reconnecting");
+        controller.reconnectNow();
+        sessions.resolveOpen();
+        // oxlint-disable-next-line no-await-in-loop -- one drop after the other
+        await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      }
+      vi.setSystemTime(Date.now() + 90_000);
+      sessions.events.onExit(null, true);
+      expect(controller.status).toMatchObject({ kind: "failed", afterLoss: true });
+    });
+
+    it("tries at once on waking without using up a try, and probes a running link", async () => {
+      const { sessions, controller } = await running("c1");
+      // A quick look away: no probe.
+      globalThis.dispatchEvent(new Event("blur"));
+      vi.setSystemTime(Date.now() + 6000);
+      globalThis.dispatchEvent(new Event("focus"));
+      expect(sessions.session.probe).not.toHaveBeenCalled();
+      // Away a while, as across a sleep: the link is checked, once.
+      globalThis.dispatchEvent(new Event("blur"));
+      vi.setSystemTime(Date.now() + 60_000);
+      globalThis.dispatchEvent(new Event("focus"));
+      await vi.waitFor(() => expect(sessions.session.probe).toHaveBeenCalledTimes(1));
+      globalThis.dispatchEvent(new Event("focus"));
+      expect(sessions.session.probe).toHaveBeenCalledTimes(1);
+      // A quick look away, then the network: the network still checks.
+      vi.setSystemTime(Date.now() + 6000);
+      globalThis.dispatchEvent(new Event("blur"));
+      globalThis.dispatchEvent(new Event("focus"));
+      globalThis.dispatchEvent(new Event("online"));
+      expect(sessions.session.probe).toHaveBeenCalledTimes(2);
+
+      sessions.events.onExit(null, true);
+      vi.setSystemTime(Date.now() + 6000);
+      globalThis.dispatchEvent(new Event("online"));
+      expect(sessions.opened).toHaveLength(2);
+      sessions.rejectOpen(offline());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.status).toMatchObject({ kind: "reconnecting", attempt: 1 });
+    });
+
+    it("leaves what the lost program set: the alternate screen, mouse reports, paste brackets", async () => {
+      const { sessions, controller } = await running("d1");
+      controller.terminal.write(
+        "kept\r\n\u001b[?1049h\u001b[?1002h\u001b[?2004h\u001b]8;;https://a.test\u0007",
+      );
+      await wholeScreen(controller);
+      expect(controller.terminal.buffer.active.type).toBe("alternate");
+      sessions.events.onExit(null, true);
+      const screen = await wholeScreen(controller);
+      expect(controller.terminal.buffer.active.type).toBe("normal");
+      expect(controller.terminal.modes.mouseTrackingMode).toBe("none");
+      expect(controller.terminal.modes.bracketedPasteMode).toBe(false);
+      expect(screen).toMatch(/kept[\s\S]*\[connection lost\]/u);
+      controller.stopReconnecting();
+    });
+
+    it("does not reconnect a serial line", async () => {
+      const { sessions, controller } = setup({
+        spec: {
+          kind: "serial",
+          port: {
+            path: "/dev/ttyUSB0",
+            baud: 115_200,
+            dataBits: 8,
+            parity: "none",
+            stopBits: 1,
+            flow: "none",
+            encoding: null,
+          },
+        },
+      });
+      await mount(controller);
+      sessions.resolveOpen();
+      await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+      sessions.events.onExit(null, true);
+      expect(controller.status).toEqual({ kind: "exited", code: null });
+    });
+  });
+
+  it("does not reconnect a local shell", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    sessions.events.onExit(null, true);
+    expect(controller.status).toEqual({ kind: "exited", code: null });
   });
 
   it("types a snippet as keys on a host without a guard", async () => {
@@ -578,6 +880,27 @@ describe("TerminalController with TerminalView", () => {
   );
 });
 
+/** Every line of the buffer, once what was written is parsed. */
+async function wholeScreen(controller: TerminalController): Promise<string> {
+  const write = { parsed: false };
+  controller.terminal.write("", () => {
+    write.parsed = true;
+  });
+  // xterm.js parses on a timer, which fake timers hold.
+  for (let i = 0; i < 100 && !write.parsed; i += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- waits for xterm.js, one tick at a time
+    await (vi.isFakeTimers()
+      ? vi.advanceTimersByTimeAsync(5)
+      : new Promise((r) => setTimeout(r, 5)));
+  }
+  const buffer = controller.terminal.buffer.active;
+  const lines: string[] = [];
+  for (let y = 0; y < buffer.length; y += 1) {
+    lines.push(buffer.getLine(y)?.translateToString(true) ?? "");
+  }
+  return lines.join("\n");
+}
+
 function screenText(controller: TerminalController): string {
   return controller.terminal.buffer.active.getLine(0)?.translateToString(true) ?? "";
 }
@@ -712,6 +1035,18 @@ describe("TerminalController with the prod guard", () => {
     await expect
       .poll(() => sessions.session.write.mock.calls.map(([data]) => data).join(""))
       .toBe("\u0003");
+  });
+
+  it("withdraws its question when the connection is lost", async () => {
+    const { sessions, controller } = guarded();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.terminal.paste("rm -rf /srv\n");
+    await expect.poll(() => controller.getGuardRequest()).toBeDefined();
+    sessions.events.onExit(null, true);
+    expect(controller.getGuardRequest()).toBeUndefined();
+    controller.stopReconnecting();
   });
 
   it("answers no to a pending question when disposed", async () => {

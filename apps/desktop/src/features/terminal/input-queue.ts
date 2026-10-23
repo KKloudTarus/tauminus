@@ -45,6 +45,12 @@ export class InputQueue {
     }
   }
 
+  /** Drops queued input; later pushes still go out. */
+  clear(): void {
+    this.#pending = [];
+    this.#head = 0;
+  }
+
   /** Drops queued input; later pushes are ignored. */
   close(): void {
     this.#closed = true;

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 to 5. Domain types stay free of serde; these types
+//! The file format, versions 1 to 6. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
@@ -10,16 +10,17 @@ use serde::{Deserialize, Serialize};
 use tauminus_domain::{
     AuthMethod, Bind, BindAddress, Destination, Encoding, EnvVar, Forward, ForwardId, ForwardRule,
     Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label,
-    Pattern, Protocol, Route, Settings, SnippetId, Tag, UserName,
+    Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
-/// encodings, and version 5 Telnet hosts; a file is written as the lowest
-/// version that holds what it has, so a build from before a feature keeps
-/// reading files that do not use it.
-const VERSION: u32 = 5;
+/// encodings, version 5 Telnet hosts, and version 6 tmux sessions; a file
+/// is written as the lowest version that holds what it has, so a build
+/// from before a feature keeps reading files that do not use it.
+const VERSION: u32 = 6;
+const VERSION_WITHOUT_TMUX: u32 = 5;
 const VERSION_WITHOUT_TELNET: u32 = 4;
 const VERSION_WITHOUT_ENCODING: u32 = 3;
 const VERSION_WITHOUT_STARTUP: u32 = 2;
@@ -129,6 +130,9 @@ struct SettingsRecord {
     /// A WHATWG label from the list the app offers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     encoding: Option<String>,
+    /// A tmux session name, or "" for none even where a group sets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tmux: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -163,6 +167,7 @@ impl SettingsRecord {
             && self.identity.is_none()
             && self.history.is_none()
             && self.encoding.is_none()
+            && self.tmux.is_none()
             && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
@@ -193,14 +198,18 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let tmux = inventory.hosts().any(|h| h.settings.tmux.is_some())
+        || inventory.groups().any(|g| g.settings.tmux.is_some());
     let telnet = inventory.hosts().any(|h| h.protocol == Protocol::Telnet);
     let encoding = inventory.hosts().any(|h| h.settings.encoding.is_some())
         || inventory.groups().any(|g| g.settings.encoding.is_some());
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if telnet {
+        version: if tmux {
             VERSION
+        } else if telnet {
+            VERSION_WITHOUT_TMUX
         } else if encoding {
             VERSION_WITHOUT_TELNET
         } else if startup {
@@ -360,6 +369,10 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         identity: s.identity.as_ref().map(ToString::to_string),
         history: s.history,
         encoding: s.encoding.map(|e| e.label().to_owned()),
+        tmux: s.tmux.as_ref().map(|t| {
+            t.session()
+                .map_or_else(String::new, |session| session.as_str().to_owned())
+        }),
         env: s
             .env
             .iter()
@@ -455,6 +468,18 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
             .encoding
             .map(|label| {
                 Encoding::parse(&label).ok_or_else(|| format!("unknown encoding {label:?}"))
+            })
+            .transpose()?,
+        tmux: r
+            .tmux
+            .map(|name| {
+                if name.is_empty() {
+                    Ok(Tmux::Off)
+                } else {
+                    TmuxSession::parse(&name)
+                        .map(Tmux::Join)
+                        .map_err(|e| e.to_string())
+                }
             })
             .transpose()?,
         identity: r

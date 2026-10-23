@@ -67,9 +67,97 @@ export type TerminalStatus =
   | { kind: "starting" }
   | { kind: "running" }
   | { kind: "exited"; code: number | null }
-  | { kind: "failed"; message: string; code: ErrorCode | undefined };
+  /** The connection was lost; a new one is tried at `retryAt` (ms since epoch). */
+  | {
+      kind: "reconnecting";
+      attempt: number;
+      retryAt: number;
+      /** Waiting for other panes of the host to finish connecting first. */
+      queued?: boolean;
+    }
+  | {
+      kind: "failed";
+      message: string;
+      code: ErrorCode | undefined;
+      /** Reconnecting gave up: the screen holds the lost session's work. */
+      afterLoss?: boolean;
+    };
 
 const CANCEL: AnswerSpec = { kind: "cancel" };
+/** How long each try waits after a connection is lost, in ms. */
+const RECONNECT_DELAYS = [1000, 2000, 5000, 10_000, 15_000, 30_000];
+/** About ten minutes of tries. */
+const MAX_RECONNECTS = 25;
+/** A session up this long, in ms, was stable: its next loss starts the tries over. */
+const STABLE_MS = 60_000;
+/** Panes of one host connecting again at the same time: under sshd's `MaxStartups` (10). */
+const RECONNECTS_PER_HOST = 6;
+/** Losses within this window, in ms, past {@link MAX_LOSSES} give up. */
+const LOSS_WINDOW_MS = 30 * 60_000;
+const MAX_LOSSES = 10;
+/** Back to the window after this long away, in ms, a running pane checks its link. */
+const AWAY_MS = 15_000;
+/** How long, in ms, a host's refusal stops its other panes from asking. */
+const REFUSAL_MS = 60_000;
+/** Focus and `online` act at most this often per pane, in ms. */
+const WAKE_MS = 5000;
+
+/** Reconnects in flight, by host; shared by every pane. */
+const inFlight = new Map<string, number>();
+/** Panes waiting for a slot, by host, oldest first. */
+const waiting = new Map<string, (() => boolean)[]>();
+
+/** Gives a slot of `key` back; the next pane in line takes it. */
+function freeSlot(key: string): void {
+  const left = (inFlight.get(key) ?? 1) - 1;
+  if (left > 0) inFlight.set(key, left);
+  else inFlight.delete(key);
+  // After this call returns; one that no longer needs the slot passes it on.
+  queueMicrotask(() => handOn(key));
+}
+
+/** Gives `key`'s free slot to the first pane in line that takes it. */
+function handOn(key: string): void {
+  const queue = waiting.get(key) ?? [];
+  while ((inFlight.get(key) ?? 0) < RECONNECTS_PER_HOST) {
+    const next = queue.shift();
+    if (!next) break;
+    next();
+  }
+  if (queue.length === 0) waiting.delete(key);
+}
+/** When this window last lost focus; 0 if never. */
+let windowBlurredAt = 0;
+globalThis.addEventListener?.("blur", () => {
+  windowBlurredAt = Date.now();
+});
+/** The last refusal a reconnect got, by host. */
+const refusals = new Map<string, { at: number; message: string; code: ErrorCode | undefined }>();
+
+/** Whether a lost session of this kind is worth connecting again. */
+function reconnects(spec: SessionSpec): boolean {
+  return spec.kind === "ssh" || spec.kind === "host" || spec.kind === "telnet";
+}
+
+/** Which host a reconnect knocks on. */
+function reconnectKey(spec: SessionSpec): string {
+  switch (spec.kind) {
+    case "host":
+    case "telnet":
+      return `host:${spec.hostId}`;
+    case "ssh": {
+      const { user, host, port } = spec.target.destination;
+      return `ssh:${user}@${host}:${port}`;
+    }
+    default:
+      return spec.kind;
+  }
+}
+
+/** `ms`, give or take a quarter. */
+function jittered(ms: number): number {
+  return Math.round(ms * (0.75 + Math.random() * 0.5));
+}
 const LOCAL: SessionSpec = { kind: "local" };
 
 type Listener = () => void;
@@ -102,6 +190,26 @@ export class TerminalController {
   /** Whether the pane is on screen; what happens then is seen. */
   #watched = true;
   #activity: Activity = "idle";
+  /** Tries since the connection was lost, or last stayed up a while. */
+  #reconnects = 0;
+  #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When the session last came up, for telling a flapping link from a stable one. */
+  #connectedAt = 0;
+  /** Counts opens; an open's callbacks act only while it is the latest. */
+  #openEpoch = 0;
+  /** The host whose reconnect slot this pane holds, while it holds one. */
+  #slot: string | undefined;
+  /** A try that came from a wake, not the timer: it does not count. */
+  #wakeTry = false;
+  #lastWake = 0;
+  /** When the session was lost, for the last {@link LOSS_WINDOW_MS}. */
+  #losses: number[] = [];
+  /** The open in progress follows a lost session, whose screen stays. */
+  #afterLoss = false;
+  /** Waking, or the network coming back: try now, or check the link. */
+  readonly #onWake = (event: Event) => this.#wake(event.type);
+  /** Called when this pane's turn to connect again comes. */
+  readonly #turn = (): boolean => this.#attempt();
   /** Set while a pointer event is being handled, so its keys stay here. */
   #fromPointer = false;
   #status: TerminalStatus = { kind: "starting" };
@@ -292,6 +400,9 @@ export class TerminalController {
       return false;
     });
     this.terminal.onBell(() => this.#mark("waiting"));
+    // Back from sleep, or on a network again: no need to wait for the timer.
+    globalThis.addEventListener?.("online", this.#onWake);
+    globalThis.addEventListener?.("focus", this.#onWake);
     this.terminal.onData((raw) => {
       const data = defusePaste(raw);
       // Wheel scrolling and Alt+click send arrow keys worked out from this
@@ -321,6 +432,145 @@ export class TerminalController {
     if (this.#watched || ACTIVITY_RANK[activity] <= ACTIVITY_RANK[this.#activity]) return;
     this.#activity = activity;
     this.#notify();
+  }
+
+  /** Connects again at once instead of waiting for the next try. */
+  reconnectNow(): void {
+    this.#wakeTry = false;
+    this.#attempt();
+  }
+
+  /** Gives up connecting again; the pane shows the connection closed. */
+  stopReconnecting(): void {
+    if (this.#status.kind !== "reconnecting") return;
+    clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = undefined;
+    this.#reconnects = 0;
+    // A try still in flight is closed when it opens, and its questions
+    // are withdrawn.
+    this.#openEpoch += 1;
+    this.#opening = false;
+    this.#settleOpened?.(undefined);
+    for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
+    this.#leaveLine();
+    this.#setStatus({ kind: "exited", code: null });
+  }
+
+  /**
+   * One try, if this host has a free slot: at most
+   * {@link RECONNECTS_PER_HOST} panes of one host connect at a time, so a
+   * wake does not flood its sshd, and a host that just refused one pane is
+   * not asked by the others.
+   */
+  /** Returns whether this pane took a slot and is connecting. */
+  #attempt(): boolean {
+    if (this.#status.kind !== "reconnecting" || this.#opening || this.#disposed) return false;
+    const key = reconnectKey(this.spec);
+    const refused = refusals.get(key);
+    if (refused && Date.now() - refused.at < REFUSAL_MS) {
+      this.#giveUp(refused.message, refused.code);
+      return false;
+    }
+    if ((inFlight.get(key) ?? 0) >= RECONNECTS_PER_HOST) {
+      // Waits its turn, in order; that is not a try.
+      const queue = waiting.get(key) ?? [];
+      if (!queue.includes(this.#turn)) queue.push(this.#turn);
+      waiting.set(key, queue);
+      if (!this.#status.queued) this.#setStatus({ ...this.#status, queued: true });
+      return false;
+    }
+    inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
+    this.#slot = key;
+    if (this.#status.queued) {
+      const { queued: _, ...status } = this.#status;
+      this.#setStatus(status);
+    }
+    if (!this.#wakeTry) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = undefined;
+    }
+    this.#open();
+    return true;
+  }
+
+  /**
+   * The next counted try, in `wait` ms. One that comes due while a wake's
+   * try is still connecting waits for it instead of being spent.
+   */
+  #armTimer(wait: number): void {
+    clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = undefined;
+      if (this.#opening) {
+        this.#armTimer(jittered(1000));
+        return;
+      }
+      this.reconnectNow();
+    }, wait);
+  }
+
+  /** Leaves the line for a slot. A slot taken stays with its connect. */
+  #leaveLine(): void {
+    for (const [key, queue] of waiting) {
+      const at = queue.indexOf(this.#turn);
+      if (at >= 0) queue.splice(at, 1);
+      if (queue.length === 0) waiting.delete(key);
+    }
+  }
+
+  /**
+   * The window came back to the front, or the network did. A pane waiting
+   * to reconnect tries now, without using up a try; a running one checks
+   * its link, which a sleep may have killed. At most once per
+   * {@link WAKE_MS}, as focus comes and goes all day.
+   */
+  #wake(type: string): void {
+    const now = Date.now();
+    if (now - this.#lastWake < WAKE_MS || this.#disposed) return;
+    if (this.#status.kind === "reconnecting") {
+      this.#lastWake = now;
+      this.#wakeTry = true;
+      this.#attempt();
+    } else if (
+      this.#status.kind === "running" &&
+      reconnects(this.spec) &&
+      // A quick look away is no sleep: keepalives cover it. It does not
+      // use up the throttle either, so `online` right after still checks.
+      (type === "online" || now - windowBlurredAt >= AWAY_MS)
+    ) {
+      this.#lastWake = now;
+      this.#session?.probe().catch(ignoreEndedSession);
+    }
+  }
+
+  #giveUp(message: string, code: ErrorCode | undefined): void {
+    clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = undefined;
+    this.#reconnects = 0;
+    this.#setStatus({ kind: "failed", message, code, afterLoss: true });
+  }
+
+  /**
+   * Waits, then connects again: 1, 2, 5, 10, 15, then every 30 s, for
+   * about ten minutes. The terminal keeps what it showed; a tmux session
+   * draws itself again.
+   */
+  #reconnectLater(): void {
+    this.#reconnects += 1;
+    if (this.#reconnects > MAX_RECONNECTS) {
+      this.#giveUp("the connection was lost", "connect_failed");
+      return;
+    }
+    // Spread out, so panes that lost one network do not all knock at once.
+    const wait = jittered(
+      RECONNECT_DELAYS[Math.min(this.#reconnects - 1, RECONNECT_DELAYS.length - 1)] ?? 30_000,
+    );
+    this.#armTimer(wait);
+    this.#setStatus({
+      kind: "reconnecting",
+      attempt: this.#reconnects,
+      retryAt: Date.now() + wait,
+    });
   }
 
   /** Hears what the user types here, for broadcast input. */
@@ -425,7 +675,11 @@ export class TerminalController {
   /** Opens the session again after it failed to start. */
   retry(): void {
     if (this.#disposed || this.#status.kind !== "failed" || this.#opening) return;
-    this.terminal.reset();
+    // After a lost connection the screen is the user's work: keep it,
+    // through as many retries as it takes.
+    this.#afterLoss = this.#status.afterLoss === true;
+    if (!this.#afterLoss) this.terminal.reset();
+    this.#reconnects = 0;
     this.#setStatus({ kind: "starting" });
     this.#open();
   }
@@ -545,6 +799,11 @@ export class TerminalController {
     this.#disposed = true;
     this.detach();
     clearTimeout(this.#ackRetry);
+    clearTimeout(this.#reconnectTimer);
+    globalThis.removeEventListener?.("online", this.#onWake);
+    globalThis.removeEventListener?.("focus", this.#onWake);
+    this.#openEpoch += 1;
+    this.#leaveLine();
     this.#retireWebgl();
     this.#guard?.dispose();
     // A tab closed with a command running keeps what it printed so far.
@@ -566,10 +825,23 @@ export class TerminalController {
 
   /** The session to send input to, waiting for one that is still opening. */
   async #writable(): Promise<TerminalSession | undefined> {
+    // Keys typed at a lost session were meant for it, not for the next.
+    if (this.#status.kind === "reconnecting") return undefined;
     return this.#session ?? (this.#opening ? this.#opened : undefined);
   }
 
   #open(): void {
+    // The slot is this connect's until it settles, even if the pane stops
+    // waiting for it: the backend keeps signing in until then.
+    const slot = this.#slot;
+    this.#slot = undefined;
+    const release = () => {
+      if (slot !== undefined) freeSlot(slot);
+    };
+    const epoch = ++this.#openEpoch;
+    const current = () => epoch === this.#openEpoch && !this.#disposed;
+    /** This session already ended, perhaps before `open` returned. */
+    let ended = false;
     this.#opening = true;
     this.#opened = new Promise((settle) => {
       this.#settleOpened = settle;
@@ -579,22 +851,45 @@ export class TerminalController {
       .open(this.spec, this.#sentSize, {
         onPrompt: (prompt) => this.#ask(prompt),
         onOutput: (data) => this.#write(data),
-        onExit: (code) => {
+        onExit: (code, lost) => {
+          ended = true;
+          if (!current()) return;
           this.#session = undefined;
           this.#recorder?.flush();
-          this.#setStatus({ kind: "exited", code });
+          if (lost && reconnects(this.spec)) {
+            this.#lost();
+          } else {
+            this.#setStatus({ kind: "exited", code });
+          }
         },
       })
       .then((opened) => {
-        this.#opening = false;
-        if (this.#disposed) {
-          this.#settleOpened?.(undefined);
+        release();
+        if (!current()) {
+          // Stopped or gone while connecting.
           opened.close().catch(ignoreEndedSession);
+          return;
+        }
+        this.#opening = false;
+        if (ended) {
+          // Lost or exited before `open` returned; that was handled, but a
+          // try that came due meanwhile found this one still opening.
+          this.#settleOpened?.(undefined);
+          if (this.#status.kind === "reconnecting" && this.#reconnectTimer === undefined) {
+            this.#armTimer(jittered(1000));
+          }
           return;
         }
         this.#session = opened;
         this.#settleOpened?.(opened);
-        if (this.#status.kind === "starting") {
+        if (this.#status.kind === "starting" || this.#status.kind === "reconnecting") {
+          if (this.#reconnects > 0) {
+            this.terminal.write("\u001b[2m[connected again]\u001b[0m\r\n");
+          }
+          refusals.delete(reconnectKey(this.spec));
+          this.#wakeTry = false;
+          this.#connectedAt = Date.now();
+          this.#afterLoss = false;
           this.#setStatus({ kind: "running" });
         }
         this.#flushAcknowledgements();
@@ -602,15 +897,71 @@ export class TerminalController {
         this.#resizeSession();
       })
       .catch((error: unknown) => {
+        release();
+        if (!current()) return;
         this.#opening = false;
         this.#settleOpened?.(undefined);
         // Questions the connect left unanswered no longer matter.
         for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
-        if (!this.#disposed) {
-          const code = error instanceof SessionCommandError ? error.code : undefined;
-          this.#setStatus({ kind: "failed", message: errorMessage(error), code });
+        const code = error instanceof SessionCommandError ? error.code : undefined;
+        const message = errorMessage(error);
+        if (this.#status.kind === "reconnecting") {
+          // Still offline: try again later. A refusal would only be asked
+          // again, of this pane and of the others on the host, so it stops.
+          if (code === "connect_failed") {
+            const wake = this.#wakeTry;
+            this.#wakeTry = false;
+            if (!(wake && this.#reconnectTimer !== undefined)) this.#reconnectLater();
+            return;
+          }
+          // Declining a question decides for this pane only.
+          if (code !== "cancelled") {
+            refusals.set(reconnectKey(this.spec), { at: Date.now(), message, code });
+          }
+          this.#giveUp(message, code);
+          return;
         }
+        this.#reconnects = 0;
+        this.#setStatus({
+          kind: "failed",
+          message,
+          code,
+          ...(this.#afterLoss ? { afterLoss: true } : {}),
+        });
       });
+  }
+
+  /**
+   * The link went away. The screen stays; what the old session left open
+   * (a control string, a link, the alternate screen, mouse reports, paste
+   * brackets) is closed, a question for it is withdrawn, and the next
+   * connect is planned. A link that had stayed up a while starts the tries
+   * over; one that drops right after connecting keeps counting, so a
+   * flapping host is given up on.
+   */
+  #lost(): void {
+    // Leaving the alternate screen also restores the cursor saved on
+    // entering it; on the normal screen that would jump to the top.
+    const alternate = this.terminal.buffer.active.type === "alternate" ? "\u001b[?1049l" : "";
+    this.terminal.write(
+      `\u0018\u001b]8;;\u0007${alternate}\u001b[!p\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1l\u001b[?2004l` +
+        "\r\n\u001b[2m[connection lost]\u001b[0m\r\n",
+    );
+    this.#guardRequest?.resolve(false);
+    this.#guardRequest = undefined;
+    this.#guard?.reset();
+    this.#input.clear();
+    const now = Date.now();
+    this.#losses = [...this.#losses.filter((at) => now - at < LOSS_WINDOW_MS), now];
+    // A link that keeps dropping, however long each session lasts, is
+    // given up on.
+    if (this.#losses.length > MAX_LOSSES) {
+      this.#losses = [];
+      this.#giveUp("the connection keeps dropping", "connect_failed");
+      return;
+    }
+    if (now - this.#connectedAt >= STABLE_MS) this.#reconnects = 0;
+    this.#reconnectLater();
   }
 
   /** Output is whatever a remote program printed: open only what passes. */

@@ -18,6 +18,11 @@ export const commands = {
 	/**  Sends bytes that are not valid UTF-8, such as legacy mouse reports. */
 	sessionWriteBytes: (id: SessionHandle, data: number[]) => typedError<null, CommandError>(__TAURI_INVOKE("session_write_bytes", { id, data })),
 	sessionResize: (id: SessionHandle, size: GridSize) => typedError<null, CommandError>(__TAURI_INVOKE("session_resize", { id, size })),
+	/**
+	 *  Asks a session to check that its link still answers, after a wake or a
+	 *  network change; a dead one ends with `lost`. Returns at once.
+	 */
+	sessionProbe: (id: SessionHandle) => typedError<null, CommandError>(__TAURI_INVOKE("session_probe", { id })),
 	/**  Reports bytes the terminal view has finished parsing, for flow control. */
 	sessionAcknowledge: (id: SessionHandle, bytes: number) => typedError<null, CommandError>(__TAURI_INVOKE("session_acknowledge", { id, bytes })),
 	sessionClose: (id: SessionHandle) => typedError<null, CommandError>(__TAURI_INVOKE("session_close", { id })),
@@ -433,6 +438,8 @@ export type HostView = {
 	/**  Ids of the snippets typed into each new shell, in order. */
 	startup: string[],
 	protocol: ProtocolSpec,
+	/**  Each connect joins a tmux session, by the host's setting or a group's. */
+	joinsTmux: boolean,
 };
 
 export type HostsView = {
@@ -543,6 +550,11 @@ export type SerialSpec = {
 export type SessionExit = {
 	/**  `null` when the process ended without an exit status, e.g. by signal. */
 	exitCode: number | null,
+	/**
+	 *  The connection went away before the remote side ended; connecting
+	 *  again may find the shell, or its tmux session, still there.
+	 */
+	lost: boolean,
 };
 
 /**
@@ -578,6 +590,11 @@ export type SettingsSpec = {
 	identity?: string | null,
 	/**  The shell's character set; `null` inherits (UTF-8 at the root). */
 	encoding?: EncodingSpec | null,
+	/**
+	 *  A tmux session joined on every connect; `""` is none even where a
+	 *  group sets one, and `null` inherits.
+	 */
+	tmux?: string | null,
 };
 
 export type SftpHandle = {

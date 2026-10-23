@@ -135,7 +135,7 @@ Goal: Termius Starter parity on desktop.
 - [x] Run a snippet on many hosts; broadcast input to selected panes with instant Ctrl+C
 - [x] Workspaces: save and restore layouts with their hosts
 - [x] Session status dots: unread output, waiting for input, error
-- [ ] Auto-reconnect after sleep or network change, reattach `tmux` when the host uses it
+- [x] Auto-reconnect after sleep or network change, reattach `tmux` when the host uses it
 - [x] Telnet transport (RFC 854, NAWS, TTYPE, ECHO)
 - [x] Serial transport with port enumeration, baud and framing settings
 - [ ] Mosh on macOS and Linux through the upstream `mosh-client`
@@ -145,7 +145,7 @@ Goal: Termius Starter parity on desktop.
 
 - [x] SFTP: 1 GB upload and download checksum match; interrupted transfer resumes
 - [x] Forwarding tests in CI for all three types
-- [ ] Reconnect test: kill the network for 30 s, session resumes and `tmux` reattaches
+- [x] Reconnect test: kill the network for 30 s, session resumes and `tmux` reattaches
 - [x] Telnet test against a local `telnetd`; serial test against a virtual port pair
 
 ## v0.4: Recording, automation, hardware keys

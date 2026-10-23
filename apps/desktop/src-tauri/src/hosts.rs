@@ -13,7 +13,7 @@ use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
     HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Protocol, Route,
-    Settings, SnippetId, Tag, UserName, env_list,
+    Settings, SnippetId, Tag, Tmux, TmuxSession, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -81,6 +81,10 @@ pub(crate) struct SettingsSpec {
     /// The shell's character set; `null` inherits (UTF-8 at the root).
     #[serde(default)]
     pub(crate) encoding: Option<EncodingSpec>,
+    /// A tmux session joined on every connect; `""` is none even where a
+    /// group sets one, and `null` inherits.
+    #[serde(default)]
+    pub(crate) tmux: Option<String>,
 }
 
 /// A character set a host's shell may speak, by its WHATWG name.
@@ -214,6 +218,8 @@ pub(crate) struct HostView {
     /// Ids of the snippets typed into each new shell, in order.
     pub(crate) startup: Vec<String>,
     pub(crate) protocol: ProtocolSpec,
+    /// Each connect joins a tmux session, by the host's setting or a group's.
+    pub(crate) joins_tmux: bool,
 }
 
 /// How a saved host is reached.
@@ -361,6 +367,8 @@ fn view(inventory: &Inventory) -> HostsView {
                     forwards: h.forwards.iter().map(ForwardSpec::from).collect(),
                     startup: h.startup.iter().map(ToString::to_string).collect(),
                     protocol: h.protocol.into(),
+                    joins_tmux: h.protocol == Protocol::Ssh
+                        && inventory.tmux(&h.id).is_ok_and(|t| t.is_some()),
                 }
             })
             .collect(),
@@ -390,6 +398,10 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         forward_agent: s.forward_agent,
         history: s.history,
         encoding: s.encoding.map(EncodingSpec::from),
+        tmux: s.tmux.as_ref().map(|t| {
+            t.session()
+                .map_or_else(String::new, |session| session.as_str().to_owned())
+        }),
         identity: s.identity.as_ref().map(ToString::to_string),
         env: (!s.env.is_empty()).then(|| {
             s.env
@@ -443,6 +455,20 @@ fn guard_settings(spec: Option<GuardSpec>) -> Result<GuardSettings, CommandError
 const MAX_LIST: usize = 32;
 /// Longest identity file path accepted, in bytes; `PATH_MAX` on Linux.
 const MAX_PATH: usize = 4096;
+
+/// `""` turns a group's tmux session off here; a name joins that session.
+fn tmux(name: Option<String>) -> Result<Option<Tmux>, CommandError> {
+    name.map(|name| {
+        let name = name.trim();
+        if name.is_empty() {
+            Ok(Tmux::Off)
+        } else {
+            TmuxSession::parse(name).map(Tmux::Join)
+        }
+    })
+    .transpose()
+    .map_err(invalid)
+}
 
 fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
     let too_long = |what: &str| invalid(format!("at most {MAX_LIST} {what}"));
@@ -529,6 +555,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         forward_agent: spec.forward_agent,
         history: spec.history,
         encoding: spec.encoding.map(Encoding::from),
+        tmux: tmux(spec.tmux)?,
         env: env_vars(spec.env)?,
         identity: spec
             .identity

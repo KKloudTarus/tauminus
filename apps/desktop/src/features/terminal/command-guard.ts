@@ -208,6 +208,16 @@ export class CommandGuard {
     this.#host.send(INTERRUPT);
   }
 
+  /**
+   * The session went away: input waiting on a check is dropped and the
+   * typed line forgotten, as for Ctrl+C, but nothing is sent.
+   */
+  reset(): void {
+    if (this.#disposed) return;
+    this.#epoch += 1;
+    this.#forget();
+  }
+
   /** Settles when every input so far has been sent or dropped. For tests. */
   settled(): Promise<void> {
     return this.#tail;

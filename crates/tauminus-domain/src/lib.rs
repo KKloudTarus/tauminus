@@ -55,8 +55,8 @@ pub use snippet::{
 };
 pub use ssh::{
     AuthMethod, AuthOptions, Encoding, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,
-    ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, UserName, env_list,
-    expand_proxy_command,
+    ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, Tmux, TmuxSession, UserName,
+    env_list, expand_proxy_command,
 };
 pub use telnet::{TELNET_PORT, TelnetTarget};
 pub use terminal::{TerminalSize, TerminalSizeError};

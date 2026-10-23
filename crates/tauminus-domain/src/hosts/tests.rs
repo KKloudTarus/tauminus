@@ -775,3 +775,52 @@ fn ssh_never_reaches_a_telnet_host_and_telnet_never_bypasses_a_route() {
         "a jump host is not silently skipped"
     );
 }
+
+#[test]
+fn a_host_joins_its_groups_tmux_session_unless_it_turns_it_off() {
+    use crate::{Tmux, TmuxSession};
+    let mut inventory = Inventory::default();
+    let mut group = Group {
+        id: GroupId::parse("ops").unwrap(),
+        name: Label::parse("ops").unwrap(),
+        parent: None,
+        settings: Settings::default(),
+    };
+    group.settings.tmux = Some(Tmux::Join(TmuxSession::parse("work").unwrap()));
+    inventory.put_group(group).unwrap();
+    inventory.put_host(host("web", Some("ops"))).unwrap();
+    let mut db = host("db", Some("ops"));
+    db.settings.tmux = Some(Tmux::Off);
+    inventory.put_host(db).unwrap();
+    let tmux = |id: &str| inventory.session(&HostId::parse(id).unwrap()).unwrap().tmux;
+    assert_eq!(
+        tmux("web").unwrap().command(true),
+        r#"exec "$SHELL" -lc 'exec tmux -u new-session -A -s work'"#
+    );
+    assert_eq!(
+        tmux("web").unwrap().command(false),
+        r#"exec "$SHELL" -lc 'exec tmux new-session -A -s work'"#
+    );
+    assert_eq!(tmux("db"), None);
+    let id = |id: &str| HostId::parse(id).unwrap();
+    assert_eq!(
+        inventory.tmux(&id("web")).unwrap().map(TmuxSession::as_str),
+        Some("work")
+    );
+    assert_eq!(inventory.tmux(&id("db")).unwrap(), None);
+
+    // A nested group can turn its parent's session off for all below it.
+    let mut quiet = Group {
+        id: GroupId::parse("quiet").unwrap(),
+        name: Label::parse("quiet").unwrap(),
+        parent: Some(GroupId::parse("ops").unwrap()),
+        settings: Settings::default(),
+    };
+    quiet.settings.tmux = Some(Tmux::Off);
+    inventory.put_group(quiet).unwrap();
+    inventory.put_host(host("cache", Some("quiet"))).unwrap();
+    assert_eq!(inventory.tmux(&id("cache")).unwrap(), None);
+    assert_eq!(inventory.session(&id("cache")).unwrap().tmux, None);
+    assert!(TmuxSession::parse("a;b").is_err());
+    assert!(TmuxSession::parse("").is_err());
+}

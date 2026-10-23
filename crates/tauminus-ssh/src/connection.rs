@@ -14,7 +14,7 @@ use russh::client::Handle;
 use tauminus_app::ports::{
     BoxFuture, ConnectError, ForwardHandle, SftpPort, SshConnection, TerminalStream, TunnelError,
 };
-use tauminus_domain::{Forward, SessionOptions, TerminalSize};
+use tauminus_domain::{Encoding, Forward, SessionOptions, TerminalSize};
 use tokio::sync::watch;
 
 use crate::tunnel::Routes;
@@ -108,7 +108,14 @@ impl Connection {
         if self.forward_agent && options.forward_agent {
             channel.agent_forward(false).await.map_err(protocol)?;
         }
-        channel.request_shell(true).await.map_err(protocol)?;
+        match &options.tmux {
+            // The session survives the connection: the next connect joins it.
+            Some(tmux) => channel
+                .exec(true, tmux.command(options.encoding == Encoding::Utf8))
+                .await
+                .map_err(protocol)?,
+            None => channel.request_shell(true).await.map_err(protocol)?,
+        }
         Ok(bridge::spawn(channel, self.lease(), options.encoding))
     }
 }

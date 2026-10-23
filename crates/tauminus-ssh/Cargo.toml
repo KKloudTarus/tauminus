@@ -15,7 +15,8 @@ publish.workspace = true
 # Versions match what russh already brings into the tree.
 bytes = "1.11"
 data-encoding = "2.11"
-hmac = "0.13"
+# zeroize: the HMAC state that fingerprints a rejected password is wiped.
+hmac = { version = "0.13", features = ["zeroize"] }
 rand = "0.10"
 russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = { version = "3.0.1", default-features = false }

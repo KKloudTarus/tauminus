@@ -36,6 +36,7 @@ use tracing::debug;
 use zeroize::Zeroizing;
 
 use crate::Client;
+use crate::rejected::RejectedPasswords;
 
 /// Default key files, strongest first. Hardware-backed `*_sk` keys need a
 /// FIDO device and are used through an agent instead.
@@ -57,6 +58,16 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) agent: &'a AgentSource,
     /// From a vault identity: tried before key files and prompts.
     pub(crate) credentials: &'a Credentials,
+    /// Stored passwords a server turned down; not sent again.
+    pub(crate) rejected: &'a RejectedPasswords,
+    /// Set when the server closed the connection itself.
+    pub(crate) goodbye: &'a std::sync::OnceLock<String>,
+    /// This sign-in's turn to spend the stored password; dropped once the
+    /// server has judged it.
+    pub(crate) turn: Option<tokio::sync::OwnedMutexGuard<()>>,
+    /// The stored password was the last answer the server got, so a
+    /// failure now is about it, not a later factor.
+    pub(crate) stored_last: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +138,7 @@ impl Authenticator<'_> {
         if server.settle(first) {
             return Ok(());
         }
+        self.link_alive()?;
         let mut tried: Vec<String> = Vec::new();
         // The identity's key goes before any agent key: servers stop after
         // MaxAuthTries (6) keys, and an agent may hold more than that.
@@ -137,7 +149,18 @@ impl Authenticator<'_> {
         }
         // The identity's password answers the first password prompt, from
         // either method, once.
-        let mut stored = self.credentials.password.clone();
+        // Unless a server already turned it down: then the user is asked,
+        // instead of every reconnect spending one of the account's tries.
+        // Another sign-in spending the same password goes first; its verdict
+        // decides whether this one sends it.
+        let mut stored = None;
+        if let Some(password) = &self.credentials.password {
+            let turn = self.rejected.turn(&user, password).await;
+            if !self.rejected.contains(&user, password) {
+                stored = Some(password.clone());
+                self.turn = Some(turn);
+            }
+        }
         for _ in 0..MAX_PASSES {
             server.partial = false;
             for method in self.options.methods.clone() {
@@ -156,6 +179,8 @@ impl Authenticator<'_> {
                 match outcome {
                     Outcome::Done => return Ok(()),
                     Outcome::Tried => {
+                        // A key or the agent refused, or the link went away.
+                        self.link_alive()?;
                         let name = method_name(method).to_owned();
                         if !tried.contains(&name) {
                             tried.push(name);
@@ -296,8 +321,28 @@ impl Authenticator<'_> {
         stored: &mut Option<Secret>,
     ) -> Result<Outcome, ConnectError> {
         let had = stored.is_some();
-        let outcome = self.keyboard_exchange(user, server, stored).await?;
+        self.stored_last = false;
+        let result = self.keyboard_exchange(user, server, stored).await;
         let spent = had && stored.is_none();
+        // Turned down: a failure right after the stored password, or a
+        // goodbye in its place (which russh reports as an error here).
+        let refused = match &result {
+            Ok(Outcome::Tried) => !server.partial && self.server_answered(),
+            Err(_) => self.goodbye.get().is_some(),
+            Ok(_) => false,
+        };
+        if spent
+            && self.stored_last
+            && refused
+            && let Some(password) = &self.credentials.password
+        {
+            self.rejected.insert(user, password);
+        }
+        if spent {
+            self.turn = None;
+        }
+        let outcome = result?;
+        self.link_alive()?;
         if outcome == Outcome::Tried
             && spent
             && !server.partial
@@ -348,8 +393,10 @@ impl Authenticator<'_> {
                         && Self::asks_for_password(only)
                         && let Some(password) = stored.take()
                     {
+                        self.stored_last = true;
                         vec![password]
                     } else {
+                        self.stored_last = false;
                         let answer = self
                             .prompter
                             .ask(Prompt::KeyboardInteractive {
@@ -434,6 +481,7 @@ impl Authenticator<'_> {
             if !server.permits(MethodKind::Password) || server.partial {
                 break;
             }
+            let from_store = stored.is_some();
             let password = if let Some(password) = stored.take() {
                 password
             } else {
@@ -455,10 +503,50 @@ impl Authenticator<'_> {
                 .map_err(protocol)?;
             outcome = Outcome::Tried;
             if server.settle(result) {
+                // Typed and taken, and the same as the vault's: it was the
+                // link, or another host, that turned it down before.
+                if !from_store && self.credentials.password.as_ref() == Some(&password) {
+                    self.rejected.remove(user, &password);
+                }
                 return Ok(Outcome::Done);
             }
+            // Recorded before the link check: a server may say goodbye
+            // right after turning it down.
+            if from_store && !server.partial && self.server_answered() {
+                self.rejected.insert(user, &password);
+            }
+            if from_store {
+                self.turn = None;
+            }
+            self.link_alive()?;
         }
         Ok(outcome)
+    }
+
+    /// russh reports a link that ended mid-login as a refusal with no
+    /// methods left. A server that said goodbye first (OpenSSH does after
+    /// `MaxAuthTries`) refused, and asking again would only spend more of
+    /// the account's tries; a link that just went away is the network.
+    /// Whether the last failure came from the server: the link is up, or
+    /// the server closed it with a goodbye. A link that only went away
+    /// says nothing about the password, which then is not marked.
+    fn server_answered(&self) -> bool {
+        !self.handle.is_closed() || self.goodbye.get().is_some()
+    }
+
+    fn link_alive(&self) -> Result<(), ConnectError> {
+        if !self.handle.is_closed() {
+            return Ok(());
+        }
+        Err(match self.goodbye.get() {
+            Some(said) => {
+                ConnectError::Protocol(format!("the server closed the connection: {said}"))
+            }
+            None => ConnectError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "the connection closed during authentication",
+            )),
+        })
     }
 
     fn asks_for_password(prompt: &russh::client::Prompt) -> bool {
@@ -546,9 +634,10 @@ impl From<russh::SendError> for SignError {
 impl SignError {
     fn into_connect_error(self) -> ConnectError {
         match self {
-            Self::Send => {
-                ConnectError::Protocol("the connection closed during authentication".into())
-            }
+            Self::Send => ConnectError::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                "the connection closed during authentication",
+            )),
             Self::Sign(message) => ConnectError::Protocol(format!("could not sign: {message}")),
         }
     }
@@ -713,8 +802,8 @@ fn method_name(method: AuthMethod) -> &'static str {
     }
 }
 
-fn protocol(error: impl std::fmt::Display) -> ConnectError {
-    ConnectError::Protocol(error.to_string())
+fn protocol(error: russh::Error) -> ConnectError {
+    crate::link_or_protocol(error)
 }
 
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
