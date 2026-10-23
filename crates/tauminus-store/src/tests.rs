@@ -104,6 +104,65 @@ async fn what_is_saved_loads_back_the_same() {
 }
 
 #[tokio::test]
+async fn forwarding_rules_load_back_and_only_they_raise_the_version() {
+    use tauminus_domain::{Bind, BindAddress, Destination, Forward, ForwardId, ForwardRule};
+    let dir = Dir::new();
+    let store = dir.store();
+    let version = || {
+        let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["version"].clone()
+    };
+    let mut inventory = rich();
+    store.save(&inventory).await.unwrap();
+    assert_eq!(
+        version(),
+        1,
+        "a file with no rules stays readable by older builds"
+    );
+    let mut host = inventory
+        .host(&HostId::parse("db1").unwrap())
+        .unwrap()
+        .clone();
+    let bind = |address, port| Bind { address, port };
+    let to = |host: &str, port| Destination::new(HostName::parse(host).unwrap(), port).unwrap();
+    let rule = |id: &str, forward, auto_start| ForwardRule {
+        id: ForwardId::parse(id).unwrap(),
+        label: Label::parse(id).unwrap(),
+        forward,
+        auto_start,
+    };
+    host.forwards = vec![
+        rule(
+            "pg",
+            Forward::Local {
+                bind: bind(BindAddress::Loopback, 5432),
+                to: to("db.internal", 5432),
+            },
+            true,
+        ),
+        rule(
+            "web",
+            Forward::Remote {
+                bind: bind(BindAddress::Any, 0),
+                to: to("::1", 8080),
+            },
+            false,
+        ),
+        rule(
+            "socks",
+            Forward::Dynamic {
+                bind: bind(BindAddress::Ip("192.168.1.5".parse().unwrap()), 1080),
+            },
+            false,
+        ),
+    ];
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    assert_eq!(version(), 2);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -116,7 +175,23 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 2, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 3, "hosts": []}"#.to_owned()),
+        (
+            "dynamic rule with a destination",
+            r#"{"version": 2, "hosts": [{"id": "a", "label": "a", "address": "a", "forwards": [{"id": "f", "label": "f", "kind": "dynamic", "bind": "loopback", "port": 1080, "toHost": "x", "toPort": 1}]}]}"#.to_owned(),
+        ),
+        (
+            "local rule without a destination",
+            r#"{"version": 2, "hosts": [{"id": "a", "label": "a", "address": "a", "forwards": [{"id": "f", "label": "f", "kind": "local", "bind": "loopback", "port": 1}]}]}"#.to_owned(),
+        ),
+        (
+            "bad bind address",
+            r#"{"version": 2, "hosts": [{"id": "a", "label": "a", "address": "a", "forwards": [{"id": "f", "label": "f", "kind": "dynamic", "bind": "lan", "port": 1}]}]}"#.to_owned(),
+        ),
+        (
+            "rule listed twice",
+            r#"{"version": 2, "hosts": [{"id": "a", "label": "a", "address": "a", "forwards": [{"id": "f", "label": "f", "kind": "dynamic", "bind": "any", "port": 1}, {"id": "f", "label": "g", "kind": "dynamic", "bind": "any", "port": 2}]}]}"#.to_owned(),
+        ),
         (
             "unknown field",
             r#"{"version": 1, "hosts": [], "vault": {}}"#.to_owned(),

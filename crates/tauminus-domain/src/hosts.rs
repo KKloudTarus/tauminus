@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+use crate::forward::{ForwardError, ForwardRule, check_rules};
 use crate::guard::{GuardSettings, PatternError, Policy};
 use crate::ssh::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
@@ -61,6 +62,8 @@ pub enum HostsError {
     Guard(#[from] PatternError),
     #[error("environment: {0}")]
     Env(#[from] EnvError),
+    #[error("port forwarding: {0}")]
+    Forward(#[from] ForwardError),
 }
 
 macro_rules! id_type {
@@ -99,6 +102,7 @@ macro_rules! id_type {
 
 id_type!(HostId, "saved host");
 id_type!(GroupId, "group of hosts");
+id_type!(ForwardId, "port forwarding rule");
 id_type!(
     IdentityId,
     "vault identity: a reusable user, password, and key"
@@ -271,6 +275,8 @@ pub struct Host {
     /// Sorted and without repeats; see [`Host::set_tags`].
     tags: Vec<Tag>,
     pub settings: Settings,
+    /// Port forwarding rules. Each host keeps its own; groups have none.
+    pub forwards: Vec<ForwardRule>,
 }
 
 impl Host {
@@ -282,6 +288,7 @@ impl Host {
             group: None,
             tags: Vec::new(),
             settings: Settings::default(),
+            forwards: Vec::new(),
         }
     }
 
@@ -329,6 +336,7 @@ impl Inventory {
         }
         for host in hosts {
             check_settings(&host.settings)?;
+            check_rules(&host.forwards)?;
             inventory.check_group(host.group.as_ref())?;
             let id = host.id.clone();
             if inventory.hosts.insert(id.clone(), host).is_some() {
@@ -357,6 +365,7 @@ impl Inventory {
     /// Adds or replaces a host. O(log H).
     pub fn put_host(&mut self, host: Host) -> Result<(), HostsError> {
         check_settings(&host.settings)?;
+        check_rules(&host.forwards)?;
         self.check_group(host.group.as_ref())?;
         if !self.hosts.contains_key(&host.id) && self.hosts.len() >= MAX_HOSTS {
             return Err(HostsError::TooMany);

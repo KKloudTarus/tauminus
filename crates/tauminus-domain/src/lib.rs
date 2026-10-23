@@ -8,6 +8,7 @@
 //! testable without I/O.
 
 mod flow;
+mod forward;
 mod guard;
 mod history;
 mod hosts;
@@ -18,6 +19,9 @@ mod ssh;
 mod terminal;
 
 pub use flow::{FlowControl, FlowSignal, Watermarks};
+pub use forward::{
+    Bind, BindAddress, Destination, Forward, ForwardError, ForwardRule, MAX_FORWARDS,
+};
 pub use guard::{
     Finding, GuardSettings, MAX_LINE, MAX_PATTERNS, MAX_POLICY_PATTERNS, Pattern, PatternError,
     Policy, Rule, Verdict,
@@ -27,8 +31,8 @@ pub use history::{
     MAX_COMMAND, MAX_OUTPUT, MAX_RESULTS, Retention,
 };
 pub use hosts::{
-    Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label, MAX_GROUP_DEPTH,
-    MAX_GROUPS, MAX_HOSTS, MAX_TAGS, PROD_TAG, Settings, Tag,
+    ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label,
+    MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_TAGS, PROD_TAG, Settings, Tag,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};

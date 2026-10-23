@@ -1,20 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, version 1. Domain types stay free of serde; these types
+//! The file format, versions 1 and 2. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    AuthMethod, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId,
-    Inventory, Label, Pattern, Route, Settings, Tag, UserName,
+    AuthMethod, Bind, BindAddress, Destination, EnvVar, Forward, ForwardId, ForwardRule, Group,
+    GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label, Pattern,
+    Route, Settings, Tag, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
-const VERSION: u32 = 1;
+/// Version 2 adds forwarding rules; a file without any is still written as
+/// version 1, so a build from before them keeps reading it.
+const VERSION: u32 = 2;
+const VERSION_WITHOUT_FORWARDS: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +53,33 @@ struct HostRecord {
     tags: Vec<String>,
     #[serde(default, skip_serializing_if = "SettingsRecord::is_empty")]
     settings: SettingsRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    forwards: Vec<ForwardRecord>,
+}
+
+/// One forwarding rule. `bind` is `loopback`, `any`, or an IP address.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ForwardRecord {
+    id: String,
+    label: String,
+    kind: ForwardKindRecord,
+    bind: String,
+    port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    auto_start: bool,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum ForwardKindRecord {
+    Local,
+    Remote,
+    Dynamic,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -142,8 +173,13 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: VERSION,
+        version: if forwards {
+            VERSION
+        } else {
+            VERSION_WITHOUT_FORWARDS
+        },
         groups: inventory
             .groups()
             .map(|g| GroupRecord {
@@ -162,6 +198,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
                 group: h.group.as_ref().map(ToString::to_string),
                 tags: h.tags().iter().map(|t| t.as_str().to_owned()).collect(),
                 settings: settings_record(&h.settings),
+                forwards: h.forwards.iter().map(forward_record).collect(),
             })
             .collect(),
     };
@@ -172,7 +209,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
 
 pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
     let file: File = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if file.version != VERSION {
+    if file.version != VERSION && file.version != VERSION_WITHOUT_FORWARDS {
         return Err(format!(
             "it is version {}, and this build reads version {VERSION}; update Tauminus",
             file.version
@@ -217,6 +254,7 @@ pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
                 .map_err(|e| err("tag", &e))?;
             host.set_tags(tags).map_err(|e| err("tags", &e))?;
             host.settings = settings(h.settings)?;
+            host.forwards = h.forwards.iter().map(forward).collect::<Result<_, _>>()?;
             Ok(host)
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -373,5 +411,63 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
             .transpose()
             .map_err(|e| format!("identity: {e}"))?,
         env: env(&r.env)?,
+    })
+}
+
+fn forward_record(rule: &ForwardRule) -> ForwardRecord {
+    let (kind, bind, to) = match &rule.forward {
+        Forward::Local { bind, to } => (ForwardKindRecord::Local, bind, Some(to)),
+        Forward::Remote { bind, to } => (ForwardKindRecord::Remote, bind, Some(to)),
+        Forward::Dynamic { bind } => (ForwardKindRecord::Dynamic, bind, None),
+    };
+    ForwardRecord {
+        id: rule.id.to_string(),
+        label: rule.label.as_str().to_owned(),
+        kind,
+        bind: match bind.address {
+            BindAddress::Loopback => "loopback".to_owned(),
+            BindAddress::Any => "any".to_owned(),
+            BindAddress::Ip(ip) => ip.to_string(),
+        },
+        port: bind.port,
+        to_host: to.map(|d| d.host.to_string()),
+        to_port: to.map(Destination::port),
+        auto_start: rule.auto_start,
+    }
+}
+
+fn forward(r: &ForwardRecord) -> Result<ForwardRule, String> {
+    let err = |what: &str, e: &dyn std::fmt::Display| format!("forwarding rule {what}: {e}");
+    let address = match r.bind.as_str() {
+        "loopback" => BindAddress::Loopback,
+        "any" => BindAddress::Any,
+        ip => BindAddress::Ip(ip.parse().map_err(|e| err("bind address", &e))?),
+    };
+    let bind = Bind {
+        address,
+        port: r.port,
+    };
+    let to = || -> Result<Destination, String> {
+        let (Some(host), Some(port)) = (&r.to_host, r.to_port) else {
+            return Err("a local or remote forwarding rule needs a destination".into());
+        };
+        let host = HostName::parse(host).map_err(|e| err("destination", &e))?;
+        Destination::new(host, port).map_err(|e| err("destination", &e))
+    };
+    let forward = match r.kind {
+        ForwardKindRecord::Local => Forward::Local { bind, to: to()? },
+        ForwardKindRecord::Remote => Forward::Remote { bind, to: to()? },
+        ForwardKindRecord::Dynamic => {
+            if r.to_host.is_some() || r.to_port.is_some() {
+                return Err("a dynamic forwarding rule has no destination".into());
+            }
+            Forward::Dynamic { bind }
+        }
+    };
+    Ok(ForwardRule {
+        id: ForwardId::parse(&r.id).map_err(|e| err("id", &e))?,
+        label: Label::parse(&r.label).map_err(|e| err("label", &e))?,
+        forward,
+        auto_start: r.auto_start,
     })
 }
