@@ -44,6 +44,24 @@ const ACK_RETRY_MS = 100;
 const FONT_FAMILY =
   '"JetBrains Mono", "Cascadia Code", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
+/**
+ * What happened in a pane while no one looked at it, most urgent last:
+ * output arrived, the shell asked for input (a new prompt or a bell), or
+ * a command or the session failed.
+ */
+export type Activity = "idle" | "unread" | "waiting" | "error";
+
+const ACTIVITY_RANK: Record<Activity, number> = { idle: 0, unread: 1, waiting: 2, error: 3 };
+
+/** The most urgent of `activities`. */
+export function mostUrgent(activities: Iterable<Activity>): Activity {
+  let most: Activity = "idle";
+  for (const activity of activities) {
+    if (ACTIVITY_RANK[activity] > ACTIVITY_RANK[most]) most = activity;
+  }
+  return most;
+}
+
 export type TerminalStatus =
   | { kind: "starting" }
   | { kind: "running" }
@@ -80,6 +98,9 @@ export class TerminalController {
   readonly #openLink: ((url: string) => void) | undefined;
   readonly #mac: boolean;
   #onInput: ((data: string) => void) | undefined;
+  /** Whether the pane is on screen; what happens then is seen. */
+  #watched = true;
+  #activity: Activity = "idle";
   /** Set while a pointer event is being handled, so its keys stay here. */
   #fromPointer = false;
   #status: TerminalStatus = { kind: "starting" };
@@ -262,8 +283,14 @@ export class TerminalController {
     // and how each command ended. Other handlers still see the sequence.
     this.terminal.parser.registerOscHandler(133, (data) => {
       this.#recorder?.shellMark(data);
+      // A new prompt waits for input; a command that ended with a
+      // non-zero status failed.
+      if (data === "A" || data.startsWith("A;")) this.#mark("waiting");
+      const ended = /^D;(-?\d+)/u.exec(data);
+      if (ended && Number(ended[1]) !== 0) this.#mark("error");
       return false;
     });
+    this.terminal.onBell(() => this.#mark("waiting"));
     this.terminal.onData((raw) => {
       const data = defusePaste(raw);
       // Wheel scrolling and Alt+click send arrow keys worked out from this
@@ -275,6 +302,24 @@ export class TerminalController {
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
     );
+  }
+
+  /** What happened here while it was off screen. For `useSyncExternalStore`. */
+  getActivity = (): Activity => this.#activity;
+
+  /** On screen or not: coming on screen marks everything seen. */
+  setWatched(watched: boolean): void {
+    if (this.#watched === watched) return;
+    this.#watched = watched;
+    if (watched) this.#activity = "idle";
+    this.#notify();
+  }
+
+  /** Raises the activity while off screen; O(1) per call, notifies on change only. */
+  #mark(activity: Activity): void {
+    if (this.#watched || ACTIVITY_RANK[activity] <= ACTIVITY_RANK[this.#activity]) return;
+    this.#activity = activity;
+    this.#notify();
   }
 
   /** Hears what the user types here, for broadcast input. */
@@ -573,6 +618,8 @@ export class TerminalController {
     if (this.#disposed) return Promise.resolve(CANCEL);
     return new Promise((resolve) => {
       this.#prompts.push({ prompt, resolve });
+      // A connect waiting on a password or a host key waits on the user.
+      this.#mark("waiting");
       this.#notify();
     });
   }
@@ -581,6 +628,7 @@ export class TerminalController {
     if (this.#disposed) return Promise.resolve(false);
     return new Promise((resolve) => {
       this.#guardRequest = { request, resolve };
+      this.#mark("waiting");
       this.#notify();
     });
   }
@@ -589,6 +637,7 @@ export class TerminalController {
     if (this.#disposed) {
       return;
     }
+    this.#mark("unread");
     this.#pin?.output(data.byteLength);
     this.#output.push(data);
   }
@@ -704,6 +753,9 @@ export class TerminalController {
 
   #setStatus(status: TerminalStatus): void {
     this.#status = status;
+    if (status.kind === "failed" || (status.kind === "exited" && status.code !== 0)) {
+      this.#mark("error");
+    }
     this.#notify();
   }
 

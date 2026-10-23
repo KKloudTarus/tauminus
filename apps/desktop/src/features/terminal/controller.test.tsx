@@ -19,7 +19,7 @@ import {
 import "@/app/styles.css";
 
 import { ACK_THRESHOLD_BYTES } from "./ack-batcher.ts";
-import { TerminalController } from "./controller.ts";
+import { TerminalController, mostUrgent } from "./controller.ts";
 import { OutputScheduler } from "./output-scheduler.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
@@ -183,6 +183,72 @@ describe("TerminalController with TerminalView", () => {
     await vi.waitFor(() => expect(controller.terminal.modes.bracketedPasteMode).toBe(true));
     controller.typeShared("\u001b[200~b\u001b[201~");
     await expect.poll(written).toBe("a\u001b[200~b\u001b[201~");
+  });
+
+  it("notes what happens while off screen, most urgent first, until shown", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const write = (text: string) =>
+      new Promise<void>((resolve) => {
+        controller.terminal.write(text, resolve);
+      });
+    sessions.events.onOutput(new TextEncoder().encode("shown\r\n"));
+    expect(controller.getActivity()).toBe("idle");
+
+    controller.setWatched(false);
+    sessions.events.onOutput(new TextEncoder().encode("more\r\n"));
+    expect(controller.getActivity()).toBe("unread");
+    await write("\u001b]133;A\u0007$ ");
+    expect(controller.getActivity()).toBe("waiting");
+    sessions.events.onOutput(new TextEncoder().encode("again\r\n"));
+    expect(controller.getActivity()).toBe("waiting");
+    await write("\u001b]133;D;2\u0007");
+    expect(controller.getActivity()).toBe("error");
+
+    controller.setWatched(true);
+    expect(controller.getActivity()).toBe("idle");
+    controller.setWatched(false);
+    await write("\u0007");
+    expect(controller.getActivity()).toBe("waiting");
+  });
+
+  it.each([
+    ["A", "waiting"],
+    ["A;cl=m", "waiting"],
+    ["B", "unread"],
+    ["D", "unread"],
+    ["D;0", "unread"],
+    ["D;00", "unread"],
+    ["D;130", "error"],
+    ["D;-1073741819", "error"],
+    ["D;1;err=x", "error"],
+  ])("reads OSC 133 %s while hidden as %s", async (mark, expected) => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.setWatched(false);
+    sessions.events.onOutput(new TextEncoder().encode(`\u001b]133;${mark}\u0007`));
+    await vi.waitFor(() => expect(controller.getActivity()).toBe(expected));
+  });
+
+  it("marks a session that fails while hidden, not one that failed on screen", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    sessions.events.onExit(3);
+    await vi.waitFor(() => expect(controller.status.kind).toBe("exited"));
+    controller.setWatched(false);
+    expect(controller.getActivity()).toBe("idle");
+
+    const hidden = setup();
+    await mount(hidden.controller);
+    hidden.controller.setWatched(false);
+    hidden.sessions.rejectOpen(new Error("no route"));
+    await vi.waitFor(() => expect(hidden.controller.getActivity()).toBe("error"));
   });
 
   it("types a snippet as keys on a host without a guard", async () => {
@@ -657,5 +723,14 @@ describe("TerminalController with the prod guard", () => {
     await expect.poll(() => controller.getGuardRequest()).toBeDefined();
     controller.dispose();
     expect(controller.getGuardRequest()).toBeUndefined();
+  });
+});
+
+describe("mostUrgent", () => {
+  it("takes the most urgent of a tab's panes", () => {
+    expect(mostUrgent([])).toBe("idle");
+    expect(mostUrgent(["unread", "idle"])).toBe("unread");
+    expect(mostUrgent(["unread", "error", "waiting"])).toBe("error");
+    expect(mostUrgent(["waiting", "unread"])).toBe("waiting");
   });
 });

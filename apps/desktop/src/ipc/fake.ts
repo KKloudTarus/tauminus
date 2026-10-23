@@ -19,7 +19,8 @@ const PROMPT = "$ ";
 
 /**
  * Lines it understands: `echo <text>`, `title <text>`, `exit [code]`,
- * `size`, and `sudo`, which reads a password without echo. Ctrl+C drops
+ * `size`, `later <text>`, which prints after 1 s, and `sudo`, which
+ * reads a password without echo. Ctrl+C drops
  * the line.
  */
 class FakeShell implements TerminalSession {
@@ -86,6 +87,10 @@ class FakeShell implements TerminalSession {
       case "sudo":
         this.#secret = true;
         this.#print("[sudo] password for me: ");
+        return;
+      case "later":
+        // Output that arrives a moment after the command, as from a build.
+        setTimeout(() => this.#print(`${argument}\r\n${PROMPT}`), 1000);
         return;
       case "echo":
         this.#print(`${argument}\r\n`);
