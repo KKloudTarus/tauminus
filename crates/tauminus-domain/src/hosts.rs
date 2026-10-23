@@ -64,6 +64,23 @@ pub enum HostsError {
     Env(#[from] EnvError),
     #[error("port forwarding: {0}")]
     Forward(#[from] ForwardError),
+    #[error("at most {MAX_STARTUP} startup snippets per host, each once")]
+    Startup,
+}
+
+/// Most startup snippets one host runs.
+pub const MAX_STARTUP: usize = 8;
+
+/// O(k²), k ≤ [`MAX_STARTUP`].
+fn check_startup(startup: &[SnippetId]) -> Result<(), HostsError> {
+    let repeated = startup
+        .iter()
+        .enumerate()
+        .any(|(i, id)| startup[..i].contains(id));
+    if startup.len() > MAX_STARTUP || repeated {
+        return Err(HostsError::Startup);
+    }
+    Ok(())
 }
 
 macro_rules! id_type {
@@ -103,6 +120,7 @@ macro_rules! id_type {
 id_type!(HostId, "saved host");
 id_type!(GroupId, "group of hosts");
 id_type!(ForwardId, "port forwarding rule");
+id_type!(SnippetId, "saved command");
 id_type!(
     IdentityId,
     "vault identity: a reusable user, password, and key"
@@ -277,6 +295,9 @@ pub struct Host {
     pub settings: Settings,
     /// Port forwarding rules. Each host keeps its own; groups have none.
     pub forwards: Vec<ForwardRule>,
+    /// Snippets typed into each new shell on this host, in order. A
+    /// snippet deleted since is skipped.
+    pub startup: Vec<SnippetId>,
 }
 
 impl Host {
@@ -289,6 +310,7 @@ impl Host {
             tags: Vec::new(),
             settings: Settings::default(),
             forwards: Vec::new(),
+            startup: Vec::new(),
         }
     }
 
@@ -337,6 +359,7 @@ impl Inventory {
         for host in hosts {
             check_settings(&host.settings)?;
             check_rules(&host.forwards)?;
+            check_startup(&host.startup)?;
             inventory.check_group(host.group.as_ref())?;
             let id = host.id.clone();
             if inventory.hosts.insert(id.clone(), host).is_some() {
@@ -366,6 +389,7 @@ impl Inventory {
     pub fn put_host(&mut self, host: Host) -> Result<(), HostsError> {
         check_settings(&host.settings)?;
         check_rules(&host.forwards)?;
+        check_startup(&host.startup)?;
         self.check_group(host.group.as_ref())?;
         if !self.hosts.contains_key(&host.id) && self.hosts.len() >= MAX_HOSTS {
             return Err(HostsError::TooMany);

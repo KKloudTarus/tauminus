@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Saved hosts in one JSON file.
+//! Saved hosts and snippets, each in one JSON file.
 //!
 //! A save writes a temporary file next to the real one, flushes it to disk,
 //! and renames it over the old file, so a crash or a full disk leaves either
@@ -15,6 +15,7 @@ mod format;
 pub mod history;
 mod history_backend;
 mod keychain;
+mod snippets;
 pub mod vault;
 mod vault_backend;
 
@@ -28,8 +29,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rand::TryRng;
-use tauminus_app::ports::{BoxFuture, HostStore, StoreError};
-use tauminus_domain::Inventory;
+use tauminus_app::ports::{BoxFuture, HostStore, SnippetStore, StoreError};
+use tauminus_domain::{Inventory, Library};
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -41,94 +42,148 @@ pub(crate) const MAX_FILE: u64 = 16 * 1024 * 1024;
 /// bytes, or `None` when it did not exist.
 type Seen = Option<u64>;
 
-/// Hosts kept in `path`, usually `hosts.json` in the app's config directory.
+/// One JSON file written whole and atomically.
 ///
 /// Before each write the file is read again; if it no longer holds what
 /// this store last saw, another window changed it, and the write is refused
 /// with [`StoreError::Conflict`] instead of replacing that change. The check
 /// costs one read of the file per save.
 #[derive(Debug, Clone)]
-pub struct JsonHostStore {
+struct JsonFile {
     path: PathBuf,
     /// `None` until the first load or save.
     seen: Arc<Mutex<Option<Seen>>>,
+    /// What the file holds, for messages.
+    what: &'static str,
 }
 
-impl JsonHostStore {
-    pub fn new(path: PathBuf) -> Self {
+impl JsonFile {
+    fn new(path: PathBuf, what: &'static str) -> Self {
         Self {
             path,
             seen: Arc::default(),
+            what,
         }
+    }
+
+    /// Parses the file with `parse`, or gives `empty` when it does not exist.
+    async fn load<T: Send + 'static>(
+        &self,
+        empty: impl FnOnce() -> T + Send + 'static,
+        parse: impl FnOnce(&[u8]) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, StoreError> {
+        let path = self.path.clone();
+        let seen = Arc::clone(&self.seen);
+        blocking(move || {
+            let bytes = read_limited(&path)?;
+            *lock(&seen) = Some(bytes.as_deref().map(fingerprint));
+            match bytes {
+                None => Ok(empty()),
+                Some(bytes) => parse(&bytes).map_err(StoreError::Corrupt),
+            }
+        })
+        .await
+    }
+
+    async fn save(&self, bytes: Result<Vec<u8>, serde_json::Error>) -> Result<(), StoreError> {
+        let bytes = bytes.map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+        // A file that `load` would refuse must not replace one it reads.
+        if bytes.len() as u64 > MAX_FILE {
+            return Err(StoreError::Io(std::io::Error::other(format!(
+                "the {} would take {} MiB; the limit is {} MiB",
+                self.what,
+                bytes.len() / 1024 / 1024,
+                MAX_FILE / 1024 / 1024
+            ))));
+        }
+        let path = self.path.clone();
+        let seen = Arc::clone(&self.seen);
+        let temp_name = new_id();
+        blocking(move || {
+            let mut seen = lock(&seen);
+            if let Some(expected) = *seen {
+                let current = read_limited(&path)?.as_deref().map(fingerprint);
+                if current != expected {
+                    return Err(StoreError::Conflict);
+                }
+            }
+            write_atomic(&path, &bytes, &temp_name)?;
+            *seen = Some(Some(fingerprint(&bytes)));
+            Ok(())
+        })
+        .await
+    }
+}
+
+/// Hosts kept in `path`, usually `hosts.json` in the app's config directory.
+#[derive(Debug, Clone)]
+pub struct JsonHostStore(JsonFile);
+
+impl JsonHostStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self(JsonFile::new(path, "host list"))
     }
 }
 
 impl HostStore for JsonHostStore {
     fn load(&self) -> BoxFuture<'_, Result<Inventory, StoreError>> {
-        let path = self.path.clone();
-        let seen = Arc::clone(&self.seen);
-        Box::pin(async move {
-            blocking(move || {
-                let bytes = read_limited(&path)?;
-                *lock(&seen) = Some(bytes.as_deref().map(fingerprint));
-                match bytes {
-                    None => Ok(Inventory::default()),
-                    Some(bytes) => format::from_json(&bytes).map_err(StoreError::Corrupt),
-                }
-            })
-            .await
-        })
+        Box::pin(self.0.load(Inventory::default, format::from_json))
     }
 
     fn save<'a>(&'a self, inventory: &'a Inventory) -> BoxFuture<'a, Result<(), StoreError>> {
         // Serialize here, write on the blocking pool. O(H + G).
         let bytes = format::to_json(inventory);
-        let path = self.path.clone();
-        let seen = Arc::clone(&self.seen);
-        let temp_name = self.new_id();
-        Box::pin(async move {
-            let bytes = bytes.map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
-            // A file that `load` would refuse must not replace one it reads.
-            if bytes.len() as u64 > MAX_FILE {
-                return Err(StoreError::Io(std::io::Error::other(format!(
-                    "the host list would take {} MiB; the limit is {} MiB",
-                    bytes.len() / 1024 / 1024,
-                    MAX_FILE / 1024 / 1024
-                ))));
-            }
-            blocking(move || {
-                let mut seen = lock(&seen);
-                if let Some(expected) = *seen {
-                    let current = read_limited(&path)?.as_deref().map(fingerprint);
-                    if current != expected {
-                        return Err(StoreError::Conflict);
-                    }
-                }
-                write_atomic(&path, &bytes, &temp_name)?;
-                *seen = Some(Some(fingerprint(&bytes)));
-                Ok(())
-            })
-            .await
-        })
+        Box::pin(self.0.save(bytes))
     }
 
     fn new_id(&self) -> String {
-        let mut bytes = [0u8; 16];
-        // The OS random source; it fails only on a broken system, and a
-        // time-based id is still unique enough for one user's list.
-        if rand::rngs::SysRng.try_fill_bytes(&mut bytes).is_err() {
-            let nanos = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos());
-            bytes = nanos.to_le_bytes();
-        }
-        let mut id = String::with_capacity(32);
-        for b in bytes {
-            id.push(char::from(HEX[usize::from(b >> 4)]));
-            id.push(char::from(HEX[usize::from(b & 0x0f)]));
-        }
-        id
+        new_id()
     }
+}
+
+/// Snippets kept in `path`, usually `snippets.json` in the app's config
+/// directory.
+#[derive(Debug, Clone)]
+pub struct JsonSnippetStore(JsonFile);
+
+impl JsonSnippetStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self(JsonFile::new(path, "snippet library"))
+    }
+}
+
+impl SnippetStore for JsonSnippetStore {
+    fn load(&self) -> BoxFuture<'_, Result<Library, StoreError>> {
+        Box::pin(self.0.load(Library::default, snippets::from_json))
+    }
+
+    fn save<'a>(&'a self, library: &'a Library) -> BoxFuture<'a, Result<(), StoreError>> {
+        let bytes = snippets::to_json(library);
+        Box::pin(self.0.save(bytes))
+    }
+
+    fn new_id(&self) -> String {
+        new_id()
+    }
+}
+
+/// A fresh id from the OS random source: 32 hex digits.
+fn new_id() -> String {
+    let mut bytes = [0u8; 16];
+    // The OS random source; it fails only on a broken system, and a
+    // time-based id is still unique enough for one user's list.
+    if rand::rngs::SysRng.try_fill_bytes(&mut bytes).is_err() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        bytes = nanos.to_le_bytes();
+    }
+    let mut id = String::with_capacity(32);
+    for b in bytes {
+        id.push(char::from(HEX[usize::from(b >> 4)]));
+        id.push(char::from(HEX[usize::from(b & 0x0f)]));
+    }
+    id
 }
 
 fn lock(seen: &Mutex<Option<Seen>>) -> std::sync::MutexGuard<'_, Option<Seen>> {

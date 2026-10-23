@@ -653,3 +653,17 @@ fn history_is_on_unless_the_nearest_level_turns_it_off() {
     assert!(!records("off"));
     assert!(records("free"));
 }
+
+#[test]
+fn a_host_starts_with_at_most_8_snippets_each_once() {
+    use crate::{MAX_STARTUP, SnippetId};
+    let id = |n: usize| SnippetId::parse(&format!("s{n}")).unwrap();
+    let mut inventory = Inventory::default();
+    let mut db = host("db", None);
+    db.startup = (0..MAX_STARTUP).map(id).collect();
+    inventory.put_host(db.clone()).unwrap();
+    db.startup.push(id(MAX_STARTUP));
+    assert_eq!(inventory.put_host(db.clone()), Err(HostsError::Startup));
+    db.startup = vec![id(1), id(1)];
+    assert_eq!(inventory.put_host(db), Err(HostsError::Startup));
+}

@@ -16,6 +16,7 @@ mod keys;
 mod output;
 mod session;
 mod sftp;
+mod snippet;
 mod ssh;
 mod terminal;
 
@@ -33,7 +34,8 @@ pub use history::{
 };
 pub use hosts::{
     ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label,
-    MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_TAGS, PROD_TAG, Settings, Tag,
+    MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_STARTUP, MAX_TAGS, PROD_TAG, Settings, SnippetId,
+    Tag,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};
@@ -41,6 +43,10 @@ pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
 pub use sftp::{
     LocalOs, MAX_NAME, NameError as SftpNameError, Source, Start, TAIL_CHECK, local_name, plan,
     remote_join, remote_parent, tail_start,
+};
+pub use snippet::{
+    Library, MAX_BODY, MAX_FILLED, MAX_LIBRARY, MAX_SNIPPETS, MAX_VALUE, MAX_VARIABLES, Snippet,
+    SnippetError, Variable, fill, variables,
 };
 pub use ssh::{
     AuthMethod, AuthOptions, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,

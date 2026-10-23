@@ -163,6 +163,28 @@ async fn forwarding_rules_load_back_and_only_they_raise_the_version() {
 }
 
 #[tokio::test]
+async fn startup_snippets_load_back_and_raise_the_version_to_3() {
+    use tauminus_domain::SnippetId;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut host = inventory
+        .host(&HostId::parse("db1").unwrap())
+        .unwrap()
+        .clone();
+    host.startup = vec![
+        SnippetId::parse("tmux").unwrap(),
+        SnippetId::parse("env").unwrap(),
+    ];
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 3);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -175,7 +197,15 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 3, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 4, "hosts": []}"#.to_owned()),
+        (
+            "startup snippet id",
+            r#"{"version": 3, "hosts": [{"id": "a", "label": "a", "address": "a", "startup": ["no spaces"]}]}"#.to_owned(),
+        ),
+        (
+            "startup snippet twice",
+            r#"{"version": 3, "hosts": [{"id": "a", "label": "a", "address": "a", "startup": ["s", "s"]}]}"#.to_owned(),
+        ),
         (
             "dynamic rule with a destination",
             r#"{"version": 2, "hosts": [{"id": "a", "label": "a", "address": "a", "forwards": [{"id": "f", "label": "f", "kind": "dynamic", "bind": "loopback", "port": 1080, "toHost": "x", "toPort": 1}]}]}"#.to_owned(),
@@ -357,4 +387,83 @@ async fn a_list_too_large_to_load_again_is_not_saved() {
     let huge = Inventory::new(vec![], hosts).unwrap();
     assert!(matches!(store.save(&huge).await, Err(StoreError::Io(_))));
     assert_eq!(std::fs::read(dir.0.join("hosts.json")).unwrap(), before);
+}
+
+mod snippet_file {
+    use tauminus_app::ports::{SnippetStore, StoreError};
+    use tauminus_domain::{Label, Library, Snippet, SnippetId};
+
+    use super::Dir;
+    use crate::JsonSnippetStore;
+
+    fn snippet(id: &str, folder: Option<&str>, body: &str) -> Snippet {
+        Snippet::new(
+            SnippetId::parse(id).unwrap(),
+            Label::parse(id).unwrap(),
+            folder.map(|f| Label::parse(f).unwrap()),
+            body.to_owned(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_library_loads_back_as_saved() {
+        let dir = Dir::new();
+        let store = JsonSnippetStore::new(dir.0.join("snippets.json"));
+        assert_eq!(store.load().await.unwrap(), Library::default());
+        let library = Library::new(vec![
+            snippet("logs", Some("Ops"), "journalctl -u {{unit:nginx}} -f"),
+            snippet("disk", None, "df -h\nfree -m\n"),
+        ])
+        .unwrap();
+        store.save(&library).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), library);
+        assert_eq!(store.new_id().len(), 32);
+    }
+
+    #[tokio::test]
+    async fn a_bad_or_newer_file_is_reported_and_kept() {
+        let dir = Dir::new();
+        std::fs::create_dir_all(&dir.0).unwrap();
+        let path = dir.0.join("snippets.json");
+        for (label, contents) in [
+            ("newer", r#"{"version": 2}"#),
+            (
+                "blank body",
+                r#"{"version": 1, "snippets": [{"id": "a", "name": "a", "body": "  "}]}"#,
+            ),
+            (
+                "twice",
+                r#"{"version": 1, "snippets": [{"id": "a", "name": "a", "body": "x"}, {"id": "a", "name": "b", "body": "y"}]}"#,
+            ),
+            (
+                "unknown field",
+                r#"{"version": 1, "snippets": [{"id": "a", "name": "a", "body": "x", "run": true}]}"#,
+            ),
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            let store = JsonSnippetStore::new(path.clone());
+            assert!(
+                matches!(store.load().await, Err(StoreError::Corrupt(_))),
+                "{label}"
+            );
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), contents, "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_change_from_another_window_is_not_overwritten() {
+        let dir = Dir::new();
+        let path = dir.0.join("snippets.json");
+        let one = JsonSnippetStore::new(path.clone());
+        let two = JsonSnippetStore::new(path);
+        one.load().await.unwrap();
+        two.load().await.unwrap();
+        let library = Library::new(vec![snippet("a", None, "true")]).unwrap();
+        one.save(&library).await.unwrap();
+        assert!(matches!(
+            two.save(&Library::default()).await,
+            Err(StoreError::Conflict)
+        ));
+    }
 }

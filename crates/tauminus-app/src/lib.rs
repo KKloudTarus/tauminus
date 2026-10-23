@@ -18,6 +18,7 @@ mod hosts;
 mod local;
 pub mod ports;
 mod session;
+mod snippets;
 mod ssh;
 pub mod vault;
 
@@ -30,4 +31,5 @@ pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
+pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
