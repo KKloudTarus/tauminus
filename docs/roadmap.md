@@ -160,7 +160,7 @@ Goal: beat Termius Pro.
 - [x] Highlight sets per host and group
 - [ ] Autocomplete from forked Fig specs for bash and zsh hosts
 - [x] Password suggestion at detected prompts from identities
-- [ ] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
+- [x] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
 - [ ] `tmux` control mode: `tmux` windows as native tabs
 - [ ] FIDO2 `sk-` keys through the agent, then direct signing with `ctap-hid-fido2`
 - [ ] Keys bound to Secure Enclave (macOS) and Windows Hello
@@ -169,7 +169,7 @@ Goal: beat Termius Pro.
 ### Exit criteria
 
 - [x] Recording of a 1 hour session replays with seek under 200 ms
-- [ ] AI never sends terminal output off the machine without a per-host opt-in (test)
+- [x] AI never sends terminal output off the machine without a per-host opt-in (test)
 - [ ] FIDO2 login tested with a YubiKey on all three operating systems
 
 ## v0.5: Sync and import
