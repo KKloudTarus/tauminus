@@ -303,7 +303,11 @@ export class CommandGuard {
   async #paste(data: string): Promise<void> {
     const bracketed = data.startsWith(PASTE_START) && data.endsWith(PASTE_END);
     const inner = bracketed ? data.slice(PASTE_START.length, -PASTE_END.length) : data;
-    const text = inner.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+    const lines = inner.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+    // A paste that ends a line runs what was on it before the paste too:
+    // that is checked and shown with it, as Enter would read it.
+    const text = lines.includes("\n") ? (await this.#lineSoFar()) + lines : lines;
+    if (this.#disposed) return;
     // A control such as Ctrl+C acts as a key: the shell drops what came
     // before it. Each piece between them is checked as its own line.
     const controls = hasControl(text);
@@ -325,6 +329,21 @@ export class CommandGuard {
       this.#sentParse = this.#host.parsed();
       this.#host.send(data);
     }
+  }
+
+  /** What the shell holds before the cursor's line ends: continued lines and the line typed so far. */
+  async #lineSoFar(): Promise<string> {
+    await this.#settle();
+    // The keys typed are exact, trailing spaces included; a recalled or
+    // edited line is read from the screen.
+    const position = this.#anchorPosition();
+    const line =
+      this.#typedValid && this.#typed !== ""
+        ? this.#typed
+        : position !== undefined
+          ? readLine(this.#host.screen(), position).anchored
+          : "";
+    return this.#pending ? `${this.#pending}\n${line}` : line;
   }
 
   async #check(lines: string[]): Promise<GuardVerdict> {

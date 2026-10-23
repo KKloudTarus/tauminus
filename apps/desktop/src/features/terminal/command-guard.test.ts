@@ -318,6 +318,20 @@ describe("CommandGuard", () => {
     expect(asked).toHaveLength(1);
   });
 
+  it("checks and shows a paste that ends a line with what is already on it", async () => {
+    const { screen, asked, sent, type } = setup(false);
+    screen.echo("user@db:~$ ");
+    await type(...keys("rm -rf /srv "));
+    await type("echo done\r");
+    expect(asked).toEqual([{ kind: "paste", text: "rm -rf /srv echo done\n", findings: [DANGER] }]);
+    expect(sent.join("")).toBe("rm -rf /srv ");
+
+    // A paste that leaves the line open waits for Enter, which reads it all.
+    const open = setup(false);
+    await open.type(...keys("rm -rf /srv "), "\u001b[200~a\u001b[201~");
+    expect(open.asked).toEqual([]);
+  });
+
   it("sends at most 8 pieces of a paste to the check", async () => {
     const { source, asked, type } = setup(false);
     await type(Array.from({ length: 12 }, (_, n) => `p${n}`).join("\u0003") + "\r");
