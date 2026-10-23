@@ -22,6 +22,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
   const prompt = useSyncExternalStore(controller.subscribe, controller.getPrompt);
   const guardRequest = useSyncExternalStore(controller.subscribe, controller.getGuardRequest);
   const guarded = useSyncExternalStore(controller.subscribeGuard, () => controller.guarded);
+  const recording = useSyncExternalStore(controller.subscribe, controller.getRecording);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -82,6 +83,15 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
             Could not start the shell: {status.message}
           </output>
         ))}
+      {recording && (
+        <output
+          data-testid="recording-status"
+          className="absolute top-1 right-3 rounded bg-red-600 px-1.5 text-[10px] font-semibold text-white"
+          title="This pane is being recorded"
+        >
+          ● REC
+        </output>
+      )}
       {guarded && (
         <output
           data-testid="prod-status"

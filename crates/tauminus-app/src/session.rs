@@ -16,7 +16,7 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::ports::{
-    LaunchError, OutputSink, TerminalEvent, TerminalInput, TerminalStream, Terminator,
+    LaunchError, OutputSink, OutputTap, TerminalEvent, TerminalInput, TerminalStream, Terminator,
 };
 
 /// Limits and timings for terminal sessions.
@@ -106,6 +106,23 @@ struct SessionControl {
     acked: Notify,
     closed: Notify,
     probe: Notify,
+    /// A recording listening to the output, if any.
+    tap: TapSlot,
+}
+
+/// The tap, and whether the pump has ended: a tap put on after that would
+/// never be ended, so none goes on.
+#[derive(Default)]
+struct TapSlot(Mutex<(Option<Arc<dyn OutputTap>>, bool)>);
+
+impl std::fmt::Debug for TapSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if lock(&self.0).0.is_some() {
+            "TapSlot(on)"
+        } else {
+            "TapSlot(off)"
+        })
+    }
 }
 
 impl SessionManager {
@@ -167,8 +184,18 @@ impl SessionManager {
             closing: false,
         };
         let registry = Arc::clone(&self.sessions);
+        let ending = Arc::clone(&pump.control);
         tokio::spawn(async move {
             pump.run().await;
+            // Taken out first: `end` may take a while to write its last lines.
+            let tap = {
+                let mut slot = lock(&ending.tap.0);
+                slot.1 = true;
+                slot.0.take()
+            };
+            if let Some(tap) = tap {
+                tap.end();
+            }
             lock(&registry).remove(&id);
             drop(slot);
             debug!(%id, "session ended");
@@ -190,7 +217,13 @@ impl SessionManager {
     }
 
     pub async fn resize(&self, id: SessionId, size: TerminalSize) -> Result<(), SessionError> {
-        self.send(id, TerminalInput::Resize(size)).await
+        self.send(id, TerminalInput::Resize(size)).await?;
+        if let Ok(control) = self.control(id)
+            && let Some(tap) = lock(&control.tap.0).0.clone()
+        {
+            tap.resize(size);
+        }
+        Ok(())
     }
 
     /// Records that the view has processed `bytes` of output.
@@ -199,6 +232,22 @@ impl SessionManager {
         control.acked_bytes.fetch_add(bytes, Ordering::Relaxed);
         control.acked.notify_one();
         Ok(())
+    }
+
+    /// Puts `tap` on the session's output, or takes it off with `None`,
+    /// returning the one it replaces; that one hears nothing more but is
+    /// not ended, which is the caller's to do.
+    pub fn set_tap(
+        &self,
+        id: SessionId,
+        tap: Option<Arc<dyn OutputTap>>,
+    ) -> Result<Option<Arc<dyn OutputTap>>, SessionError> {
+        let control = self.control(id)?;
+        let mut slot = lock(&control.tap.0);
+        if slot.1 {
+            return Err(SessionError::NotFound(id));
+        }
+        Ok(std::mem::replace(&mut slot.0, tap))
     }
 
     /// Asks the stream to check its link; a dead one ends the session as
@@ -419,7 +468,16 @@ impl<S: OutputSink> Pump<S> {
         }
     }
 
+    /// What the view is about to get, for a recording.
+    fn tap(&self, batch: &[u8]) {
+        let tap = lock(&self.control.tap.0).0.clone();
+        if let Some(tap) = tap {
+            tap.output(batch);
+        }
+    }
+
     fn deliver(&mut self, batch: Vec<u8>) -> Step {
+        self.tap(&batch);
         let len = batch.len();
         self.last_flush = Some(Instant::now());
         if self.sink.send_output(batch).is_err() {
@@ -440,6 +498,7 @@ impl<S: OutputSink> Pump<S> {
 
     fn flush_output(&mut self) {
         if let Some(batch) = self.batcher.take() {
+            self.tap(&batch);
             let _ = self.sink.send_output(batch);
         }
     }

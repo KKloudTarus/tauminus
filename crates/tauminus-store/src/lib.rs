@@ -15,12 +15,15 @@ mod format;
 pub mod history;
 mod history_backend;
 mod keychain;
+mod recordings;
+mod sealed_stream;
 mod snippets;
 pub mod vault;
 mod vault_backend;
 
 pub use history_backend::FileHistoryBackend;
 pub use keychain::OsKeychain;
+pub use recordings::FileRecordingStore;
 pub use vault_backend::{FileVaultBackend, KeyStore};
 
 use std::hash::{DefaultHasher, Hash, Hasher};

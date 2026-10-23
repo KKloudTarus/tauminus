@@ -8,6 +8,7 @@ import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
+import { RecordingsDialog } from "@/features/recording/RecordingsDialog.tsx";
 import { SerialDialog } from "@/features/serial/SerialDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
 import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
@@ -35,6 +36,7 @@ export function App({ shell }: { shell: AppShell }) {
     snippetsOpen,
     workspacesOpen,
     serialOpen,
+    recordingsOpen,
     snippetToFill,
     snippetHosts,
     files,
@@ -93,6 +95,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.snippetsOpen ||
         state.workspacesOpen ||
         state.serialOpen ||
+        state.recordingsOpen ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -205,6 +208,13 @@ export function App({ shell }: { shell: AppShell }) {
           client={shell.serial}
           onOpen={(port) => shell.openSerial(port)}
           onClose={() => shell.setSerialOpen(false)}
+        />
+      )}
+      {recordingsOpen && shell.recordings && (
+        <RecordingsDialog
+          client={shell.recordings}
+          onClose={() => shell.setRecordingsOpen(false)}
+          onUnlock={(retry) => shell.unlockVaultThen(retry)}
         />
       )}
       {workspacesOpen && (

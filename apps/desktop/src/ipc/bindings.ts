@@ -73,6 +73,51 @@ export const commands = {
 	 *  arrive on `on_prompt`, as for an SSH connect.
 	 */
 	moshConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("mosh_connect", { id, size, onOutput, onExit, onPrompt })),
+	/**
+	 *  Starts recording a pane's session from now on. Works with the vault
+	 *  locked once the recordings key exists; the very first recording needs
+	 *  the vault open (`vault_locked` otherwise).
+	 */
+	recordingStart: (session: SessionHandle, size: GridSize, title: string, host: string | null, initial: string | null) => typedError<RecordingView, CommandError>(__TAURI_INVOKE("recording_start", { session, size, title, host, initial })),
+	/**  Stops recording a pane; `null` when it was not recording. */
+	recordingStop: (session: SessionHandle) => __TAURI_INVOKE<{
+	id: string,
+	title: string,
+	host: string | null,
+	/**  Milliseconds since the Unix epoch, as a JavaScript `Date` takes. */
+	startedMs: number | null,
+	durationMs: number | null,
+	bytes: number | null,
+	/**
+	 *  Stopped before the session did: the disk fell behind, or the size
+	 *  limit was reached.
+	 */
+	truncated: boolean,
+	/**  Ended cleanly; `false` after a crash, or while still recording. */
+	complete: boolean,
+} | null>("recording_stop", { session }),
+	/**  The panes recording now. */
+	recordingsActive: () => __TAURI_INVOKE<ActiveRecording[]>("recordings_active"),
+	/**  Every recording, newest first. Needs no unlock. */
+	recordingsList: () => typedError<RecordingView[], CommandError>(__TAURI_INVOKE("recordings_list")),
+	/**
+	 *  Sends recording `id`'s asciicast text on `on_chunk`, in order, in
+	 *  pieces of at most 256 KiB. Needs the vault open.
+	 */
+	recordingRead: (id: string, onChunk: Channel<ArrayBuffer>) => typedError<ReadDone, CommandError>(__TAURI_INVOKE("recording_read", { id, onChunk })),
+	/**
+	 *  The player's saved checkpoints for recording `id`, sent on
+	 *  `on_checkpoints` as one piece; `false` and nothing sent when there are
+	 *  none. Needs the vault open.
+	 */
+	recordingCheckpoints: (id: string, onCheckpoints: Channel<ArrayBuffer>) => typedError<boolean, CommandError>(__TAURI_INVOKE("recording_checkpoints", { id, onCheckpoints })),
+	/**  Replaces the player's checkpoints for recording `id`. Needs no unlock. */
+	recordingSaveCheckpoints: (id: string, checkpoints: string) => typedError<null, CommandError>(__TAURI_INVOKE("recording_save_checkpoints", { id, checkpoints })),
+	recordingBookmarks: (id: string) => typedError<BookmarkSpec[], CommandError>(__TAURI_INVOKE("recording_bookmarks", { id })),
+	/**  Replaces recording `id`'s bookmarks. */
+	recordingSaveBookmarks: (id: string, bookmarks: BookmarkSpec[]) => typedError<null, CommandError>(__TAURI_INVOKE("recording_save_bookmarks", { id, bookmarks })),
+	/**  Deletes recording `id` and everything that goes with it. */
+	recordingDelete: (id: string) => typedError<null, CommandError>(__TAURI_INVOKE("recording_delete", { id })),
 	/**  The ports attached now, and the speeds offered. */
 	serialPorts: () => typedError<SerialPortsView, CommandError>(__TAURI_INVOKE("serial_ports")),
 	/**
@@ -184,10 +229,22 @@ export const commands = {
 };
 
 /* Types */
+/**  A recording in progress, and the pane's session. */
+export type ActiveRecording = {
+	session: SessionHandle,
+	recording: RecordingView,
+};
+
 /**  The user's reply to a prompt. */
 export type AnswerSpec = { kind: "trustHostKey"; remember: boolean } | { kind: "secret"; value: string } | { kind: "responses"; values: string[] } | { kind: "cancel" };
 
 export type AuthMethodSpec = "agent" | "publicKey" | "keyboardInteractive" | "password";
+
+export type BookmarkSpec = {
+	atMs: number | null,
+	label: string,
+	comment: string,
+};
 
 export type ChallengeFieldSpec = {
 	text: string,
@@ -526,7 +583,31 @@ export type ProtocolSpec = "ssh" |
 /**  Signs in over SSH; the terminal runs over Mosh. */
 "mosh";
 
+/**  How a playback read ended. */
+export type ReadDone = {
+	/**  The recording ended cleanly; `false`: it stops where a crash cut it. */
+	complete: boolean,
+};
+
 export type RecordedSpec = "stored" | "sealed" | "dropped";
+
+/**  A recording, as the list shows it. */
+export type RecordingView = {
+	id: string,
+	title: string,
+	host: string | null,
+	/**  Milliseconds since the Unix epoch, as a JavaScript `Date` takes. */
+	startedMs: number | null,
+	durationMs: number | null,
+	bytes: number | null,
+	/**
+	 *  Stopped before the session did: the disk fell behind, or the size
+	 *  limit was reached.
+	 */
+	truncated: boolean,
+	/**  Ended cleanly; `false` after a crash, or while still recording. */
+	complete: boolean,
+};
 
 export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
 

@@ -17,7 +17,7 @@ import { Broadcast, typedByUser } from "@/features/workspace/broadcast.ts";
 import { type SavedSpec, SavedWorkspaces } from "@/features/workspace/saved.ts";
 import { type PaneId, type Template, paneIds } from "@/features/workspace/layout.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
-import { HostsStore } from "@/features/hosts/hosts-store.ts";
+import { HostsStore, messageOf } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
@@ -31,6 +31,7 @@ import type {
   LinkOpener,
   SessionClient,
   SessionSpec,
+  RecordingsClient,
   SerialClient,
   SerialSpec,
   SnippetView,
@@ -38,6 +39,7 @@ import type {
   TextClipboard,
   VaultClient,
 } from "@/ipc/index.ts";
+import { SessionCommandError } from "@/ipc/index.ts";
 
 import { type ThemePreference, applyTheme, loadTheme, nextTheme, saveTheme } from "./theme.ts";
 
@@ -82,6 +84,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   "broadcast.off": "Stop broadcasting input",
   "workspaces.open": "Workspaces: save or open a set of tabs",
   "serial.open": "Open a serial port",
+  "recording.toggle": "Record this pane, or stop recording it",
+  "recordings.open": "Recordings: play back recorded sessions",
 };
 
 interface ShellState {
@@ -93,6 +97,7 @@ interface ShellState {
   snippetsOpen: boolean;
   workspacesOpen: boolean;
   serialOpen: boolean;
+  recordingsOpen: boolean;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -127,6 +132,8 @@ export class AppShell {
   readonly workspaces: SavedWorkspaces;
   /** Serial ports, when this window can reach them. */
   readonly serial: SerialClient | undefined;
+  /** Session recordings, when this window keeps them. */
+  readonly recordings: RecordingsClient | undefined;
   /** Settles once a host pane's session is up and its startup snippets typed. */
   readonly #ready = new WeakMap<
     TerminalController,
@@ -162,6 +169,7 @@ export class AppShell {
     files?: FilesClient;
     snippets?: SnippetsClient;
     serial?: SerialClient;
+    recordings?: RecordingsClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -188,6 +196,7 @@ export class AppShell {
     this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
     this.workspaces = new SavedWorkspaces(options.storage);
     this.serial = options.serial;
+    this.recordings = options.recordings;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -197,6 +206,7 @@ export class AppShell {
       snippetsOpen: false,
       workspacesOpen: false,
       serialOpen: false,
+      recordingsOpen: false,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -667,6 +677,91 @@ export class AppShell {
     });
   }
 
+  setRecordingsOpen(open: boolean): void {
+    if (this.#state.recordingsOpen === open || (open && !this.recordings)) return;
+    this.#set({ ...this.#state, recordingsOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /**
+   * Starts recording the focused pane, from what it shows now, or stops.
+   * The very first recording makes the vault's recordings key, so a locked
+   * vault is opened first; without a vault there is nothing to seal to.
+   */
+  async toggleRecording(): Promise<void> {
+    const client = this.recordings;
+    const pane = this.workspace.activeTab?.focused;
+    const controller = pane ? this.workspace.terminal(pane) : undefined;
+    if (!client || !controller) return;
+    const session = controller.sessionId;
+    if (session === undefined || controller.getStatus().kind !== "running") {
+      this.hosts.notify("Only a running session can be recorded");
+      return;
+    }
+    if (controller.getRecording()) {
+      await client.stop(session).catch(() => null);
+      controller.setRecording(undefined);
+      return;
+    }
+    const spec = this.workspace.focusedSpec();
+    try {
+      const recording = await client.start(
+        session,
+        { cols: controller.terminal.cols, rows: controller.terminal.rows },
+        controller.defaultTitle,
+        savedHostId(spec) ?? null,
+        controller.screenSnapshot(),
+      );
+      // The session may have ended meanwhile; its recording did with it.
+      if (controller.sessionId === session && controller.getStatus().kind === "running") {
+        controller.setRecording(recording);
+        this.#watchRecordings();
+      }
+    } catch (error) {
+      if (error instanceof SessionCommandError && error.code === "vault_locked") {
+        this.unlockVaultThen(() => void this.toggleRecording());
+      } else if (error instanceof SessionCommandError && error.code === "not_found") {
+        this.hosts.notify("Recordings are sealed to the vault: create one first (Open the vault)");
+      } else {
+        this.hosts.notify(`Could not start recording: ${messageOf(error)}`);
+      }
+    }
+  }
+
+  #recordingWatch: ReturnType<typeof setInterval> | undefined;
+
+  /**
+   * While a pane records, checks every few seconds that it still does: the
+   * backend stops a recording the disk cannot keep up with, or one that
+   * reached its size, and the pane's badge should say so.
+   */
+  #watchRecordings(): void {
+    if (this.#recordingWatch !== undefined || !this.recordings) return;
+    const client = this.recordings;
+    this.#recordingWatch = setInterval(() => {
+      const recording: TerminalController[] = [];
+      this.workspace.forEachTerminal((controller) => {
+        if (controller.getRecording()) recording.push(controller);
+      });
+      if (recording.length === 0) {
+        clearInterval(this.#recordingWatch);
+        this.#recordingWatch = undefined;
+        return;
+      }
+      client
+        .active()
+        .then((active) => {
+          const live = new Set(active.map((a) => a.session));
+          for (const controller of recording) {
+            if (controller.sessionId === undefined || !live.has(controller.sessionId)) {
+              controller.setRecording(undefined);
+            }
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+  }
+
   setSerialOpen(open: boolean): void {
     if (this.#state.serialOpen === open || (open && !this.serial)) return;
     this.#set({ ...this.#state, serialOpen: open });
@@ -868,6 +963,12 @@ export class AppShell {
       case "serial.open":
         this.setSerialOpen(true);
         return;
+      case "recording.toggle":
+        void this.toggleRecording();
+        return;
+      case "recordings.open":
+        this.setRecordingsOpen(true);
+        return;
       case "broadcast.off":
         this.broadcast.clear();
         break;
@@ -956,6 +1057,7 @@ export class AppShell {
   }
 
   dispose(): void {
+    clearInterval(this.#recordingWatch);
     this.workspace.dispose();
     this.#listeners.clear();
   }

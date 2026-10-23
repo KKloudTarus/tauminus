@@ -23,6 +23,9 @@ const PROMPT = "$ ";
  * password without echo, and `drop`, which loses the connection. Ctrl+C drops
  * the line.
  */
+/** What fake sessions print, by session, for the fake recordings. */
+export const fakeOutputTaps = new Map<number, (text: string) => void>();
+
 class FakeShell implements TerminalSession {
   readonly id: number;
   readonly #events: SessionEvents;
@@ -121,6 +124,7 @@ class FakeShell implements TerminalSession {
   }
 
   #print(text: string) {
+    fakeOutputTaps.get(this.id)?.(text);
     this.#events.onOutput(encoder.encode(text));
   }
 

@@ -9,7 +9,7 @@ use tokio::sync::mpsc::error::TrySendError;
 
 use super::*;
 use crate::LocalShells;
-use crate::ports::{PtyLauncher, SinkClosed};
+use crate::ports::{OutputTap, PtyLauncher, SinkClosed};
 
 /// The far end of a fake stream, held by the test.
 struct Remote {
@@ -685,4 +685,76 @@ async fn a_probe_reaches_the_stream_and_a_lost_link_reaches_the_sink() {
         h.sessions.probe(id),
         Err(SessionError::NotFound(_))
     ));
+}
+
+#[derive(Default)]
+struct RecordingTap {
+    output: Mutex<Vec<u8>>,
+    sizes: Mutex<Vec<TerminalSize>>,
+    ended: AtomicUsize,
+}
+
+impl OutputTap for RecordingTap {
+    fn output(&self, bytes: &[u8]) {
+        lock(&self.output).extend_from_slice(bytes);
+    }
+
+    fn resize(&self, size: TerminalSize) {
+        lock(&self.sizes).push(size);
+    }
+
+    fn end(&self) {
+        self.ended.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tap_hears_what_the_view_gets_and_the_end() {
+    let h = Harness::new(config());
+    let (id, remote) = h.open_ok();
+    output(&remote, b"before ").await;
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let tap = Arc::new(RecordingTap::default());
+    let previous = h
+        .sessions
+        .set_tap(id, Some(Arc::clone(&tap) as Arc<dyn OutputTap>))
+        .unwrap();
+    assert!(previous.is_none());
+    output(&remote, b"one ").await;
+    output(&remote, b"two").await;
+    let size = TerminalSize::new(100, 30).unwrap();
+    h.sessions.resize(id, size).await.unwrap();
+    remote
+        .events
+        .send(TerminalEvent::Exited { code: Some(0) })
+        .await
+        .unwrap();
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    // What came before the tap is not its; the rest is, in order.
+    assert_eq!(*lock(&tap.output), b"one two");
+    assert_eq!(*lock(&tap.sizes), [size]);
+    assert_eq!(tap.ended.load(Ordering::Relaxed), 1);
+    assert_eq!(h.sink.output(), b"before one two");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tap_taken_off_hears_nothing_more_and_is_not_ended() {
+    let h = Harness::new(config());
+    let (id, remote) = h.open_ok();
+    let tap = Arc::new(RecordingTap::default());
+    h.sessions
+        .set_tap(id, Some(Arc::clone(&tap) as Arc<dyn OutputTap>))
+        .unwrap();
+    let off = h.sessions.set_tap(id, None).unwrap();
+    assert!(off.is_some());
+    output(&remote, b"after").await;
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(lock(&tap.output).is_empty());
+    drop(remote);
+    settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(tap.ended.load(Ordering::Relaxed), 0);
 }

@@ -18,6 +18,7 @@ mod hosts;
 mod local;
 mod mosh;
 pub mod ports;
+pub mod recording;
 mod serial;
 mod session;
 mod snippets;

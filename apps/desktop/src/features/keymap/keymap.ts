@@ -47,7 +47,9 @@ export type Action =
   | "broadcast.tab"
   | "broadcast.off"
   | "workspaces.open"
-  | "serial.open";
+  | "serial.open"
+  | "recording.toggle"
+  | "recordings.open";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -82,6 +84,8 @@ export const ACTIONS: readonly Action[] = [
   "broadcast.off",
   "workspaces.open",
   "serial.open",
+  "recording.toggle",
+  "recordings.open",
 ];
 
 export type Platform = "mac" | "other";
@@ -122,6 +126,8 @@ const OTHER: Bindings = {
   "broadcast.off": [],
   "workspaces.open": [],
   "serial.open": [],
+  "recording.toggle": [],
+  "recordings.open": [],
 };
 
 const MAC: Bindings = {
@@ -158,6 +164,8 @@ const MAC: Bindings = {
   "broadcast.off": [],
   "workspaces.open": [],
   "serial.open": [],
+  "recording.toggle": [],
+  "recordings.open": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

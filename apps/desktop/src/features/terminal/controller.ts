@@ -8,6 +8,10 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
+import { SerializeAddon } from "@xterm/addon-serialize";
+
+import { snapshot } from "@/features/recording/snapshot.ts";
+import type { RecordingView } from "@/ipc/recordings.ts";
 import { describePort } from "@/ipc/serial.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import {
@@ -35,7 +39,7 @@ import { asksToOpen, isOpenableLink } from "./links.ts";
 import { type Lane, type OutputScheduler, outputScheduler } from "./output-scheduler.ts";
 import { asPaste, defusePaste, pastedText } from "./paste.ts";
 import { type RendererPreference, chooseRenderer } from "./renderer.ts";
-import { dropsRepeat } from "./repeat-guard.ts";
+import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 
@@ -195,6 +199,8 @@ export class TerminalController {
   /** Whether the pane is on screen; what happens then is seen. */
   #watched = true;
   #activity: Activity = "idle";
+  #recording: RecordingView | undefined;
+  #serialize: SerializeAddon | undefined;
   /** Tries since the connection was lost, or last stayed up a while. */
   #reconnects = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -349,10 +355,7 @@ export class TerminalController {
       this.#title = sanitizeTitle(title);
       this.#notify();
     });
-    // Runs before xterm.js's own REP handler; returning true drops the sequence.
-    this.terminal.parser.registerCsiHandler({ final: "b" }, (params) =>
-      dropsRepeat(params, this.terminal.cols, this.terminal.rows),
-    );
+    hardenParser(this.terminal);
     this.#guardSource = options.guard;
     this.#guard = options.guard
       ? new CommandGuard(options.guard, {
@@ -625,6 +628,38 @@ export class TerminalController {
 
   get status(): TerminalStatus {
     return this.#status;
+  }
+
+  /** The backend's id for the session running now, if one is. */
+  get sessionId(): number | undefined {
+    return this.#session?.id;
+  }
+
+  /** The recording of this pane in progress, if any. For `useSyncExternalStore`. */
+  getRecording = (): RecordingView | undefined => this.#recording;
+
+  /** Marks the pane as recording, or not, for its badge. */
+  setRecording(recording: RecordingView | undefined): void {
+    if (this.#recording === recording) return;
+    this.#recording = recording;
+    this.#notify();
+  }
+
+  /**
+   * The screen as it is now, as text that draws it again: where a recording
+   * begun now starts. The screen only: scrollback from before the user
+   * asked to record stays out of it. O(screen).
+   */
+  screenSnapshot(): string {
+    if (!this.#serialize) {
+      this.#serialize = new SerializeAddon();
+      this.terminal.loadAddon(this.#serialize);
+    }
+    // Between escape sequences, the state that follows is exact; in the
+    // middle of one, the screen alone is still the best start there is.
+    return (
+      snapshot(this.terminal, this.#serialize, 0) ?? this.#serialize.serialize({ scrollback: 0 })
+    );
   }
 
   get search(): SearchAddon {
@@ -1114,6 +1149,8 @@ export class TerminalController {
 
   #setStatus(status: TerminalStatus): void {
     this.#status = status;
+    // A recording ends with the session it records.
+    if (status.kind !== "running") this.#recording = undefined;
     if (status.kind === "failed" || (status.kind === "exited" && status.code !== 0)) {
       this.#mark("error");
     }
