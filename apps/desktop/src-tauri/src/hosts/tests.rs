@@ -47,6 +47,7 @@ fn input(label: &str, address: &str) -> HostInput {
         settings: SettingsSpec::default(),
         forwards: None,
         startup: None,
+        protocol: ProtocolSpec::Ssh,
     }
 }
 
@@ -512,4 +513,22 @@ async fn hosts_an_edit_points_elsewhere_are_the_moved_ones() {
         moved_hosts(&before, &regrouped),
         [HostId::parse("db").unwrap()]
     );
+}
+
+#[tokio::test]
+async fn a_telnet_host_lists_as_one_and_connects_on_23() {
+    let book = book().await;
+    let mut router = input("router", "10.0.0.1");
+    router.protocol = ProtocolSpec::Telnet;
+    let host = parse_host(&book, router).unwrap();
+    let id = host.id.clone();
+    let keep = Keep {
+        forwards: true,
+        startup: true,
+    };
+    let listed = view(&book.edit(|i| put_host(i, host, keep)).await.unwrap());
+    assert_eq!(listed.hosts[0].protocol, ProtocolSpec::Telnet);
+    let target = book.telnet_target(&id).await.unwrap();
+    assert_eq!(target.port, tauminus_domain::TELNET_PORT);
+    assert_eq!(target.host.as_str(), "10.0.0.1");
 }

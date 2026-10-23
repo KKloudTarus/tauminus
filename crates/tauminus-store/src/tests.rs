@@ -225,6 +225,25 @@ async fn an_encoding_set_on_a_group_alone_raises_the_version_too() {
 }
 
 #[tokio::test]
+async fn a_telnet_host_loads_back_and_raises_the_version_to_5() {
+    use tauminus_domain::Protocol;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut host = inventory
+        .host(&HostId::parse("db1").unwrap())
+        .unwrap()
+        .clone();
+    host.protocol = Protocol::Telnet;
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 5);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -237,7 +256,11 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 5, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 6, "hosts": []}"#.to_owned()),
+        (
+            "unknown protocol",
+            r#"{"version": 5, "hosts": [{"id": "a", "label": "a", "address": "a", "protocol": "rlogin"}]}"#.to_owned(),
+        ),
         (
             "unknown encoding",
             r#"{"version": 4, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"encoding": "UTF-7"}}]}"#.to_owned(),

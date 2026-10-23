@@ -18,6 +18,7 @@ mod session;
 mod sftp;
 mod snippet;
 mod ssh;
+mod telnet;
 mod terminal;
 
 pub use flow::{FlowControl, FlowSignal, Watermarks};
@@ -34,8 +35,8 @@ pub use history::{
 };
 pub use hosts::{
     ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label,
-    MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_STARTUP, MAX_TAGS, PROD_TAG, Settings, SnippetId,
-    Tag,
+    MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_STARTUP, MAX_TAGS, PROD_TAG, Protocol, Settings,
+    SnippetId, Tag,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};
@@ -53,4 +54,5 @@ pub use ssh::{
     ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, UserName, env_list,
     expand_proxy_command,
 };
+pub use telnet::{TELNET_PORT, TelnetTarget};
 pub use terminal::{TerminalSize, TerminalSizeError};

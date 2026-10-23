@@ -24,7 +24,8 @@ export function ForwardsDialog({
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => store.watch(), [store]);
   useEffect(() => dialog.current?.focus(), []);
-  const withRules = hosts.filter((host) => host.forwards.length > 0);
+  // Forwards run over SSH; a host switched to Telnet keeps its rules unused.
+  const withRules = hosts.filter((host) => host.protocol === "ssh" && host.forwards.length > 0);
 
   return (
     <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">

@@ -719,3 +719,59 @@ fn encoding(inventory: &Inventory, id: &str) -> Encoding {
         .unwrap()
         .encoding
 }
+
+#[test]
+fn a_telnet_host_connects_to_its_address_on_23_unless_a_port_is_set() {
+    use crate::{Protocol, TELNET_PORT};
+    let mut inventory = Inventory::default();
+    let mut router = host("router", None);
+    router.protocol = Protocol::Telnet;
+    router.settings.encoding = Some(Encoding::Windows1252);
+    inventory.put_host(router.clone()).unwrap();
+    let id = HostId::parse("router").unwrap();
+    let target = inventory.telnet_target(&id).unwrap();
+    assert_eq!(target.port, TELNET_PORT);
+    assert_eq!(target.encoding, Encoding::Windows1252);
+    assert_eq!(target.host, router.address);
+    router.settings.port = Some(2323);
+    inventory.put_host(router).unwrap();
+    assert_eq!(inventory.telnet_target(&id).unwrap().port, 2323);
+    // An SSH host has no Telnet target.
+    inventory.put_host(host("db", None)).unwrap();
+    assert!(
+        inventory
+            .telnet_target(&HostId::parse("db").unwrap())
+            .is_err()
+    );
+}
+
+#[test]
+fn ssh_never_reaches_a_telnet_host_and_telnet_never_bypasses_a_route() {
+    use crate::Protocol;
+    let mut inventory = Inventory::default();
+    let mut group = Group {
+        id: GroupId::parse("lab").unwrap(),
+        name: Label::parse("lab").unwrap(),
+        parent: None,
+        settings: Settings::default(),
+    };
+    group.settings.port = Some(22);
+    inventory.put_group(group.clone()).unwrap();
+    let mut switch = host("switch", Some("lab"));
+    switch.protocol = Protocol::Telnet;
+    inventory.put_host(switch).unwrap();
+    let id = HostId::parse("switch").unwrap();
+    let me = UserName::parse("me").unwrap();
+    assert!(
+        inventory.resolve(&id, &me).is_err(),
+        "no SSH to a Telnet host"
+    );
+    // The group's port is an SSH port; Telnet keeps 23.
+    assert_eq!(inventory.telnet_target(&id).unwrap().port, TELNET_PORT);
+    group.settings.jumps = Some(vec![Hop::parse("bastion").unwrap()]);
+    inventory.put_group(group).unwrap();
+    assert!(
+        inventory.telnet_target(&id).is_err(),
+        "a jump host is not silently skipped"
+    );
+}

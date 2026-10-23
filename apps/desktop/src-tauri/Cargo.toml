@@ -33,6 +33,7 @@ tauminus-pty.workspace = true
 tauminus-ssh.workspace = true
 tauminus-presence.workspace = true
 tauminus-store.workspace = true
+tauminus-telnet.workspace = true
 tauri = { workspace = true, features = ["specta"] }
 tauri-specta.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread", "time"] }

@@ -17,6 +17,7 @@ export {
   type GroupInput,
   type EncodingSpec,
   type EnvSpec,
+  type ProtocolSpec,
   type GroupView,
   type GuardFinding,
   type GuardSpec,

@@ -28,7 +28,9 @@ export type { AnswerSpec, EndpointSpec, ErrorCode, GridSize, PromptKind, RouteSp
 export type SessionSpec =
   | { kind: "local" }
   | { kind: "ssh"; target: SshTargetSpec }
-  | { kind: "host"; hostId: string; label: string; target: SshTargetSpec };
+  | { kind: "host"; hostId: string; label: string; target: SshTargetSpec }
+  /** A saved Telnet host: clear text, no host key, no prompts. */
+  | { kind: "telnet"; hostId: string; label: string };
 
 /** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
 export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
@@ -97,6 +99,8 @@ export const tauriSessions: SessionClient = {
     let opening: CommandResult<number>;
     if (spec.kind === "local") {
       opening = commands.sessionOpen(size, output, exit);
+    } else if (spec.kind === "telnet") {
+      opening = commands.telnetConnect(spec.hostId, size, output, exit);
     } else {
       const prompts = new Channel<PromptRequest>();
       prompts.onmessage = ({ id, prompt }) => {

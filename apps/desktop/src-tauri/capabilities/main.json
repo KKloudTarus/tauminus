@@ -19,6 +19,7 @@
     "allow-snippet-delete",
     "allow-snippet-command",
     "allow-host-startup",
+    "allow-telnet-connect",
     "allow-host-save",
     "allow-host-delete",
     "allow-group-save",

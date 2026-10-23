@@ -5126,6 +5126,7 @@ dependencies = [
  "tauminus-pty",
  "tauminus-ssh",
  "tauminus-store",
+ "tauminus-telnet",
  "tauri",
  "tauri-build",
  "tauri-specta",
@@ -5219,6 +5220,17 @@ dependencies = [
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
  "zeroize",
+]
+
+[[package]]
+name = "tauminus-telnet"
+version = "0.0.0"
+dependencies = [
+ "tauminus-app",
+ "tauminus-charset",
+ "tauminus-domain",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

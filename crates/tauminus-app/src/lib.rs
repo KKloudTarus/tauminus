@@ -20,6 +20,7 @@ pub mod ports;
 mod session;
 mod snippets;
 mod ssh;
+mod telnet;
 pub mod vault;
 
 pub use connections::{Connections, Login, LoginError};
@@ -33,3 +34,4 @@ pub use local::LocalShells;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
+pub use telnet::TelnetSessions;

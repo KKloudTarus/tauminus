@@ -105,6 +105,7 @@ export function fakeHosts(): HostsClient {
         (rule) => Object.assign({}, rule, { id: rule.id ?? id() }),
       ),
       startup: input.startup ?? hosts.find((h) => h.id === input.id)?.startup ?? [],
+      protocol: input.protocol ?? "ssh",
     };
     if (!host.label || !host.address) throw new Error("label and address are required");
     hosts = [...hosts.filter((h) => h.id !== host.id), host];

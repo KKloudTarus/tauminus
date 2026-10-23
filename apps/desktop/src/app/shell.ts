@@ -201,7 +201,7 @@ export class AppShell {
       const controller = new TerminalController(options.sessions, {
         ...(options.renderer ? { renderer: options.renderer } : {}),
         ...(spec ? { spec } : {}),
-        ...(spec?.kind === "host" ? { guard: this.hosts.guardFor(spec.hostId) } : {}),
+        ...(savedHostId(spec) ? { guard: this.hosts.guardFor(savedHostId(spec) ?? "") } : {}),
         ...(this.#history ? { record: this.#recorderFor(spec) } : {}),
         mac: this.platform === "mac",
         ...(links
@@ -216,6 +216,8 @@ export class AppShell {
       });
       controller.setKeyHandler((event) => this.handleKey(event));
       controller.setInputListener((data) => this.#broadcastFrom(paneId, data));
+      // Not over Telnet: it reports running once TCP connects, and the text
+      // would go to the device's login prompt.
       if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
       return controller;
     });
@@ -407,15 +409,18 @@ export class AppShell {
     const unable: string[] = [];
     for (const hostId of hosts) {
       const host = saved.find((h) => h.id === hostId);
-      if (!host?.target) {
-        unable.push(`${host?.label ?? hostId} (${host?.problem ?? "cannot connect"})`);
+      const spec = host ? specFor(host) : "deleted";
+      if (typeof spec === "string") {
+        unable.push(`${host?.label ?? hostId} (${spec})`);
         continue;
       }
-      specs.push({ kind: "host", hostId: host.id, label: host.label, target: host.target });
+      specs.push(spec);
     }
     const panes = this.#openGrid(specs);
     for (const spec of specs.slice(panes.length)) {
-      if (spec.kind === "host") unable.push(`${spec.label} (no room for more panes)`);
+      if (spec.kind === "host" || spec.kind === "telnet") {
+        unable.push(`${spec.label} (no room for more panes)`);
+      }
     }
     // One notice: each would replace the one before.
     if (unable.length > 0) this.hosts.notify(`Not run on ${unable.join(", ")}`);
@@ -646,7 +651,8 @@ export class AppShell {
   saveWorkspace(name: string): string | undefined {
     const dropped: string[] = [];
     const saved = (spec: SessionSpec | undefined): SavedSpec => {
-      if (spec?.kind === "host") return { kind: "host", hostId: spec.hostId };
+      const hostId = savedHostId(spec);
+      if (hostId) return { kind: "host", hostId };
       if (spec?.kind === "ssh") {
         if (spec.target.route.kind === "direct") {
           return {
@@ -698,9 +704,8 @@ export class AppShell {
       }
       if (spec.kind === "host") {
         const host = hosts.find((h) => h.id === spec.hostId);
-        if (host?.target) {
-          return { kind: "host", hostId: host.id, label: host.label, target: host.target };
-        }
+        const opened = host ? specFor(host) : undefined;
+        if (opened && typeof opened !== "string") return opened;
         missing.add(host?.label ?? "a deleted host");
       }
       return { kind: "local" };
@@ -757,11 +762,12 @@ export class AppShell {
 
   /** Connects to a saved host in a new tab, or says why it cannot. */
   connectHost(host: HostView): void {
-    if (!host.target) {
-      this.hosts.notify(`${host.label}: ${host.problem ?? "cannot connect"}`);
+    const spec = specFor(host);
+    if (typeof spec === "string") {
+      this.hosts.notify(`${host.label}: ${spec}`);
       return;
     }
-    this.connect({ kind: "host", hostId: host.id, label: host.label, target: host.target });
+    this.connect(spec);
   }
 
   setSidebarOpen(open: boolean): void {
@@ -824,6 +830,7 @@ export class AppShell {
             ? this.hosts.getSnapshot().view.hosts.find((h) => h.id === spec.hostId)
             : undefined;
         if (host) this.openFiles(host);
+        else if (spec?.kind === "telnet") this.hosts.notify("Telnet carries no files");
         else this.hosts.notify("Open files from a saved host: its ▤ button in the sidebar");
         return;
       }
@@ -917,9 +924,9 @@ export class AppShell {
 
   /** Where one terminal's commands go: the saved host's id, or none. */
   #recorderFor(spec: SessionSpec | undefined): (entry: RecordedCommand) => void {
-    const host = spec?.kind === "host" ? spec.hostId : null;
+    const host = savedHostId(spec) ?? null;
     const label =
-      spec?.kind === "host"
+      spec?.kind === "host" || spec?.kind === "telnet"
         ? spec.label
         : spec?.kind === "ssh"
           ? formatEndpoint(spec.target.destination)
@@ -965,6 +972,21 @@ export class AppShell {
     this.#state = state;
     for (const listener of this.#listeners) listener();
   }
+}
+
+/** What opens a saved host, by its protocol, or why it cannot open. */
+function specFor(host: HostView): SessionSpec | string {
+  if (host.protocol === "telnet") {
+    if (host.problem) return host.problem;
+    return { kind: "telnet", hostId: host.id, label: host.label };
+  }
+  if (!host.target) return host.problem ?? "cannot connect";
+  return { kind: "host", hostId: host.id, label: host.label, target: host.target };
+}
+
+/** The saved host a pane opened, whatever its protocol. */
+function savedHostId(spec: SessionSpec | undefined): string | undefined {
+  return spec?.kind === "host" || spec?.kind === "telnet" ? spec.hostId : undefined;
 }
 
 /** A template with each pane's spec turned into another. O(n). */

@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "snippet_delete",
     "snippet_command",
     "host_startup",
+    "telnet_connect",
     "host_save",
     "host_delete",
     "group_save",

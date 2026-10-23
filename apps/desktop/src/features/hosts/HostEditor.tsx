@@ -10,6 +10,7 @@ import type {
   GuardSpec,
   HostView,
   IdentityView,
+  ProtocolSpec,
   SettingsSpec,
   SnippetView,
 } from "@/ipc/index.ts";
@@ -277,6 +278,7 @@ function HostForm({
   const { view } = store.getSnapshot();
   const [label, setLabel] = useState(host?.label ?? "");
   const [address, setAddress] = useState(host?.address ?? "");
+  const [protocol, setProtocol] = useState<ProtocolSpec>(host?.protocol ?? "ssh");
   const [user, setUser] = useState(host?.settings.user ?? "");
   const [portText, setPortText] = useState(host?.settings.port?.toString() ?? "");
   const [group, setGroup] = useState(host?.group ?? "");
@@ -315,6 +317,7 @@ function HostForm({
         id: host?.id ?? null,
         label,
         address,
+        protocol,
         group: group || null,
         tags: list(tags) ?? [],
         settings: withGuard(
@@ -368,6 +371,24 @@ function HostForm({
           className={`${FIELD} font-mono`}
         />
       </Field>
+      <Field label="Protocol">
+        <select
+          value={protocol}
+          onChange={(e) => setProtocol(e.target.value === "telnet" ? "telnet" : "ssh")}
+          className={FIELD}
+        >
+          <option value="ssh">SSH</option>
+          <option value="telnet">Telnet</option>
+        </select>
+      </Field>
+      {protocol === "telnet" && (
+        <p className="mb-3 text-xs text-red-600 dark:text-red-400">
+          Telnet sends everything, passwords included, as clear text. It connects on port 23 unless
+          this host sets a port; user, jump hosts, keys, the vault identity, and startup snippets
+          are not used, and a group that reaches its network through a jump host or a proxy cannot
+          hold it.
+        </p>
+      )}
       <div className="grid grid-cols-[1fr_7rem] gap-2">
         <Field label="User (blank inherits)">
           <input
@@ -442,7 +463,9 @@ function HostForm({
       />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
       <ForwardFields rows={rules} onChange={setRules} />
-      {snippets && <StartupFields value={startup} snippets={snippets} onChange={setStartup} />}
+      {snippets && protocol === "ssh" && (
+        <StartupFields value={startup} snippets={snippets} onChange={setStartup} />
+      )}
     </Form>
   );
 }
