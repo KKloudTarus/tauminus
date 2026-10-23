@@ -76,11 +76,20 @@ const VI_EDIT = "v";
 /** Alt+#: bash comments the line out, or with an argument back in, and runs it. */
 const COMMENT_AND_RUN = "\u001b#";
 /**
- * A prompt for a secret: the keys typed after it never echo, and they are
- * not a command.
+ * A prompt for a secret: the keys typed after it never echo, or echo as
+ * `*` (sudo's pwfeedback), and they are not a command. What follows the
+ * keyword may hold `:` itself, as git's `Password for 'https://…': ` does,
+ * and a hint in parentheses may follow, as sudo-rs's does.
  */
 export const SECRET_PROMPT =
-  /(?:\b(?:password|passphrase|pass phrase|passcode|passwort|pin|token|secret|otp|one-time code|verification code|authenticator code|api key|access key|secret key|private key|credential)s?\b|mot de passe|contraseña|senha|mật khẩu|パスワード|密码)[^:>?]{0,120}[:>?]\s*$/iu;
+  /(?:\b(?:password|passphrase|pass phrase|passcode|passwort|pin|token|secret|otp|one-time code|verification code|authenticator code|mfa code|2fa code|unseal key|api key|access key|secret key|private key|credential)s?\b|mot de passe|contraseña|senha|mật khẩu|パスワード|密码).{0,120}[:>?](?:\s*\([^)]{0,80}\))?[\s*•●]*$/iu;
+/** Whether the cursor's line asks for a secret, whose keys are not a command. */
+export function atSecretPrompt(screen: Screen): boolean {
+  // The pattern ends the line and spans at most about 140 characters, so
+  // the tail decides it, however long the wrapped line.
+  return SECRET_PROMPT.test(readLine(screen, undefined).whole.slice(-256));
+}
+
 /** Most rows read for one line; past `MAX_LINE` the backend refuses it anyway. */
 export const MAX_ROWS = 512;
 /** How long a check may take before the user is asked instead. */
@@ -161,6 +170,8 @@ export class CommandGuard {
   #sentParse: number | undefined;
   #lastKey = "";
   #disposed = false;
+  /** Counts interrupts: input queued before one is dropped, as the shell would drop it. */
+  #epoch = 0;
 
   constructor(source: GuardSource, host: GuardHost) {
     this.#source = source;
@@ -176,12 +187,25 @@ export class CommandGuard {
       return;
     }
     this.#queued += 1;
+    const epoch = this.#epoch;
     this.#tail = this.#tail
-      .then(() => this.#handle(data))
+      .then(() => (epoch === this.#epoch ? this.#handle(data) : undefined))
       .catch((error: unknown) => console.error("prod guard failed", error))
       .finally(() => {
         this.#queued -= 1;
       });
+  }
+
+  /**
+   * Ctrl+C at once, ahead of any input waiting on a check: the shell
+   * clears the line, so what waited is dropped, not sent after it. A
+   * question already shown stays for the user to answer.
+   */
+  interrupt(): void {
+    if (this.#disposed) return;
+    this.#epoch += 1;
+    this.#forget();
+    this.#host.send(INTERRUPT);
   }
 
   /** Settles when every input so far has been sent or dropped. For tests. */
@@ -250,8 +274,9 @@ export class CommandGuard {
 
   /** `always` are findings that ask whatever the check says. */
   async #submit(key: string, always: GuardFinding[]): Promise<void> {
+    const epoch = this.#epoch;
     await this.#settle();
-    if (this.#disposed) return;
+    if (this.#disposed || epoch !== this.#epoch) return;
     const { anchored, whole, below } = readLine(this.#host.screen(), this.#anchorPosition());
     // A secret typed at a prompt that hides it: only printable keys, none of
     // them shown even after the echo wait. Recalled or pasted lines, which
@@ -284,7 +309,8 @@ export class CommandGuard {
       return;
     }
     const verdict = await this.#check(candidates);
-    if (this.#disposed) return;
+    // Ctrl+C while it was checked: the line is gone, so nothing is asked or sent.
+    if (this.#disposed || epoch !== this.#epoch) return;
     const findings = merge([...always, ...verdict.findings]);
     if (
       findings.length > 0 &&
@@ -293,7 +319,8 @@ export class CommandGuard {
       // The line stays on screen for the user to edit or clear.
       return;
     }
-    if (this.#disposed) return;
+    // Ctrl+C while the question was open cleared the line it was about.
+    if (this.#disposed || epoch !== this.#epoch) return;
     const pending = first !== undefined && verdict.incomplete ? first : "";
     this.#forget();
     this.#pending = pending;
@@ -301,6 +328,7 @@ export class CommandGuard {
   }
 
   async #paste(data: string): Promise<void> {
+    const epoch = this.#epoch;
     const bracketed = data.startsWith(PASTE_START) && data.endsWith(PASTE_END);
     const inner = bracketed ? data.slice(PASTE_START.length, -PASTE_END.length) : data;
     const lines = inner.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
@@ -318,10 +346,11 @@ export class CommandGuard {
       ...(all.length >= MAX_READINGS ? [all.slice(MAX_READINGS - 1).join("\n")] : []),
     ];
     const verdict = pieces.length > 0 ? await this.#check(pieces) : undefined;
-    if (this.#disposed) return;
+    if (this.#disposed || epoch !== this.#epoch) return;
     const findings = merge([...(controls ? [CONTROLS] : []), ...(verdict?.findings ?? [])]);
     if (await this.#host.ask({ kind: "paste", text, findings })) {
-      if (this.#disposed) return;
+      // Ctrl+C meanwhile: the text shown is no longer what would run.
+      if (this.#disposed || epoch !== this.#epoch) return;
       // Where typing started still counts: the next Enter reads from there,
       // not from the whole line, whose prompt could hide the command.
       this.#anchor ??= this.#mark();
@@ -449,8 +478,8 @@ function merge(findings: readonly GuardFinding[]): GuardFinding[] {
 }
 
 /**
- * A C0 control or DEL. Tab and newline count only when `all` is set: a
- * pasted line keeps them as text, and a line editor reads the rest as keys.
+ * C0 controls and DEL. A pasted line keeps tab and newline as text, and a
+ * line editor reads the rest as keys.
  */
 /** C0 controls and DEL, but tab and newline: what acts as a key, not text. */
 // oxlint-disable-next-line no-control-regex -- matching controls is the point
