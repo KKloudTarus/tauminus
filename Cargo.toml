@@ -43,6 +43,9 @@ specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "=0.0.12"
 tauri = "2.12.5"
 tauri-build = "2.7.4"
+# OS notifications for trigger matches, raised from Rust only: the webview
+# gets none of the plugin's permissions.
+tauri-plugin-notification = "2.7.0"
 # Opens http and https links from the terminal in the default browser.
 open = "5.4.4"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }

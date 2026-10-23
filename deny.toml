@@ -66,7 +66,8 @@ deny = [
   { crate = "serialport", wrappers = ["tauminus-serial"], reason = "only the serial adapter opens ports" },
   { crate = "arboard", wrappers = ["tauminus-desktop"], reason = "the OS clipboard belongs to the desktop shell" },
   { crate = "keyring-core", wrappers = ["tauminus-store", "zbus-secret-service-keyring-store", "apple-native-keyring-store", "windows-native-keyring-store"], reason = "only the store adapter talks to the OS keychain" },
-  { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
+  { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta", "tauri-plugin-notification"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },
+  { crate = "notify-rust", wrappers = ["tauri-plugin-notification"], reason = "OS notifications go through the plugin, called from the desktop shell's Rust only" },
   { crate = "specta", wrappers = ["tauminus-desktop", "tauri", "tauri-specta", "specta-typescript", "specta-serde", "specta-util"], reason = "IPC types live in the desktop shell" },
 ]
 
