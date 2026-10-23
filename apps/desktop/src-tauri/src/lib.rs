@@ -9,6 +9,7 @@ mod commands;
 mod drops;
 mod edit;
 mod files;
+mod fill;
 mod forwards;
 mod history;
 mod hosts;
@@ -48,6 +49,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new().commands(tauri_specta::collect_commands![
         commands::session_open,
         commands::session_write,
+        fill::session_fill_offer,
+        fill::session_fill_password,
         commands::session_write_bytes,
         commands::session_resize,
         commands::session_probe,
@@ -211,6 +214,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     ));
     app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
     let recording_sessions = Arc::clone(&sessions);
+    let fill_sessions = Arc::clone(&sessions);
     app.manage(sessions);
 
     let store = Arc::new(JsonHostStore::new(config_dir.join("hosts.json")));
@@ -257,6 +261,15 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         Arc::clone(&vault),
         recording_sessions,
     )));
+    let fill = match &*app.state::<hosts::Hosts>() {
+        hosts::Hosts::Ready(book) => Some(Arc::new(tauminus_app::Fill::new(
+            fill_sessions,
+            Arc::clone(book),
+            Arc::clone(&vault),
+        ))),
+        hosts::Hosts::Unavailable(_) => None,
+    };
+    app.manage(fill::FillState(fill));
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(

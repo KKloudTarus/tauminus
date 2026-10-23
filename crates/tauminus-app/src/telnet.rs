@@ -40,13 +40,8 @@ impl TelnetSessions {
     ) -> Result<SessionId, SshOpenError> {
         let slot = self.sessions.reserve()?;
         let stream = self.connector.connect(target, size).await?;
-        Ok(self.sessions.attach(
-            slot,
-            stream,
-            sink,
-            SessionMeta {
-                kind: SessionKind::Telnet,
-            },
-        ))
+        Ok(self
+            .sessions
+            .attach(slot, stream, sink, SessionMeta::of(SessionKind::Telnet)))
     }
 }

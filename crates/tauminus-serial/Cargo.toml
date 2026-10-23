@@ -20,6 +20,7 @@ tauminus-charset.workspace = true
 tauminus-domain.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }

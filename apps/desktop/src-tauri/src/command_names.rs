@@ -9,6 +9,8 @@
 const COMMANDS: &[&str] = &[
     "session_open",
     "session_write",
+    "session_fill_offer",
+    "session_fill_password",
     "session_write_bytes",
     "session_resize",
     "session_probe",

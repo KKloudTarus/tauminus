@@ -152,14 +152,20 @@ fn sessions(output: &str) -> (MoshSessions, Arc<ScriptedServer>, Arc<RecordingCl
 async fn the_server_is_started_over_ssh_and_the_client_aimed_at_it() {
     let (mosh, server, client) =
         sessions("MOSH CONNECT 60004 4tWIc8U4T0theuVzWIX0Pg\n[mosh-server detached, pid = 7]\n");
-    mosh.open_saved(
-        &login(Route::Direct),
-        TerminalSize::default(),
-        Sink,
-        Arc::new(NoPrompts),
-    )
-    .await
-    .unwrap();
+    let id = mosh
+        .open_saved(
+            &login(Route::Direct),
+            TerminalSize::default(),
+            Sink,
+            Arc::new(NoPrompts),
+        )
+        .await
+        .unwrap();
+    // The session knows its saved host: what the vault may type into it
+    // depends on that.
+    let saved = mosh.sessions.meta(id).unwrap().host.unwrap();
+    assert_eq!(saved.id, HostId::parse("db").unwrap());
+    assert_eq!(saved.login.host.as_str(), "db.example");
     assert_eq!(*server.scripts.lock().unwrap(), [MOSH_SERVER_SCRIPT]);
     assert_eq!(
         *client.launched.lock().unwrap(),

@@ -41,13 +41,8 @@ impl SerialSessions {
     ) -> Result<SessionId, SessionError> {
         let slot = self.sessions.reserve()?;
         let stream = self.ports.open(settings).map_err(SessionError::Launch)?;
-        Ok(self.sessions.attach(
-            slot,
-            stream,
-            sink,
-            SessionMeta {
-                kind: SessionKind::Serial,
-            },
-        ))
+        Ok(self
+            .sessions
+            .attach(slot, stream, sink, SessionMeta::of(SessionKind::Serial)))
     }
 }

@@ -15,6 +15,7 @@ mod hosts;
 mod keys;
 mod mosh;
 mod output;
+mod password_prompt;
 mod recording;
 mod serial;
 mod session;
@@ -45,6 +46,7 @@ pub use hosts::{
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
 pub use output::{OutputBatcher, ReadyBatches};
+pub use password_prompt::{PROMPT_TAIL, PasswordPrompt, last_line, password_prompt};
 pub use recording::{
     Bookmark, MAX_BOOKMARK_TEXT, MAX_BOOKMARKS, RecordingMeta, Utf8Carry, cast_header, cast_output,
     cast_resize,
@@ -52,7 +54,7 @@ pub use recording::{
 pub use serial::{
     BAUD_RATES, Parity, SerialError, SerialFlow, SerialPortInfo, SerialSettings, StopBits,
 };
-pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
+pub use session::{LocalShell, SavedHost, SessionId, SessionKind, SessionMeta};
 pub use sftp::{
     LocalOs, MAX_NAME, NameError as SftpNameError, Source, Start, TAIL_CHECK, local_name, plan,
     remote_join, remote_parent, tail_start,

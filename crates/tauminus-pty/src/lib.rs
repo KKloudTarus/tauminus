@@ -291,6 +291,16 @@ fn write_loop(
                     return;
                 }
             }
+            // Wiped when it drops, after the write.
+            TerminalInput::Secret(secret) => {
+                if let Err(e) = writer
+                    .write_all(secret.as_bytes())
+                    .and_then(|()| writer.flush())
+                {
+                    debug!(error = %e, "pty write failed; shell has exited");
+                    return;
+                }
+            }
             TerminalInput::Resize(size) => {
                 let resized = master
                     .lock()

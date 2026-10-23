@@ -256,6 +256,10 @@ async fn forward_input(
     while let Some(message) = input.recv().await {
         let bytes = match message {
             TerminalInput::Text(text) => lock(&telnet).send(&codec.encode(&text)),
+            // The first copy is wiped; what the link sends is its own.
+            TerminalInput::Secret(secret) => {
+                lock(&telnet).send(&zeroize::Zeroizing::new(codec.encode(&secret)))
+            }
             TerminalInput::Data(bytes) => lock(&telnet).send(&bytes),
             TerminalInput::Resize(size) => lock(&telnet).resize(size),
         };

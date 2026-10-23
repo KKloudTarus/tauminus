@@ -21,14 +21,28 @@ use zeroize::Zeroizing;
 pub use crate::vault::Credentials;
 
 /// Messages from the use case to a terminal stream, applied in order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TerminalInput {
     /// Text the user typed or pasted. A stream whose shell speaks another
     /// character set converts it; the rest send it as UTF-8.
     Text(String),
     /// Bytes as they are, such as legacy mouse reports.
     Data(Vec<u8>),
+    /// A password from the vault, typed as text is; wiped once sent.
+    Secret(Secret),
     Resize(TerminalSize),
+}
+
+/// Shows a secret as `Secret(..)`, so no log or panic prints it.
+impl fmt::Debug for TerminalInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
+            Self::Data(bytes) => f.debug_tuple("Data").field(bytes).finish(),
+            Self::Secret(_) => f.write_str("Secret(..)"),
+            Self::Resize(size) => f.debug_tuple("Resize").field(size).finish(),
+        }
+    }
 }
 
 /// Messages from a terminal stream to the use case.
