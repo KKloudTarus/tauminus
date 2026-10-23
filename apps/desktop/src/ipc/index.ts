@@ -6,6 +6,7 @@
 import type { TextClipboard } from "./clipboard.ts";
 import type { FilesClient } from "./files.ts";
 import type { ForwardsClient } from "./forwards.ts";
+import type { SerialClient } from "./serial.ts";
 import type { SnippetsClient } from "./snippets.ts";
 import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
@@ -49,6 +50,16 @@ export {
   type ForwardsClient,
   tauriForwards,
 } from "./forwards.ts";
+export {
+  type FlowSpec,
+  type ParitySpec,
+  type SerialClient,
+  type SerialPortView,
+  type SerialPortsView,
+  type SerialSpec,
+  describePort,
+  tauriSerial,
+} from "./serial.ts";
 export {
   type SkippedView,
   type SnippetInput,
@@ -152,6 +163,14 @@ export async function forwardsClient(
     return (await import("./fake-forwards.ts")).fakeForwards(ruleLabel);
   }
   return (await import("./forwards.ts")).tauriForwards;
+}
+
+/** Serial ports; the `e2e` build lists two that do not exist. */
+export async function serialClient(): Promise<SerialClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-serial.ts")).fakeSerial();
+  }
+  return (await import("./serial.ts")).tauriSerial;
 }
 
 /** Saved snippets; the `e2e` build keeps them in memory. */

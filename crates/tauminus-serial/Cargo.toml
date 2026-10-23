@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-serial"
+description = "Serial port transport for Tauminus, built on serialport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Without libudev: ports are listed from sysfs on Linux, so building needs
+# no system library.
+serialport = { version = "4.10.1", default-features = false }
+tauminus-app.workspace = true
+tauminus-charset.workspace = true
+tauminus-domain.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { WebglAddon } from "@xterm/addon-webgl";
 import { type ITheme, Terminal } from "@xterm/xterm";
 
+import { describePort } from "@/ipc/serial.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import {
   type AnswerSpec,
@@ -437,6 +438,8 @@ export class TerminalController {
         return this.spec.label;
       case "ssh":
         return formatEndpoint(this.spec.target.destination);
+      case "serial":
+        return describePort(this.spec.port);
       default:
         return "Terminal";
     }

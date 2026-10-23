@@ -8,6 +8,7 @@ import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
 import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
+import { SerialDialog } from "@/features/serial/SerialDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
 import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
 import { WorkspacesDialog } from "@/features/workspace/WorkspacesDialog.tsx";
@@ -33,6 +34,7 @@ export function App({ shell }: { shell: AppShell }) {
     forwardsOpen,
     snippetsOpen,
     workspacesOpen,
+    serialOpen,
     snippetToFill,
     snippetHosts,
     files,
@@ -90,6 +92,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.forwardsOpen ||
         state.snippetsOpen ||
         state.workspacesOpen ||
+        state.serialOpen ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -195,6 +198,13 @@ export function App({ shell }: { shell: AppShell }) {
           onRun={chooseSnippet}
           onRunOnHosts={chooseSnippetHosts}
           onClose={() => shell.setSnippetsOpen(false)}
+        />
+      )}
+      {serialOpen && shell.serial && (
+        <SerialDialog
+          client={shell.serial}
+          onOpen={(port) => shell.openSerial(port)}
+          onClose={() => shell.setSerialOpen(false)}
         />
       )}
       {workspacesOpen && (

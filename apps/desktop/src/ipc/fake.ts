@@ -142,7 +142,7 @@ function fail(code: CommandError["code"], message: string): SessionCommandError 
  * needs the vault unlocked; anything else cannot be reached.
  */
 async function fakeSsh(
-  spec: Exclude<SessionSpec, { kind: "local" } | { kind: "telnet" }>,
+  spec: Exclude<SessionSpec, { kind: "local" } | { kind: "telnet" } | { kind: "serial" }>,
   events: SessionEvents,
 ): Promise<string> {
   const ask = events.onPrompt ?? (async () => ({ kind: "cancel" }) as const);
@@ -204,7 +204,9 @@ export const fakeSessions: SessionClient = {
         ? ""
         : spec.kind === "telnet"
           ? `Connected to ${spec.label} over Telnet\r\n`
-          : await fakeSsh(spec, events);
+          : spec.kind === "serial"
+            ? `Opened ${spec.port.path} at ${spec.port.baud} baud\r\n`
+            : await fakeSsh(spec, events);
     const id = nextId;
     nextId += 1;
     return new FakeShell(id, size, events, banner);

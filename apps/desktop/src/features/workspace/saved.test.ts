@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { MAX_WORKSPACES, type SavedSpec, SavedWorkspaces } from "./saved.ts";
+import { MAX_WORKSPACES, type SavedSpec, SavedWorkspaces, directConnections } from "./saved.ts";
 import type { Template } from "./layout.ts";
 
 function memory(initial?: string): Storage {
@@ -48,6 +48,38 @@ describe("SavedWorkspaces", () => {
     expect(again.getSnapshot()[0]?.tabs).toEqual([local]);
     again.remove(again.getSnapshot()[0]!.id);
     expect(new SavedWorkspaces(storage).getSnapshot()).toEqual([]);
+  });
+
+  it("keeps a serial pane's port and settings, and drops broken ones", () => {
+    const storage = memory();
+    const serial: Template<SavedSpec> = {
+      kind: "pane",
+      spec: {
+        kind: "serial",
+        port: {
+          path: "/dev/ttyUSB0",
+          baud: 115_200,
+          dataBits: 8,
+          parity: "none",
+          stopBits: 1,
+          flow: "hardware",
+          encoding: "KOI8-R",
+        },
+      },
+    };
+    new SavedWorkspaces(storage).save("bench", [serial]);
+    const [bench] = new SavedWorkspaces(storage).getSnapshot();
+    expect(bench?.tabs).toEqual([serial]);
+    // Shown before it opens, as a connection is.
+    expect(directConnections(bench!)).toEqual(["serial /dev/ttyUSB0 115200 8N1"]);
+    const broken = JSON.stringify([
+      {
+        id: "x",
+        name: "x",
+        tabs: [{ kind: "pane", spec: { kind: "serial", port: { path: "", baud: 9600 } } }],
+      },
+    ]);
+    expect(new SavedWorkspaces(memory(broken)).getSnapshot()).toEqual([]);
   });
 
   it("stops at its limit", () => {

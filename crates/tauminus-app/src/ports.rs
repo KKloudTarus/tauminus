@@ -397,6 +397,17 @@ pub enum StoreError {
     Conflict,
 }
 
+/// The system's serial ports: what is attached, and a session on one.
+pub trait SerialPorts: Send + Sync + 'static {
+    /// Ports the system lists now. Blocking; at most a few hundred.
+    fn list(&self) -> Vec<tauminus_domain::SerialPortInfo>;
+    /// Opens a port with its line settings. Blocking.
+    fn open(
+        &self,
+        settings: &tauminus_domain::SerialSettings,
+    ) -> Result<TerminalStream, LaunchError>;
+}
+
 /// Opens Telnet sessions: a TCP connection and the Telnet protocol over
 /// it, converting the host's character set.
 pub trait TelnetConnector: Send + Sync + 'static {
