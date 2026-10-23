@@ -253,7 +253,7 @@ export function EditorDialog({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[10%] m-0 mx-auto w-[min(520px,90vw)] rounded-lg border border-current/15 bg-background p-0 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="top-[10%] m-0 mx-auto max-h-[80dvh] w-[min(520px,90vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-0 text-sm text-foreground shadow-xl backdrop:bg-black/30"
     >
       {editing.kind === "host" ? (
         <HostForm
@@ -874,7 +874,8 @@ function Form({
           {shown}
         </p>
       )}
-      <div className="flex items-center gap-2">
+      {/* Sticks to the bottom of a dialog taller than the window, so Save stays in reach. */}
+      <div className="sticky -bottom-4 -mx-4 -mb-4 flex items-center gap-2 border-t border-current/10 bg-background px-4 py-3">
         {onDelete && (
           <button
             type="button"
