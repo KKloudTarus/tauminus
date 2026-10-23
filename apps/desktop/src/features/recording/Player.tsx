@@ -10,9 +10,8 @@ import type { Hit } from "./player-core.ts";
 import { PlayerController } from "./player-controller.ts";
 import type { PlayerEngine } from "./engine.ts";
 
-const FIELD =
-  "rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50";
-const BUTTON = "rounded px-2 py-1 hover:bg-current/10 disabled:opacity-40";
+const FIELD = "field";
+const BUTTON = "btn btn-ghost btn-sm";
 const SPEEDS = [0.5, 1, 2, 4, 8, 16] as const;
 
 /** `m:ss`, or `h:mm:ss`. */
@@ -42,7 +41,7 @@ export function Player({ recording, client, onUnlock, onBack, engine }: PlayerPr
 
   const { status } = state;
   if (status.kind === "loading") {
-    return <p className="p-4 opacity-70">Opening the recording…</p>;
+    return <p className="p-4 text-muted">Opening the recording…</p>;
   }
   if (status.kind === "locked") {
     return (
@@ -60,7 +59,7 @@ export function Player({ recording, client, onUnlock, onBack, engine }: PlayerPr
   }
   if (status.kind === "failed") {
     return (
-      <p role="alert" className="p-4 text-red-600 dark:text-red-400">
+      <p role="alert" className="p-4 text-error">
         Could not play the recording: {status.text}
       </p>
     );
@@ -74,12 +73,12 @@ export function Player({ recording, client, onUnlock, onBack, engine }: PlayerPr
         </button>
         <span className="min-w-0 flex-1 truncate font-medium">{recording.title}</span>
         {state.built < 1 && (
-          <span className="text-xs opacity-60" data-testid="index-progress">
+          <span className="text-xs text-faint" data-testid="index-progress">
             Preparing seek {Math.round(state.built * 100)}%
           </span>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto rounded bg-black p-1">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-line bg-terminal p-1">
         <div
           ref={(host) => {
             controller.attach(host ?? undefined);
@@ -174,15 +173,15 @@ const Search = memo(function Search({ controller }: { controller: PlayerControll
         className={FIELD}
       />
       <ul className="min-h-0 flex-1 overflow-auto text-xs" aria-label="Search results">
-        {hits?.length === 0 && <li className="opacity-60">Not found</li>}
+        {hits?.length === 0 && <li className="text-faint">Not found</li>}
         {hits?.map((hit) => (
           <li key={hit.event}>
             <button
               type="button"
-              className="w-full truncate rounded px-1 text-left hover:bg-current/10"
+              className="w-full truncate rounded px-1 text-left hover:bg-surface-2"
               onClick={() => void controller.seek(hit.time)}
             >
-              <span className="tabular-nums opacity-60">{clock(hit.time)}</span> {hit.preview}
+              <span className="tabular-nums text-faint">{clock(hit.time)}</span> {hit.preview}
             </button>
           </li>
         ))}
@@ -276,7 +275,7 @@ const Bookmarks = memo(function Bookmarks({
         className={FIELD}
       />
       {error && (
-        <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+        <p role="alert" className="text-xs text-error">
           {error}
         </p>
       )}
@@ -285,12 +284,12 @@ const Bookmarks = memo(function Bookmarks({
           <li key={`${mark.atMs}-${mark.label}-${mark.comment}`} className="flex items-start gap-1">
             <button
               type="button"
-              className="min-w-0 flex-1 rounded px-1 text-left hover:bg-current/10"
+              className="min-w-0 flex-1 rounded px-1 text-left hover:bg-surface-2"
               onClick={() => void controller.seek((mark.atMs ?? 0) / 1000)}
             >
-              <span className="tabular-nums opacity-60">{clock((mark.atMs ?? 0) / 1000)}</span>{" "}
+              <span className="tabular-nums text-faint">{clock((mark.atMs ?? 0) / 1000)}</span>{" "}
               <span className="font-medium">{mark.label}</span>
-              {mark.comment && <span className="block opacity-70">{mark.comment}</span>}
+              {mark.comment && <span className="block text-muted">{mark.comment}</span>}
             </button>
             <button
               type="button"

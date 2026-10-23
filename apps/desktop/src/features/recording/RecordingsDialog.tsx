@@ -9,7 +9,7 @@ import type { RecordingView, RecordingsClient } from "@/ipc/index.ts";
 import type { PlayerEngine } from "./engine.ts";
 import { Player, clock } from "./Player.tsx";
 
-const BUTTON = "rounded px-2 py-1 hover:bg-current/10 disabled:opacity-40";
+const BUTTON = "btn btn-ghost btn-sm";
 
 /** `1.2 MB`, from bytes. */
 export function size(bytes: number): string {
@@ -65,7 +65,7 @@ export function RecordingsDialog({ client, onClose, onUnlock, engine }: Recordin
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[4%] m-0 mx-auto flex h-[min(860px,92vh)] w-[min(1100px,96vw)] flex-col rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal flex h-[min(860px,92dvh)] w-[min(1100px,96vw)] flex-col p-4 sm:mt-[4dvh] sm:max-h-[92dvh]"
     >
       <h2 id={titleId} className="mb-3 font-semibold">
         Recordings
@@ -83,24 +83,24 @@ export function RecordingsDialog({ client, onClose, onUnlock, engine }: Recordin
         />
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          {list.kind === "loading" && <p className="opacity-70">Loading…</p>}
+          {list.kind === "loading" && <p className="text-muted">Loading…</p>}
           {list.kind === "failed" && (
-            <p role="alert" className="text-red-600 dark:text-red-400">
+            <p role="alert" className="text-error">
               Could not list recordings: {list.text}
             </p>
           )}
           {list.kind === "ready" && list.recordings.length === 0 && (
-            <p className="opacity-70">
+            <p className="text-muted">
               No recordings yet. Start one on a pane from the command palette: “Record this pane”.
             </p>
           )}
           {list.kind === "ready" && list.recordings.length > 0 && (
-            <ul aria-label="Recordings" className="divide-y divide-current/10">
+            <ul aria-label="Recordings" className="divide-y divide-line">
               {list.recordings.map((recording) => (
                 <li key={recording.id} className="flex items-center gap-3 py-2">
                   <div className="min-w-0 flex-1">
                     <div className="truncate font-medium">{recording.title}</div>
-                    <div className="text-xs opacity-60">
+                    <div className="text-xs text-faint">
                       {new Date(recording.startedMs ?? 0).toLocaleString()} ·{" "}
                       {clock((recording.durationMs ?? 0) / 1000)} · {size(recording.bytes ?? 0)}
                       {!recording.complete && " · still recording, or cut short"}
@@ -118,7 +118,7 @@ export function RecordingsDialog({ client, onClose, onUnlock, engine }: Recordin
                   {confirming === recording.id ? (
                     <button
                       type="button"
-                      className={`${BUTTON} text-red-600 dark:text-red-400`}
+                      className={`${BUTTON} text-danger`}
                       onClick={() => {
                         client
                           .remove(recording.id)
