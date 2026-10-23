@@ -7,8 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
-    Action, Colour, Highlight, Label, MAX_SET_RULES, MAX_SETS, RulePattern, TriggerLibrary,
-    TriggerRule, TriggerSet, TriggerSetId,
+    Action, Colour, Highlight, Label, MAX_SET_RULES, MAX_SETS, RulePattern, SendText,
+    TriggerLibrary, TriggerRule, TriggerSet, TriggerSetId,
 };
 
 const VERSION: u32 = 1;
@@ -67,6 +67,31 @@ enum ActionRecord {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         line: bool,
     },
+    Notify,
+    Capture,
+    Send {
+        text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        enter: bool,
+    },
+}
+
+impl From<&Action> for ActionRecord {
+    fn from(action: &Action) -> Self {
+        match action {
+            Action::Highlight(style) => Self::Highlight {
+                fg: style.fg().map(|c| c.to_string()),
+                bg: style.bg().map(|c| c.to_string()),
+                line: style.line(),
+            },
+            Action::Notify => Self::Notify,
+            Action::Capture => Self::Capture,
+            Action::Send(send) => Self::Send {
+                text: send.text().to_owned(),
+                enter: send.enter(),
+            },
+        }
+    }
 }
 
 /// O(total pattern size).
@@ -81,18 +106,11 @@ pub(crate) fn to_json(library: &TriggerLibrary) -> Result<Vec<u8>, serde_json::E
                 rules: set
                     .rules()
                     .iter()
-                    .map(|rule| {
-                        let Action::Highlight(style) = rule.action;
-                        RuleRecord {
-                            name: rule.name.as_str().to_owned(),
-                            pattern: rule.pattern.as_str().to_owned(),
-                            enabled: rule.enabled,
-                            action: ActionRecord::Highlight {
-                                fg: style.fg().map(|c| c.to_string()),
-                                bg: style.bg().map(|c| c.to_string()),
-                                line: style.line(),
-                            },
-                        }
+                    .map(|rule| RuleRecord {
+                        name: rule.name.as_str().to_owned(),
+                        pattern: rule.pattern.as_str().to_owned(),
+                        enabled: rule.enabled,
+                        action: ActionRecord::from(&rule.action),
                     })
                     .collect(),
             })
@@ -153,16 +171,24 @@ fn rule(record: RuleRecord) -> Result<TriggerRule, String> {
     let name = Label::parse(&record.name).map_err(|e| format!("rule name: {e}"))?;
     let pattern =
         RulePattern::parse(&record.pattern).map_err(|e| format!("rule {}: {e}", name.as_str()))?;
-    let ActionRecord::Highlight { fg, bg, line } = record.action;
     let colour = |text: Option<String>| {
         text.map(|t| Colour::parse(&t).map_err(|e| format!("colour {t:?}: {e}")))
             .transpose()
     };
-    let style = Highlight::new(colour(fg)?, colour(bg)?, line).map_err(|e| e.to_string())?;
+    let action = match record.action {
+        ActionRecord::Highlight { fg, bg, line } => Action::Highlight(
+            Highlight::new(colour(fg)?, colour(bg)?, line).map_err(|e| e.to_string())?,
+        ),
+        ActionRecord::Notify => Action::Notify,
+        ActionRecord::Capture => Action::Capture,
+        ActionRecord::Send { text, enter } => {
+            Action::Send(SendText::new(text, enter).map_err(|e| e.to_string())?)
+        }
+    };
     Ok(TriggerRule {
         name,
         pattern,
-        action: Action::Highlight(style),
+        action,
         enabled: record.enabled,
     })
 }
@@ -195,6 +221,18 @@ mod tests {
                     vec![
                         rule("ERROR", true, false),
                         rule(r"(?i)fail\w*", false, true),
+                        TriggerRule {
+                            action: Action::Notify,
+                            ..rule("done", true, false)
+                        },
+                        TriggerRule {
+                            action: Action::Capture,
+                            ..rule("token", true, false)
+                        },
+                        TriggerRule {
+                            action: Action::Send(SendText::new("yes".into(), true).unwrap()),
+                            ..rule(r"\[y/N\]", true, false)
+                        },
                     ],
                 )
                 .unwrap(),
@@ -224,6 +262,11 @@ mod tests {
                 "twice",
                 r#"{"version": 1, "sets": [{"id": "a", "name": "a"}, {"id": "a", "name": "b"}]}"#,
                 "twice",
+            ),
+            (
+                "control in sent text",
+                r#"{"version": 1, "sets": [{"id": "a", "name": "a", "rules": [{"name": "r", "pattern": "x", "action": {"kind": "send", "text": "rm -rf /\u001b[201~"}}]}]}"#,
+                "control",
             ),
             (
                 "unknown action",

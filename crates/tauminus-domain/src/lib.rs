@@ -35,7 +35,7 @@ pub use guard::{
 };
 pub use history::{
     EXCERPT_FROM, ExitFilter, HistoryEntry, HistoryHit, HistoryQuery, HistoryQueryError,
-    MAX_COMMAND, MAX_OUTPUT, MAX_RESULTS, Retention,
+    MAX_COMMAND, MAX_OUTPUT, MAX_RESULTS, Retention, invisible,
 };
 pub use hosts::{
     ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label,
@@ -69,7 +69,8 @@ pub use ssh::{
 pub use telnet::{TELNET_PORT, TelnetTarget};
 pub use terminal::{TerminalSize, TerminalSizeError};
 pub use trigger::{
-    Action, Colour, Highlight, Hit, MAX_APPLIED_RULES, MAX_APPLIED_SETS, MAX_HITS, MAX_LEVEL_SETS,
-    MAX_RULE_PATTERN, MAX_SCAN_BYTES, MAX_SCAN_LINE, MAX_SCAN_LINES, MAX_SET_RULES, MAX_SETS,
-    Matcher, RulePattern, TriggerError, TriggerLibrary, TriggerRule, TriggerSet,
+    Action, Colour, Fired, Highlight, Hit, MAX_APPLIED_RULES, MAX_APPLIED_SETS, MAX_FIRED,
+    MAX_FIRED_TEXT, MAX_HITS, MAX_LEVEL_SETS, MAX_RULE_PATTERN, MAX_SCAN_BYTES, MAX_SCAN_LINE,
+    MAX_SCAN_LINES, MAX_SEND, MAX_SET_RULES, MAX_SETS, Matcher, RulePattern, SendText,
+    TriggerError, TriggerLibrary, TriggerMatcher, TriggerRule, TriggerSet,
 };

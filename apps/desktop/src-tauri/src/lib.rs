@@ -15,6 +15,7 @@ mod hosts;
 mod ipc;
 mod links;
 mod mosh;
+mod notices;
 mod recordings;
 mod serial;
 mod snippets;
@@ -72,6 +73,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         triggers::trigger_pattern_check,
         triggers::trigger_prepare,
         triggers::trigger_scan,
+        triggers::trigger_fire,
+        notices::trigger_notify,
         telnet::telnet_connect,
         mosh::mosh_connect,
         recordings::recording_start,
@@ -173,6 +176,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     ));
     app.manage(Arc::new(ssh::PromptBroker::default()));
     app.manage(clipboard::Clipboard::default());
+    app.manage(notices::Notices::default());
 
     // Keys the user trusts here go to Tauminus's own file; the user's
     // OpenSSH files are read but never written.
@@ -269,6 +273,9 @@ pub fn run() -> anyhow::Result<()> {
 
     let builder = specta_builder();
     tauri::Builder::default()
+        // Called from Rust only (`notices`); the window has none of its
+        // permissions.
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let paths = Paths {
@@ -276,10 +283,27 @@ pub fn run() -> anyhow::Result<()> {
                 home: app.path().home_dir().ok(),
             };
             install(app, paths);
+            let notifier = app.handle().clone();
+            app.state::<notices::Notices>()
+                .set_show(Box::new(move |title, body| {
+                    use tauri_plugin_notification::NotificationExt as _;
+                    notifier
+                        .notification()
+                        .builder()
+                        .title(title)
+                        .body(body)
+                        .show()
+                        .map_err(|e| e.to_string())
+                }));
             if let Some(window) = app.get_webview_window("main") {
+                app.state::<notices::Notices>()
+                    .set_focused(window.is_focused().unwrap_or(true));
                 let handle = app.handle().clone();
                 let this = window.clone();
                 window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Focused(focused) = event {
+                        handle.state::<notices::Notices>().set_focused(*focused);
+                    }
                     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop {
                         paths,
                         position,
@@ -373,6 +397,17 @@ mod tests {
 
         let capability = std::fs::read_to_string(manifest_dir().join("capabilities/main.json"))
             .expect("capability file");
+        // Plugins' permissions (`name:...`) give the webview commands this
+        // list does not name: notifications are raised from Rust only.
+        let parsed: serde_json::Value = serde_json::from_str(&capability).expect("capability JSON");
+        let permissions = parsed["permissions"].as_array().expect("a permission list");
+        for permission in permissions {
+            let name = permission.as_str().expect("permissions by name");
+            assert!(
+                name.starts_with("allow-"),
+                "capabilities/main.json grants {name}, which is no app command"
+            );
+        }
         let granted: BTreeSet<String> = capability
             .split("\"allow-")
             .skip(1)

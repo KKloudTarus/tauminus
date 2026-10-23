@@ -90,6 +90,20 @@ export const commands = {
 	 */
 	triggerScan: (handle: number, lines: string[]) => typedError<HitView[] | null, CommandError>(__TAURI_INVOKE("trigger_scan", { handle, lines })),
 	/**
+	 *  The triggers prepared as `handle` that `lines`, finished lines of
+	 *  output, fire; `null` when the rules changed since, and the pane should
+	 *  prepare again. Bounded as `trigger_scan` is.
+	 */
+	triggerFire: (handle: number, lines: string[]) => typedError<FiredView[] | null, CommandError>(__TAURI_INVOKE("trigger_fire", { handle, lines })),
+	/**
+	 *  Raises a system notification for trigger `rule` of the rules prepared
+	 *  as `handle`, in a pane of saved host `host` (or none). `false` when the
+	 *  window has focus (the app's own notice is enough), the rule notified
+	 *  too recently, or the system refused. Errors only for a rule that is not
+	 *  a notifying one.
+	 */
+	triggerNotify: (host: string | null, handle: number, rule: number) => typedError<boolean, CommandError>(__TAURI_INVOKE("trigger_notify", { host, handle, rule })),
+	/**
 	 *  Connects to a saved Telnet host and streams it to the view. Nothing
 	 *  is asked: Telnet has no host key, and a login, if any, is the
 	 *  remote shell's own prompt.
@@ -257,6 +271,20 @@ export const commands = {
 };
 
 /* Types */
+/**  What a rule does when it matches. */
+export type ActionSpec = 
+/**  Colours the match where it shows. */
+{ kind: "highlight"; style: StyleSpec } | 
+/**
+ *  Tells the user: in the app, and from the system while the window is
+ *  in the back.
+ */
+{ kind: "notify" } | 
+/**  Keeps the line, for the user to read and copy. */
+{ kind: "capture" } | 
+/**  Types `text`, then Enter if `enter`, as the user would. */
+{ kind: "send"; text: string; enter: boolean };
+
 /**  A recording in progress, and the pane's session. */
 export type ActiveRecording = {
 	session: SessionHandle,
@@ -362,6 +390,19 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 "unavailable" | "internal";
 
 export type ExitFilterSpec = "any" | "success" | "failure";
+
+/**
+ *  A trigger that fired: rule `rule` matched line `line` first from
+ *  `start` to `end`. `text` is the line with secrets of a known shape
+ *  hidden and control characters out, for the app's notice or a capture.
+ */
+export type FiredView = {
+	line: number,
+	rule: number,
+	start: number,
+	end: number,
+	text: string,
+};
 
 export type FlowSpec = "none" | 
 /**  XON/XOFF. */
@@ -601,10 +642,15 @@ export type ParitySpec = "none" | "odd" | "even";
 export type PreparedView = {
 	handle: number,
 	/**
-	 *  By the index hits carry; empty when no rule applies, and the pane
-	 *  need not scan.
+	 *  By the index hits carry; empty when no highlight applies, and the
+	 *  pane need not scan its screen.
 	 */
 	styles: StyleSpec[],
+	/**
+	 *  By the index fired triggers carry; empty when no trigger applies,
+	 *  and the pane need not watch its output.
+	 */
+	triggers: TriggerView[],
 };
 
 /**
@@ -663,7 +709,7 @@ export type RuleSpec = {
 	name: string,
 	pattern: string,
 	enabled: boolean,
-	style: StyleSpec,
+	action: ActionSpec,
 };
 
 export type SerialPortView = {
@@ -838,6 +884,12 @@ export type TriggerSetView = {
 	 *  and groups name, 0 first; `null` when it is not one of them.
 	 */
 	rank: number | null,
+};
+
+/**  A trigger rule a pane runs, by the index fired triggers carry. */
+export type TriggerView = {
+	name: string,
+	action: ActionSpec,
 };
 
 export type VariableView = {
