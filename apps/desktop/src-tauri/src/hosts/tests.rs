@@ -45,6 +45,7 @@ fn input(label: &str, address: &str) -> HostInput {
         group: None,
         tags: vec![],
         settings: SettingsSpec::default(),
+        forwards: None,
     }
 }
 
@@ -336,4 +337,104 @@ fn environment_variables_are_validated() {
         .collect();
     let many: Vec<(&str, &str)> = many.iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
     assert!(settings(spec(&many)).is_err());
+}
+
+#[tokio::test]
+async fn forwarding_rules_save_list_and_survive_an_edit_that_omits_them() {
+    use crate::forwards::{ForwardKindSpec, ForwardSpec};
+    let book = book().await;
+    let mut db = input("DB", "db.internal");
+    db.forwards = Some(vec![ForwardSpec {
+        id: None,
+        label: "postgres".into(),
+        kind: ForwardKindSpec::Local,
+        bind: "loopback".into(),
+        port: 15432,
+        to_host: Some("127.0.0.1".into()),
+        to_port: Some(5432),
+        auto_start: true,
+    }]);
+    let host = parse_host(&book, db).unwrap();
+    let id = host.id.to_string();
+    let listed = view(&book.edit(|i| put_host(i, host, false)).await.unwrap());
+    let rules = &listed.hosts[0].forwards;
+    assert_eq!(rules.len(), 1);
+    assert!(rules[0].id.is_some(), "a new rule gets an id");
+    assert_eq!(rules[0].port, 15432);
+
+    // An edit from a view that sends no rules keeps them.
+    let mut renamed = input("DB primary", "db.internal");
+    renamed.id = Some(id.clone());
+    let host = parse_host(&book, renamed).unwrap();
+    let listed = view(&book.edit(|i| put_host(i, host, true)).await.unwrap());
+    assert_eq!(listed.hosts[0].label, "DB primary");
+    assert_eq!(listed.hosts[0].forwards.len(), 1);
+
+    // One that sends an empty list removes them.
+    let mut cleared = input("DB primary", "db.internal");
+    cleared.id = Some(id);
+    cleared.forwards = Some(vec![]);
+    let host = parse_host(&book, cleared).unwrap();
+    let listed = view(&book.edit(|i| put_host(i, host, false)).await.unwrap());
+    assert_eq!(listed.hosts[0].forwards.len(), 0);
+}
+
+#[tokio::test]
+async fn hosts_an_edit_points_elsewhere_are_the_moved_ones() {
+    let book = book().await;
+    let group = parse_group(
+        &book,
+        GroupInput {
+            id: Some("g".into()),
+            name: "g".into(),
+            parent: None,
+            settings: SettingsSpec::default(),
+        },
+    )
+    .unwrap();
+    book.edit(|i| i.put_group(group)).await.unwrap();
+    let mut db = input("db", "db.internal");
+    db.id = Some("db".into());
+    db.group = Some("g".into());
+    let mut web = input("web", "web.internal");
+    web.id = Some("web".into());
+    for host in [db, web] {
+        let host = parse_host(&book, host).unwrap();
+        book.edit(|i| i.put_host(host)).await.unwrap();
+    }
+    let before = book.snapshot().await;
+
+    // A rename moves nothing; a new address moves that host only.
+    let mut renamed = before.clone();
+    let mut web = renamed
+        .host(&HostId::parse("web").unwrap())
+        .unwrap()
+        .clone();
+    web.label = Label::parse("Web").unwrap();
+    renamed.put_host(web).unwrap();
+    assert_eq!(moved_hosts(&before, &renamed), Vec::<HostId>::new());
+    let mut readdressed = before.clone();
+    let mut web = readdressed
+        .host(&HostId::parse("web").unwrap())
+        .unwrap()
+        .clone();
+    web.address = HostName::parse("web2.internal").unwrap();
+    readdressed.put_host(web).unwrap();
+    assert_eq!(
+        moved_hosts(&before, &readdressed),
+        [HostId::parse("web").unwrap()]
+    );
+
+    // A group's user moves every host in it.
+    let mut regrouped = before.clone();
+    let mut g = regrouped
+        .group(&GroupId::parse("g").unwrap())
+        .unwrap()
+        .clone();
+    g.settings.user = Some(UserName::parse("ops").unwrap());
+    regrouped.put_group(g).unwrap();
+    assert_eq!(
+        moved_hosts(&before, &regrouped),
+        [HostId::parse("db").unwrap()]
+    );
 }

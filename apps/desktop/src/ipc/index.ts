@@ -4,6 +4,7 @@
 // The only entry point to the backend. Lint forbids importing @tauri-apps/*
 // anywhere else, so every IPC call goes through a typed port here.
 import type { TextClipboard } from "./clipboard.ts";
+import type { ForwardsClient } from "./forwards.ts";
 import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
@@ -26,6 +27,13 @@ export {
   tauriHosts,
 } from "./hosts.ts";
 export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
+export {
+  type ForwardKindSpec,
+  type ForwardSpec,
+  type ForwardState,
+  type ForwardsClient,
+  tauriForwards,
+} from "./forwards.ts";
 export {
   type ExitFilterSpec,
   type HistoryClient,
@@ -110,4 +118,14 @@ export async function historyClient(): Promise<HistoryClient> {
     return (await import("./fake-history.ts")).fakeHistory();
   }
   return (await import("./history.ts")).tauriHistory;
+}
+
+/** Port forwarding; the `e2e` build only pretends, naming rules by `ruleLabel`. */
+export async function forwardsClient(
+  ruleLabel: (host: string, rule: string) => string,
+): Promise<ForwardsClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-forwards.ts")).fakeForwards(ruleLabel);
+  }
+  return (await import("./forwards.ts")).tauriForwards;
 }

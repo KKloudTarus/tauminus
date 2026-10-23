@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauminus_app::{HostBook, HostBookError};
+use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, HostsError,
     IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings, Tag, UserName,
@@ -18,6 +18,7 @@ use tauminus_domain::{
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
 
+use crate::forwards::{ForwardSpec, parse_rule, stale_rules};
 use crate::ipc::{CommandError, ErrorCode};
 use crate::ssh::{AuthMethodSpec, RouteSpec, SshTargetSpec, local_user};
 
@@ -147,6 +148,7 @@ pub(crate) struct HostView {
     pub(crate) guarded: bool,
     /// The agent is forwarded, by the host's setting or a group's.
     pub(crate) forwards_agent: bool,
+    pub(crate) forwards: Vec<ForwardSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -169,6 +171,9 @@ pub(crate) struct HostInput {
     pub(crate) tags: Vec<String>,
     #[serde(default)]
     pub(crate) settings: SettingsSpec,
+    /// Absent keeps the rules saved now.
+    #[serde(default)]
+    pub(crate) forwards: Option<Vec<ForwardSpec>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -249,6 +254,7 @@ fn view(inventory: &Inventory) -> HostsView {
                     problem,
                     guarded: inventory.guarded(&h.id).unwrap_or(false),
                     forwards_agent,
+                    forwards: h.forwards.iter().map(ForwardSpec::from).collect(),
                 }
             })
             .collect(),
@@ -465,7 +471,31 @@ fn parse_host(book: &HostBook, input: HostInput) -> Result<Host, CommandError> {
         .map_err(invalid)?;
     host.set_tags(tags).map_err(invalid)?;
     host.settings = settings(input.settings)?;
+    if let Some(forwards) = input.forwards {
+        if forwards.len() > tauminus_domain::MAX_FORWARDS {
+            return Err(invalid(tauminus_domain::ForwardError::TooMany));
+        }
+        host.forwards = forwards
+            .into_iter()
+            .map(|spec| parse_rule(spec, || book.new_forward_id().map_err(invalid)))
+            .collect::<Result<_, _>>()?;
+    }
     Ok(host)
+}
+
+/// Saves `host`, keeping its stored `ProxyCommand` and, when the view sent
+/// no rules, its stored forwarding rules.
+fn put_host(
+    inventory: &mut Inventory,
+    mut host: Host,
+    keep_forwards: bool,
+) -> Result<(), HostsError> {
+    let stored = inventory.host(&host.id);
+    keep_proxy_command(&host.settings, stored.map(|h| &h.settings))?;
+    if keep_forwards && let Some(stored) = stored {
+        host.forwards.clone_from(&stored.forwards);
+    }
+    inventory.put_host(host)
 }
 
 fn parse_group(book: &HostBook, input: GroupInput) -> Result<Group, CommandError> {
@@ -496,19 +526,32 @@ pub(crate) async fn hosts_list(hosts: State<'_, Hosts>) -> Result<HostsView, Com
 #[specta::specta]
 pub(crate) async fn host_save(
     hosts: State<'_, Hosts>,
+    forwards: State<'_, Arc<Forwards>>,
     host: HostInput,
 ) -> Result<HostsView, CommandError> {
     let book = hosts.book()?;
+    let keep_forwards = host.forwards.is_none();
     let host = parse_host(book, host)?;
+    let id = host.id.clone();
+    let mut before = Inventory::default();
     let inventory = book
         .edit(|inventory| {
-            keep_proxy_command(
-                &host.settings,
-                inventory.host(&host.id).map(|h| &h.settings),
-            )?;
-            inventory.put_host(host)
+            before = inventory.clone();
+            put_host(inventory, host, keep_forwards)
         })
         .await?;
+    // A running rule that was removed or changed stops, so nothing keeps
+    // listening the way the list no longer says.
+    let rules = |inventory: &Inventory| {
+        inventory
+            .host(&id)
+            .map(|h| h.forwards.clone())
+            .unwrap_or_default()
+    };
+    for rule in stale_rules(&rules(&before), &rules(&inventory)) {
+        forwards.stop(&id, &rule);
+    }
+    stop_moved(&forwards, &before, &inventory);
     Ok(view(&inventory))
 }
 
@@ -516,6 +559,7 @@ pub(crate) async fn host_save(
 #[specta::specta]
 pub(crate) async fn host_delete(
     hosts: State<'_, Hosts>,
+    forwards: State<'_, Arc<Forwards>>,
     id: String,
 ) -> Result<HostsView, CommandError> {
     let id = HostId::parse(&id).map_err(invalid)?;
@@ -523,6 +567,7 @@ pub(crate) async fn host_delete(
         .book()?
         .edit(|inventory| inventory.remove_host(&id).map(drop))
         .await?;
+    forwards.stop_host(&id);
     Ok(view(&inventory))
 }
 
@@ -530,12 +575,15 @@ pub(crate) async fn host_delete(
 #[specta::specta]
 pub(crate) async fn group_save(
     hosts: State<'_, Hosts>,
+    forwards: State<'_, Arc<Forwards>>,
     group: GroupInput,
 ) -> Result<HostsView, CommandError> {
     let book = hosts.book()?;
     let group = parse_group(book, group)?;
+    let mut before = Inventory::default();
     let inventory = book
         .edit(|inventory| {
+            before = inventory.clone();
             keep_proxy_command(
                 &group.settings,
                 inventory.group(&group.id).map(|g| &g.settings),
@@ -543,7 +591,34 @@ pub(crate) async fn group_save(
             inventory.put_group(group)
         })
         .await?;
+    stop_moved(&forwards, &before, &inventory);
     Ok(view(&inventory))
+}
+
+/// Stops the running rules of every host an edit pointed elsewhere: a
+/// new address, user, port, jump host, route, identity, or session option,
+/// from the host or a group. A rule keeps forwarding only to where its host
+/// still points. O(H·d) for H hosts at depth d.
+fn stop_moved(forwards: &Forwards, before: &Inventory, after: &Inventory) {
+    for host in moved_hosts(before, after) {
+        forwards.stop_host(&host);
+    }
+}
+
+fn moved_hosts(before: &Inventory, after: &Inventory) -> Vec<HostId> {
+    // The name a host without a user logs in as, as a connect resolves it.
+    let Some(me) = local_user().ok().and_then(|u| UserName::parse(&u).ok()) else {
+        return Vec::new();
+    };
+    after
+        .hosts()
+        .filter(|host| before.host(&host.id).is_some())
+        .filter(|host| {
+            before.resolve(&host.id, &me) != after.resolve(&host.id, &me)
+                || before.identity(&host.id) != after.identity(&host.id)
+        })
+        .map(|host| host.id.clone())
+        .collect()
 }
 
 /// Removes a group. Its hosts and subgroups move to its parent.
@@ -551,13 +626,20 @@ pub(crate) async fn group_save(
 #[specta::specta]
 pub(crate) async fn group_delete(
     hosts: State<'_, Hosts>,
+    forwards: State<'_, Arc<Forwards>>,
     id: String,
 ) -> Result<HostsView, CommandError> {
     let id = GroupId::parse(&id).map_err(invalid)?;
+    let mut before = Inventory::default();
     let inventory = hosts
         .book()?
-        .edit(|inventory| inventory.remove_group(&id).map(drop))
+        .edit(|inventory| {
+            before = inventory.clone();
+            inventory.remove_group(&id).map(drop)
+        })
         .await?;
+    // Its hosts move to the parent group and may inherit other settings.
+    stop_moved(&forwards, &before, &inventory);
     Ok(view(&inventory))
 }
 

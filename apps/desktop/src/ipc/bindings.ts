@@ -52,6 +52,15 @@ export const commands = {
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**
+	 *  Starts a saved rule, reusing a live connection to its host or logging
+	 *  in, with any question on `on_prompt`. Returns the port listening.
+	 */
+	forwardStart: (host: string, ruleId: string, onPrompt: Channel<PromptRequest>) => typedError<number, CommandError>(__TAURI_INVOKE("forward_start", { host, ruleId, onPrompt })),
+	/**  Stops a rule. False when it was not running. */
+	forwardStop: (host: string, ruleId: string) => typedError<boolean, CommandError>(__TAURI_INVOKE("forward_stop", { host, ruleId })),
+	/**  Every rule that ran or failed since the app started. */
+	forwardsStatus: () => __TAURI_INVOKE<ForwardState[]>("forwards_status"),
+	/**
 	 *  Checks the readings of a command line about to run on a saved host
 	 *  against its prod guard. Lines are never logged: they may hold a secret
 	 *  typed on the command line.
@@ -160,6 +169,42 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 
 export type ExitFilterSpec = "any" | "success" | "failure";
 
+export type ForwardKindSpec = "local" | "remote" | "dynamic";
+
+/**
+ *  One rule as the host editor shows and saves it. `bind` is `loopback`,
+ *  `any`, or an IP address; anything but loopback opens the tunnel to the
+ *  network.
+ */
+export type ForwardSpec = {
+	/**  Absent for a new rule. */
+	id?: string | null,
+	label: string,
+	kind: ForwardKindSpec,
+	bind: string,
+	port: number,
+	/**  Required for local and remote rules, absent for dynamic ones. */
+	toHost?: string | null,
+	toPort?: number | null,
+	autoStart?: boolean,
+};
+
+/**  A rule that ran or failed since the app started. */
+export type ForwardState = {
+	host: string,
+	rule: string,
+	/**  The port listening, while it runs. */
+	port: number | null,
+	/**  Logging in or binding now. */
+	starting: boolean,
+	open: number,
+	total: number,
+	/**  Connections reset because their client fell too far behind. */
+	resets: number,
+	/**  Why it stopped or could not start. */
+	ended: string | null,
+};
+
 /**  Grid size from the webview, validated before it reaches the use case. */
 export type GridSize = {
 	cols: number,
@@ -255,6 +300,8 @@ export type HostInput = {
 	group?: string | null,
 	tags?: string[],
 	settings?: SettingsSpec,
+	/**  Absent keeps the rules saved now. */
+	forwards?: ForwardSpec[] | null,
 };
 
 export type HostView = {
@@ -274,6 +321,7 @@ export type HostView = {
 	guarded: boolean,
 	/**  The agent is forwarded, by the host's setting or a group's. */
 	forwardsAgent: boolean,
+	forwards: ForwardSpec[],
 };
 
 export type HostsView = {
