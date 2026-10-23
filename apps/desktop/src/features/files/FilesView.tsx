@@ -16,10 +16,8 @@ import type { EditView, EntryView, FilesClient, TransferView } from "@/ipc/index
 
 import { type FilesStore, type Side, joinPath, modeText, parseMode } from "./files-store.ts";
 
-const BUTTON =
-  "rounded border border-current/20 px-2 py-1 text-xs hover:bg-current/10 disabled:opacity-40";
-const FIELD =
-  "min-w-0 flex-1 rounded border border-current/20 bg-transparent px-2 py-1 font-mono text-xs outline-none focus:border-current/50";
+const BUTTON = "btn btn-sm text-xs";
+const FIELD = "field min-w-0 flex-1 font-mono text-xs";
 
 /** `1.2 MB`, in powers of 1000 as file managers show them. */
 export function sizeText(bytes: number): string {
@@ -98,7 +96,7 @@ export function FilesView({
       {state.status === "opening" && <p className="p-4 opacity-70">Connecting…</p>}
       {state.status === "failed" && (
         <div className="p-4">
-          <p role="alert" className="mb-2 text-red-600 dark:text-red-400">
+          <p role="alert" className="mb-2 text-error">
             {state.error}
           </p>
           <button type="button" className={BUTTON} onClick={() => void store.open()}>
@@ -226,7 +224,7 @@ const Pane = memo(function Pane({
         )}
       </div>
       {side.error && (
-        <p role="alert" className="px-3 py-1 text-xs text-red-600 dark:text-red-400">
+        <p role="alert" className="px-3 py-1 text-xs text-error">
           {side.error}
         </p>
       )}
@@ -375,7 +373,7 @@ function RemoteActions({ store, side }: { store: FilesStore; side: Side }) {
         <button type="button" className={BUTTON} onClick={() => setEditing(undefined)}>
           Cancel
         </button>
-        {problem && <span className="text-xs text-red-600 dark:text-red-400">{problem}</span>}
+        {problem && <span className="text-xs text-error">{problem}</span>}
       </form>
     );
   }

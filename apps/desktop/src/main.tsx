@@ -23,6 +23,18 @@ import {
 } from "@/ipc/index.ts";
 import "@/app/styles.css";
 
+// xterm.js measures its cell from the font when a terminal opens, so the
+// bundled fonts load first. They come from disk; the cap only guards a
+// webview that never settles the promise.
+await Promise.race([
+  Promise.all([
+    document.fonts.load('13px "JetBrains Mono Variable"'),
+    document.fonts.load('600 13px "JetBrains Mono Variable"'),
+    document.fonts.load('14px "Inter Variable"'),
+  ]),
+  new Promise((resolve) => setTimeout(resolve, 500)),
+]).catch(() => {});
+
 const root = document.getElementById("root");
 if (!root) {
   throw new Error("index.html is missing #root");

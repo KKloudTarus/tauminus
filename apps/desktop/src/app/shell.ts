@@ -1122,9 +1122,14 @@ export class AppShell {
     this.connect(spec);
   }
 
-  setSidebarOpen(open: boolean): void {
+  /**
+   * Shows or hides the saved hosts. `persist: false` leaves the saved choice
+   * alone, for a change the layout makes rather than the user, such as a
+   * narrow window putting the list away.
+   */
+  setSidebarOpen(open: boolean, { persist = true }: { persist?: boolean } = {}): void {
     if (this.#state.sidebarOpen === open) return;
-    writeFlag(this.#storage, SIDEBAR_STORAGE_KEY, open);
+    if (persist) writeFlag(this.#storage, SIDEBAR_STORAGE_KEY, open);
     this.#set({ ...this.#state, sidebarOpen: open });
   }
 

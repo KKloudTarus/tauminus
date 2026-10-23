@@ -5,6 +5,9 @@
 
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
+/* Bundled, so the app looks the same on every OS and never fetches a font. */
+@import "@fontsource-variable/inter/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -12,65 +15,616 @@
  * Design tokens. The terminal theme reads the same variables, so the UI and
  * the terminal never drift apart. Terminal colors are hex because xterm.js
  * also uses them for WebGL glyph atlases.
+ *
+ * Surfaces stack from --background (window chrome) up to --surface-3
+ * (dialogs, popovers). Lines are translucent so they read on any surface.
+ * Every ANSI color keeps 4.5:1 or more against --terminal-background except
+ * black and bright black, which exist to be dim; theme-contrast.test.ts checks it.
  */
 :root {
-  --background: oklch(0.99 0 0);
-  --foreground: oklch(0.2 0 0);
-  --terminal-background: #fcfcfc;
-  --terminal-foreground: #2b2b2b;
-  --terminal-cursor: #1f5fbf;
-  --terminal-selection: #c6d4ea;
-  --accent: #1f5fbf;
-  --prod: #c62828;
+  --background: #f4f4f6;
+  --foreground: #16171c;
+  --surface-1: #fafafb;
+  --surface-2: #ececf0;
+  --surface-3: #ffffff;
+  --line: rgb(18 20 30 / 0.09);
+  --line-strong: rgb(18 20 30 / 0.16);
+  --muted: #474c57;
+  --faint: #636773;
+  --accent: #4b56d2;
+  --accent-soft: rgb(75 86 210 / 0.12);
+  --accent-fg: #ffffff;
+  --ok: #157f4a;
+  --warn: #a15c00;
+  --danger: #c4282f;
+  --prod: #c42028;
+  --prod-soft: rgb(196 32 40 / 0.1);
+  --prod-fill: #c42028;
+  --scrim: rgb(20 22 30 / 0.28);
+  --avatar-l: 0.5;
+  --shadow-lg: 0 1px 2px rgb(16 18 27 / 0.06), 0 12px 32px -6px rgb(16 18 27 / 0.18);
+
+  --terminal-background: #ffffff;
+  --terminal-foreground: #1f2329;
+  --terminal-cursor: #4b56d2;
+  --terminal-selection: #d3d8f5;
+  --terminal-black: #24292f;
+  --terminal-red: #cf222e;
+  --terminal-green: #116329;
+  --terminal-yellow: #7d4e00;
+  --terminal-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-cyan: #1b6d74;
+  --terminal-white: #57606a;
+  --terminal-bright-black: #6e7781;
+  --terminal-bright-red: #a40e26;
+  --terminal-bright-green: #1a7f37;
+  --terminal-bright-yellow: #845400;
+  --terminal-bright-blue: #0969da;
+  --terminal-bright-magenta: #6f42c1;
+  --terminal-bright-cyan: #136b80;
+  --terminal-bright-white: #424a53;
+
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
-    --background: oklch(0.17 0.01 260);
-    --foreground: oklch(0.92 0 0);
-    --terminal-background: #151821;
-    --terminal-foreground: #e3e3e3;
-    --terminal-cursor: #8cc4ff;
-    --terminal-selection: #34405a;
-    --accent: #8cc4ff;
-    --prod: #d32f2f;
+    --background: #0a0b0e;
+    --foreground: #e8e9ed;
+    --surface-1: #0f1014;
+    --surface-2: #181a20;
+    --surface-3: #16181e;
+    --line: rgb(255 255 255 / 0.07);
+    --line-strong: rgb(255 255 255 / 0.13);
+    --muted: #b0b4bf;
+    --faint: #868a99;
+    --accent: #8f9bff;
+    --accent-soft: rgb(143 155 255 / 0.14);
+    --accent-fg: #0b0c1a;
+    --ok: #4fd69b;
+    --warn: #f3bd5a;
+    --danger: #ff7b7b;
+    --prod: #f0474e;
+    --prod-soft: rgb(240 71 78 / 0.14);
+    --prod-fill: #d0303a;
+    --scrim: rgb(0 0 0 / 0.55);
+    --avatar-l: 0.78;
+    --shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.4), 0 20px 48px -8px rgb(0 0 0 / 0.65);
+
+    --terminal-background: #0e0f13;
+    --terminal-foreground: #dfe1e8;
+    --terminal-cursor: #8f9bff;
+    --terminal-selection: #2b3150;
+    --terminal-black: #2a2d37;
+    --terminal-red: #f2727a;
+    --terminal-green: #46cf8f;
+    --terminal-yellow: #f0c25a;
+    --terminal-blue: #6fa6ff;
+    --terminal-magenta: #c693f5;
+    --terminal-cyan: #5fcde4;
+    --terminal-white: #c4c7d1;
+    --terminal-bright-black: #6a6f7e;
+    --terminal-bright-red: #ff959b;
+    --terminal-bright-green: #74e3b0;
+    --terminal-bright-yellow: #ffd986;
+    --terminal-bright-blue: #9cc2ff;
+    --terminal-bright-magenta: #dcb6ff;
+    --terminal-bright-cyan: #8fe2f2;
+    --terminal-bright-white: #f5f6f9;
+
+    color-scheme: dark;
   }
 }
 
 .dark {
-  --background: oklch(0.17 0.01 260);
-  --foreground: oklch(0.92 0 0);
-  --terminal-background: #151821;
-  --terminal-foreground: #e3e3e3;
-  --terminal-cursor: #8cc4ff;
-  --terminal-selection: #34405a;
-  --accent: #8cc4ff;
-  --prod: #d32f2f;
+  --background: #0a0b0e;
+  --foreground: #e8e9ed;
+  --surface-1: #0f1014;
+  --surface-2: #181a20;
+  --surface-3: #16181e;
+  --line: rgb(255 255 255 / 0.07);
+  --line-strong: rgb(255 255 255 / 0.13);
+  --muted: #b0b4bf;
+  --faint: #868a99;
+  --accent: #8f9bff;
+  --accent-soft: rgb(143 155 255 / 0.14);
+  --accent-fg: #0b0c1a;
+  --ok: #4fd69b;
+  --warn: #f3bd5a;
+  --danger: #ff7b7b;
+  --prod: #f0474e;
+  --prod-soft: rgb(240 71 78 / 0.14);
+  --prod-fill: #d0303a;
+  --scrim: rgb(0 0 0 / 0.55);
+  --avatar-l: 0.78;
+  --shadow-lg: 0 0 0 1px rgb(0 0 0 / 0.4), 0 20px 48px -8px rgb(0 0 0 / 0.65);
+
+  --terminal-background: #0e0f13;
+  --terminal-foreground: #dfe1e8;
+  --terminal-cursor: #8f9bff;
+  --terminal-selection: #2b3150;
+  --terminal-black: #2a2d37;
+  --terminal-red: #f2727a;
+  --terminal-green: #46cf8f;
+  --terminal-yellow: #f0c25a;
+  --terminal-blue: #6fa6ff;
+  --terminal-magenta: #c693f5;
+  --terminal-cyan: #5fcde4;
+  --terminal-white: #c4c7d1;
+  --terminal-bright-black: #6a6f7e;
+  --terminal-bright-red: #ff959b;
+  --terminal-bright-green: #74e3b0;
+  --terminal-bright-yellow: #ffd986;
+  --terminal-bright-blue: #9cc2ff;
+  --terminal-bright-magenta: #dcb6ff;
+  --terminal-bright-cyan: #8fe2f2;
+  --terminal-bright-white: #f5f6f9;
+
+  color-scheme: dark;
 }
 
 .light {
-  --background: oklch(0.99 0 0);
-  --foreground: oklch(0.2 0 0);
-  --terminal-background: #fcfcfc;
-  --terminal-foreground: #2b2b2b;
-  --terminal-cursor: #1f5fbf;
-  --terminal-selection: #c6d4ea;
-  --accent: #1f5fbf;
-  --prod: #c62828;
+  --background: #f4f4f6;
+  --foreground: #16171c;
+  --surface-1: #fafafb;
+  --surface-2: #ececf0;
+  --surface-3: #ffffff;
+  --line: rgb(18 20 30 / 0.09);
+  --line-strong: rgb(18 20 30 / 0.16);
+  --muted: #474c57;
+  --faint: #636773;
+  --accent: #4b56d2;
+  --accent-soft: rgb(75 86 210 / 0.12);
+  --accent-fg: #ffffff;
+  --ok: #157f4a;
+  --warn: #a15c00;
+  --danger: #c4282f;
+  --prod: #c42028;
+  --prod-soft: rgb(196 32 40 / 0.1);
+  --prod-fill: #c42028;
+  --scrim: rgb(20 22 30 / 0.28);
+  --avatar-l: 0.5;
+  --shadow-lg: 0 1px 2px rgb(16 18 27 / 0.06), 0 12px 32px -6px rgb(16 18 27 / 0.18);
+
+  --terminal-background: #ffffff;
+  --terminal-foreground: #1f2329;
+  --terminal-cursor: #4b56d2;
+  --terminal-selection: #d3d8f5;
+  --terminal-black: #24292f;
+  --terminal-red: #cf222e;
+  --terminal-green: #116329;
+  --terminal-yellow: #7d4e00;
+  --terminal-blue: #0550ae;
+  --terminal-magenta: #8250df;
+  --terminal-cyan: #1b6d74;
+  --terminal-white: #57606a;
+  --terminal-bright-black: #6e7781;
+  --terminal-bright-red: #a40e26;
+  --terminal-bright-green: #1a7f37;
+  --terminal-bright-yellow: #845400;
+  --terminal-bright-blue: #0969da;
+  --terminal-bright-magenta: #6f42c1;
+  --terminal-bright-cyan: #136b80;
+  --terminal-bright-white: #424a53;
+
+  color-scheme: light;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-prod: var(--prod);
+  --color-prod-soft: var(--prod-soft);
+  --color-prod-fill: var(--prod-fill);
+  --color-terminal: var(--terminal-background);
+  --font-sans:
+    "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono",
+    monospace;
+  --shadow-lg: var(--shadow-lg);
 }
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-  overflow: hidden;
-  background: var(--background);
+/* Base rules sit in a layer so utilities such as focus-visible:outline-none win. */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: var(--background);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-feature-settings:
+      "cv11" 1,
+      "ss01" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  /* Thin scrollbars that only show their thumb. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background: var(--line-strong) padding-box;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  /*
+   * Code shows as the bytes it is: no ligature turns -> into an arrow or !=
+   * into a symbol, in the guard's command text, fingerprints, or fields.
+   */
+  pre,
+  code,
+  kbd,
+  samp,
+  .font-mono {
+    font-feature-settings: normal;
+    font-variant-ligatures: none;
+  }
+}
+
+@layer components {
+  /* Buttons: one base, variants change only color. */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    min-height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 0.5rem;
+    background: var(--surface-1);
+    color: var(--foreground);
+    font-weight: 500;
+    white-space: nowrap;
+    transition:
+      background-color 120ms,
+      border-color 120ms,
+      color 120ms;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+  .btn:disabled {
+    opacity: 0.45;
+  }
+  .btn-sm {
+    min-height: 1.75rem;
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+  }
+  .btn-xs {
+    min-height: 1.5rem;
+    padding: 0 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.75rem;
+  }
+  .btn-primary {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 88%, var(--foreground));
+  }
+  .btn-danger {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+    background: transparent;
+    color: var(--danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 10%, transparent);
+  }
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--surface-2);
+  }
+
+  /* A square button holding one 16 px icon. */
+  .icon-btn {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    color: var(--muted);
+    transition:
+      background-color 120ms,
+      color 120ms;
+  }
+  .icon-btn:hover {
+    background: var(--surface-2);
+    color: var(--foreground);
+  }
+  .icon-btn[aria-pressed="true"] {
+    color: var(--foreground);
+  }
+
+  /*
+   * An icon drawn by a CSS mask: one empty element instead of an SVG
+   * subtree. For icons that repeat on every host row, where 2000 rows of
+   * inline SVG doubled the sidebar's DOM. The shapes match icons.tsx.
+   */
+  .mask-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 0.875rem;
+    height: 0.875rem;
+    background-color: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat;
+    mask: var(--icon) center / contain no-repeat;
+  }
+  .i-pencil {
+    --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m10.5 3 2.5 2.5-7 7H3.5V10l7-7Z'/%3E%3C/svg%3E");
+  }
+  .i-files {
+    --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 2.5H5A1.5 1.5 0 0 0 3.5 4v8A1.5 1.5 0 0 0 5 13.5h6a1.5 1.5 0 0 0 1.5-1.5V6L9 2.5Z'/%3E%3Cpath d='M9 2.5V6h3.5'/%3E%3C/svg%3E");
+  }
+  .i-chevron {
+    --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 4 4 4-4 4'/%3E%3C/svg%3E");
+  }
+
+  .field {
+    width: 100%;
+    min-height: 2rem;
+    padding: 0.3125rem 0.625rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 0.5rem;
+    background: var(--surface-1);
+    color: var(--foreground);
+    outline: none;
+    transition:
+      border-color 120ms,
+      box-shadow 120ms;
+  }
+  .field::placeholder {
+    color: var(--faint);
+  }
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .field:disabled {
+    opacity: 0.5;
+  }
+  select.field {
+    padding-right: 0.25rem;
+  }
+
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.3125rem;
+    border: 1px solid var(--line-strong);
+    border-bottom-width: 2px;
+    border-radius: 0.3125rem;
+    color: var(--muted);
+    font-family: var(--font-sans);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    height: 1.125rem;
+    padding: 0 0.375rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--muted);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1;
+  }
+  /* Solid, like every live-production cue: it has to be seen at a glance. */
+  .chip-prod {
+    background: var(--prod-fill);
+    color: #ffffff;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  /* Raised content: dialogs, popovers, the palette. */
+  .panel {
+    border: 1px solid var(--line-strong);
+    border-radius: 0.875rem;
+    background: var(--surface-3);
+    color: var(--foreground);
+    box-shadow: var(--shadow-lg);
+    font-size: 0.875rem;
+    animation: panel-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .panel h2 {
+    font-size: 0.9375rem;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+  }
+
+  /*
+   * A dialog opened with showModal(). It never grows past the window: the
+   * body scrolls, and a .modal-footer inside sticks to the bottom so its
+   * buttons stay in reach.
+   */
+  .modal {
+    max-height: 84dvh;
+    margin: 8dvh auto auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .modal::backdrop {
+    background: var(--scrim);
+  }
+  .modal-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin: 0 -1rem -1rem;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--line);
+    background: var(--surface-3);
+  }
+
+  /* The backdrop of a dialog that is not modal. */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 10vh;
+    background: var(--scrim);
+  }
+  .overlay > .panel {
+    max-height: calc(100dvh - 10vh - 2rem);
+    overflow-y: auto;
+  }
+
+  .disclosure {
+    border: 1px solid var(--line);
+    border-radius: 0.625rem;
+    background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+    padding: 0.5rem 0.75rem;
+  }
+  .disclosure > summary {
+    font-weight: 500;
+  }
+
+  .text-error {
+    color: var(--danger);
+  }
+
+  /*
+   * Phones: dialogs become bottom sheets that span the width, the way native
+   * sheets do, so a thumb reaches their buttons.
+   */
+  @media (max-width: 639px) {
+    .modal,
+    .overlay > .panel {
+      width: 100% !important;
+      max-width: 100%;
+      max-height: 92dvh;
+      margin: auto 0 0;
+      border-bottom-width: 0;
+      border-radius: 1rem 1rem 0 0;
+      padding-bottom: max(1rem, env(safe-area-inset-bottom));
+    }
+    .modal {
+      top: auto;
+      bottom: 0;
+    }
+    .overlay {
+      align-items: flex-end;
+      padding-top: 0;
+    }
+  }
+
+  /* Touch screens get 40 px targets. */
+  @media (pointer: coarse) {
+    .btn {
+      min-height: 2.5rem;
+    }
+    .icon-btn {
+      width: 2.5rem;
+      height: 2.5rem;
+    }
+    .field {
+      min-height: 2.5rem;
+      /* Under 16 px, mobile browsers zoom the page when a field takes focus. */
+      font-size: 1rem !important;
+    }
+  }
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.99);
+  }
+}
+
+/* cmdk wraps the palette's children in its own root; make it the flex column. */
+.palette > [cmdk-root] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.drawer {
+  animation: drawer-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-24px);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel,
+  .drawer {
+    animation: none;
+  }
+}
+
+/*
+ * Commands show exactly as typed: no ligature turns -> into an arrow or != into
+ * a symbol. The WebGL renderer never draws them, so the DOM renderer matches it.
+ */
+.xterm {
+  font-feature-settings: normal;
+  font-variant-ligatures: none;
 }
 
 /*

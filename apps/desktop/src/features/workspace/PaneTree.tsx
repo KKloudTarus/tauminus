@@ -46,6 +46,7 @@ function Node({
         workspace={workspace}
         paneId={node.id}
         focused={tab.focused === node.id}
+        split={tab.root.kind !== "pane"}
         broadcast={broadcast}
         onUnlockVault={onUnlockVault}
       />
@@ -86,7 +87,7 @@ function ChildPanel({ index, children }: { index: number; children: React.ReactN
   return (
     <>
       {index > 0 && (
-        <Separator className="w-px bg-current/15 transition-colors hover:bg-current/40 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-auto" />
+        <Separator className="w-px bg-line-strong transition-colors hover:bg-accent data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-auto data-[separator=active]:bg-accent" />
       )}
       {children}
     </>
@@ -97,12 +98,15 @@ function TerminalPane({
   workspace,
   paneId,
   focused,
+  split,
   broadcast,
   onUnlockVault,
 }: {
   workspace: Workspace<TerminalController, SessionSpec>;
   paneId: PaneId;
   focused: boolean;
+  /** Whether the tab holds more than this pane; only then is focus marked. */
+  split: boolean;
   broadcast: Broadcast | undefined;
   onUnlockVault: ((retry: () => void) => void) | undefined;
 }) {
@@ -136,13 +140,13 @@ function TerminalPane({
       data-focused={focused}
       data-guarded={guarded}
       data-broadcast={broadcasting}
-      className={`relative flex h-full min-h-0 min-w-0 flex-col ${
+      className={`relative flex h-full min-h-0 min-w-0 flex-col bg-terminal ${
         guarded
-          ? `ring-inset ring-[var(--prod)] ${focused ? "ring-2" : "ring-1"}`
+          ? `ring-inset ring-prod ${focused ? "ring-2" : "ring-1"}`
           : broadcasting
-            ? `ring-inset ring-amber-500 ${focused ? "ring-2" : "ring-1"}`
-            : focused
-              ? "ring-1 ring-inset ring-[var(--accent)]"
+            ? `ring-inset ring-warn ${focused ? "ring-2" : "ring-1"}`
+            : focused && split
+              ? "ring-1 ring-accent/60 ring-inset"
               : ""
       }`}
       onPointerDown={() => workspace.focusPane(paneId)}
@@ -153,7 +157,7 @@ function TerminalPane({
       {broadcasting && (
         <span
           data-testid="broadcast-badge"
-          className="pointer-events-none absolute top-1 right-2 z-10 rounded bg-amber-500/90 px-1.5 text-xs text-black"
+          className="pointer-events-none absolute top-2 right-3 z-10 rounded-full bg-warn px-2 py-0.5 text-[11px] font-semibold text-black"
         >
           Broadcast
         </span>

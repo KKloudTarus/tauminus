@@ -12,8 +12,7 @@ import {
   SessionCommandError,
 } from "@/ipc/index.ts";
 
-const FIELD =
-  "rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50";
+const FIELD = "field";
 
 /** Results asked for per search; the backend allows up to 500. */
 export const PAGE = 50;
@@ -125,7 +124,7 @@ export function HistoryDialog({
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="top-[6%] m-0 mx-auto flex h-[min(720px,88vh)] w-[min(820px,94vw)] flex-col rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl backdrop:bg-black/30"
+      className="panel modal flex h-[min(720px,88vh)] w-[min(820px,94vw)] flex-col p-4"
     >
       <h2 id={titleId} className="mb-3 font-semibold">
         Command history
@@ -199,11 +198,7 @@ export function HistoryDialog({
       <div className="mt-3 flex items-center gap-2">
         <ClearButton client={client} host={host} hosts={hosts} onCleared={retry} />
         <span className="flex-1" />
-        <button
-          type="button"
-          onClick={() => dialogRef.current?.close()}
-          className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => dialogRef.current?.close()} className="btn">
           Close
         </button>
       </div>
@@ -236,18 +231,14 @@ function Body({
             The history is encrypted with the vault. Unlock it to search; commands are still
             recorded while it is locked.
           </p>
-          <button
-            type="button"
-            onClick={onUnlock}
-            className="rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
-          >
+          <button type="button" onClick={onUnlock} className="btn btn-primary">
             Unlock the vault
           </button>
         </div>
       );
     case "failed":
       return (
-        <p role="alert" className="text-red-600 dark:text-red-400">
+        <p role="alert" className="text-error">
           {results.text}
         </p>
       );
@@ -307,18 +298,10 @@ function Hit({
         </p>
       )}
       <div className="mt-1 flex gap-2 text-xs">
-        <button
-          type="button"
-          onClick={() => onInsert(hit.command)}
-          className="rounded border border-current/20 px-2 py-0.5 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => onInsert(hit.command)} className="btn btn-xs">
           Insert
         </button>
-        <button
-          type="button"
-          onClick={() => onCopy(hit.command)}
-          className="rounded border border-current/20 px-2 py-0.5 hover:bg-current/10"
-        >
+        <button type="button" onClick={() => onCopy(hit.command)} className="btn btn-xs">
           Copy
         </button>
         <button
@@ -334,13 +317,13 @@ function Hit({
               .then((text) => setOutput(text ?? ""))
               .catch((failure: unknown) => setError(messageOf(failure)));
           }}
-          className="rounded border border-current/20 px-2 py-0.5 hover:bg-current/10"
+          className="btn btn-xs"
         >
           {output === undefined ? "Show output" : "Hide output"}
         </button>
       </div>
       {error && (
-        <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+        <p role="alert" className="mt-1 text-xs text-error">
           {error}
         </p>
       )}
@@ -439,12 +422,12 @@ function ClearButton({
             .catch((failure: unknown) => setError(messageOf(failure)));
         }}
         onBlur={() => setConfirming(false)}
-        className="rounded border border-red-500/50 px-3 py-1.5 text-red-600 hover:bg-red-500/10 dark:text-red-400"
+        className="btn btn-danger"
       >
         {confirming ? `Forget the history of ${target}?` : "Forget history…"}
       </button>
       {error && (
-        <span role="alert" className="text-xs text-red-600 dark:text-red-400">
+        <span role="alert" className="text-xs text-error">
           {error}
         </span>
       )}

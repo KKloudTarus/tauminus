@@ -10,6 +10,8 @@ import {
   mostUrgent,
 } from "@/features/terminal/controller.ts";
 
+import { Icon } from "@/app/icons.tsx";
+
 import { paneIds } from "./layout.ts";
 import type { Tab, Workspace } from "./workspace.ts";
 
@@ -18,43 +20,47 @@ interface TabBarProps {
   tabs: readonly Tab[];
   activeTabId: string | undefined;
   newTabHint: string;
+  /** Leading and trailing controls, such as the hosts toggle and the palette. */
+  start?: React.ReactNode;
+  end?: React.ReactNode;
 }
 
 /** The tab strip. Tabs reorder by drag and drop, or by the move-tab shortcuts. */
-export function TabBar({ workspace, tabs, activeTabId, newTabHint }: TabBarProps) {
+export function TabBar({ workspace, tabs, activeTabId, newTabHint, start, end }: TabBarProps) {
   const [dragged, setDragged] = useState<string | undefined>();
 
   return (
-    <div className="flex h-9 shrink-0 items-stretch border-b border-current/10 text-sm select-none">
-      <div
-        role="tablist"
-        aria-label="Terminal tabs"
-        className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
-      >
-        {tabs.map((tab, index) => (
-          <TabButton
-            key={tab.id}
-            workspace={workspace}
-            tab={tab}
-            active={tab.id === activeTabId}
-            onDragStart={() => setDragged(tab.id)}
-            onDragEnd={() => setDragged(undefined)}
-            onDrop={() => {
-              if (dragged) workspace.moveTab(dragged, index);
-              setDragged(undefined);
-            }}
-          />
-        ))}
+    <div className="flex h-10 shrink-0 items-stretch gap-1 border-b border-line bg-background pr-1.5 pl-1.5 text-[13px] select-none">
+      {start && <div className="flex items-center gap-0.5">{start}</div>}
+      {/* Scrolls the tabs and the new-tab button together; the tablist holds only tabs. */}
+      <div className="flex min-w-0 flex-1 items-end gap-0.5 overflow-x-auto pt-1.5 [scrollbar-width:none]">
+        <div role="tablist" aria-label="Terminal tabs" className="flex h-full items-end gap-0.5">
+          {tabs.map((tab, index) => (
+            <TabButton
+              key={tab.id}
+              workspace={workspace}
+              tab={tab}
+              active={tab.id === activeTabId}
+              onDragStart={() => setDragged(tab.id)}
+              onDragEnd={() => setDragged(undefined)}
+              onDrop={() => {
+                if (dragged) workspace.moveTab(dragged, index);
+                setDragged(undefined);
+              }}
+            />
+          ))}
+        </div>
+        <button
+          type="button"
+          aria-label="New tab"
+          title={newTabHint}
+          className="icon-btn mb-1 self-end"
+          onClick={() => workspace.newTab()}
+        >
+          <Icon name="plus" />
+        </button>
       </div>
-      <button
-        type="button"
-        aria-label="New tab"
-        title={newTabHint}
-        className="px-3 text-base opacity-70 hover:opacity-100"
-        onClick={() => workspace.newTab()}
-      >
-        +
-      </button>
+      {end && <div className="flex items-center gap-0.5">{end}</div>}
     </div>
   );
 }
@@ -120,9 +126,12 @@ function TabButton({
       data-tab-id={tab.id}
       data-guarded={guarded}
       data-activity={activity}
-      className={`group flex max-w-56 min-w-28 items-center gap-2 border-r border-current/10 px-3 ${
-        active ? "bg-current/[0.06]" : "opacity-70 hover:opacity-100"
-      } ${guarded ? "border-b-2 border-b-[var(--prod)]" : ""}`}
+      title={label}
+      className={`group relative flex h-full max-w-60 min-w-32 cursor-default items-center gap-2 rounded-t-lg px-3 transition-colors ${
+        active
+          ? "bg-terminal text-foreground shadow-[inset_0_1px_0_var(--line-strong),inset_1px_0_0_var(--line),inset_-1px_0_0_var(--line)]"
+          : "text-muted hover:bg-surface-2/60 hover:text-foreground"
+      }`}
       onClick={() => workspace.activateTab(tab.id)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") workspace.activateTab(tab.id);
@@ -139,31 +148,43 @@ function TabButton({
       }}
     >
       {guarded && (
-        <span className="rounded bg-[var(--prod)] px-1 text-[10px] leading-4 font-semibold text-white">
-          PROD
-        </span>
+        <>
+          <span
+            aria-hidden
+            className="absolute inset-x-0 top-0 h-[3px] rounded-t-lg bg-prod-fill"
+          />
+          <span className="chip chip-prod shrink-0">PROD</span>
+        </>
+      )}
+      {!guarded && (
+        <Icon
+          name="terminal"
+          className={`size-3.5 shrink-0 ${active ? "text-accent" : "text-faint"}`}
+        />
       )}
       <span className="min-w-0 flex-1 truncate">{label}</span>
       <ActivityDot activity={activity} />
       <button
         type="button"
         aria-label={`Close ${label}`}
-        className="rounded px-1 opacity-0 group-hover:opacity-70 hover:!opacity-100 focus-visible:opacity-100"
+        className={`-mr-1.5 flex size-5 shrink-0 pointer-coarse:size-8 items-center justify-center rounded text-faint hover:bg-surface-2 hover:text-foreground focus-visible:opacity-100 ${
+          active ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+        }`}
         onClick={(event) => {
           event.stopPropagation();
           workspace.closeTab(tab.id);
         }}
       >
-        ×
+        <Icon name="x" className="size-3.5" />
       </button>
     </div>
   );
 }
 
 const DOTS: Record<Exclude<Activity, "idle">, { label: string; className: string }> = {
-  unread: { label: "New output", className: "bg-sky-500" },
-  waiting: { label: "Waiting for input", className: "bg-amber-500" },
-  error: { label: "Failed", className: "bg-red-500" },
+  unread: { label: "New output", className: "bg-accent" },
+  waiting: { label: "Waiting for input", className: "bg-warn" },
+  error: { label: "Failed", className: "bg-danger" },
 };
 
 /** One dot for what happened in a tab while it was hidden. */
@@ -172,7 +193,7 @@ function ActivityDot({ activity }: { activity: Activity }) {
   const dot = DOTS[activity];
   return (
     <span title={dot.label} data-testid="activity-dot" className="flex shrink-0 items-center">
-      <span aria-hidden className={`size-2 rounded-full ${dot.className}`} />
+      <span aria-hidden className={`size-1.5 rounded-full ${dot.className}`} />
       <span className="sr-only">{dot.label}</span>
     </span>
   );

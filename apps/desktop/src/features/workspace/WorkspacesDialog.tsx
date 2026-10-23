@@ -6,7 +6,7 @@ import { type FormEvent, useEffect, useId, useRef, useState, useSyncExternalStor
 import { templatePanes } from "./layout.ts";
 import { type SavedWorkspaces, directConnections } from "./saved.ts";
 
-const BUTTON = "rounded px-2 py-0.5 hover:bg-current/10 disabled:opacity-40";
+const BUTTON = "btn btn-ghost btn-xs";
 
 /** Saves the open tabs under a name, and opens or deletes saved sets. */
 export function WorkspacesDialog({
@@ -34,7 +34,7 @@ export function WorkspacesDialog({
     setName("");
   };
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">
+    <div className="overlay">
       <dialog
         ref={dialog}
         open
@@ -46,7 +46,7 @@ export function WorkspacesDialog({
             onClose();
           }
         }}
-        className="static m-0 max-h-[75vh] w-[min(520px,92vw)] overflow-y-auto rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl outline-none"
+        className="panel static m-0 max-h-[75vh] w-[min(520px,92vw)] overflow-y-auto p-4 outline-none"
       >
         <div className="mb-3 flex items-center justify-between">
           <h2 id={titleId} className="text-base font-medium">
@@ -63,7 +63,7 @@ export function WorkspacesDialog({
             value={name}
             maxLength={128}
             onChange={(e) => setName(e.target.value)}
-            className="min-w-0 flex-1 rounded border border-current/20 bg-transparent px-2 py-1 outline-none focus:border-current/50"
+            className="field min-w-0 flex-1"
           />
           <button type="submit" className={BUTTON} disabled={!name.trim()}>
             {replaces ? "Replace" : "Save tabs"}

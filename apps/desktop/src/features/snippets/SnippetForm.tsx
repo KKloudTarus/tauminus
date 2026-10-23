@@ -7,8 +7,7 @@ import type { SnippetView } from "@/ipc/index.ts";
 
 import { snippetTitle } from "./snippets-store.ts";
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1 font-mono outline-none focus:border-current/50";
+const FIELD = "field font-mono";
 
 /** Asks for a snippet's placeholders, each starting at its default. */
 export function SnippetForm({
@@ -29,7 +28,7 @@ export function SnippetForm({
     onRun(values);
   };
   return (
-    <div className="fixed inset-0 z-30 flex items-start justify-center bg-black/30 pt-[15vh]">
+    <div className="overlay z-30">
       <dialog
         open
         aria-labelledby={titleId}
@@ -39,7 +38,7 @@ export function SnippetForm({
             onClose();
           }
         }}
-        className="static m-0 w-[min(480px,92vw)] rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl"
+        className="panel static m-0 w-[min(480px,92vw)] p-4"
       >
         <h2 id={titleId} className="mb-3 text-base font-medium">
           Run {snippetTitle(snippet)}
@@ -60,10 +59,10 @@ export function SnippetForm({
             </label>
           ))}
           <div className="mt-2 flex justify-end gap-2">
-            <button type="button" className="rounded px-2 hover:bg-current/10" onClick={onClose}>
+            <button type="button" className="btn btn-ghost btn-xs" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="rounded px-2 hover:bg-current/10">
+            <button type="submit" className="btn btn-ghost btn-xs">
               Run
             </button>
           </div>

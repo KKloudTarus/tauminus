@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
@@ -23,6 +23,8 @@ import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
 
 import { CommandPalette } from "./CommandPalette.tsx";
+import { Icon } from "./icons.tsx";
+import { NARROW, useMediaQuery } from "./media.ts";
 import type { HostView } from "@/ipc/index.ts";
 
 import type { AppShell } from "./shell.ts";
@@ -46,7 +48,9 @@ export function App({ shell }: { shell: AppShell }) {
     snippetToFill,
     snippetHosts,
     files,
+    theme,
   } = useSyncExternalStore(shell.subscribe, shell.getState);
+  const narrow = useMediaQuery(NARROW);
   const vault = useSyncExternalStore(shell.vault.subscribe, shell.vault.getSnapshot);
   const snippetList = useSyncExternalStore(
     shell.snippets?.subscribe ?? noSubscribe,
@@ -71,7 +75,27 @@ export function App({ shell }: { shell: AppShell }) {
     [savedHosts, shell],
   );
   // Stable, so a vault change does not rebuild the host tree. O(hosts) each.
-  const connectHost = useCallback((host: HostView) => shell.connectHost(host), [shell]);
+  // On a phone the host list covers the terminal, so connecting puts it away.
+  const connectHost = useCallback(
+    (host: HostView) => {
+      shell.connectHost(host);
+      if (narrow) shell.setSidebarOpen(false, LAYOUT_ONLY);
+    },
+    [shell, narrow],
+  );
+
+  // A narrow window starts on the terminal: the host list closes on the way
+  // in and comes back on the way out if it was open before.
+  const closedForNarrow = useRef(false);
+  useEffect(() => {
+    if (narrow && shell.getState().sidebarOpen) {
+      closedForNarrow.current = true;
+      shell.setSidebarOpen(false, LAYOUT_ONLY);
+    } else if (!narrow && closedForNarrow.current) {
+      closedForNarrow.current = false;
+      shell.setSidebarOpen(true, LAYOUT_ONLY);
+    }
+  }, [narrow, shell]);
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
   const openFiles = useCallback((host: HostView) => shell.openFiles(host), [shell]);
   const chooseSnippet = useCallback((id: string) => shell.chooseSnippet(id), [shell]);
@@ -95,6 +119,37 @@ export function App({ shell }: { shell: AppShell }) {
       window.removeEventListener("focus", onFocus);
     };
   }, [shell]);
+
+  // The drawer takes the keyboard while it is open, so keys never reach a
+  // terminal it covers; closing it hands the keyboard back to that terminal.
+  const drawerOpen = narrow && sidebarOpen;
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const wasDrawerOpen = useRef(false);
+  useEffect(() => {
+    if (drawerOpen) {
+      drawerRef.current?.querySelector<HTMLInputElement>('input[type="search"]')?.focus();
+    } else if (wasDrawerOpen.current) {
+      const now = workspace.getSnapshot();
+      const tab = now.tabs.find((candidate) => candidate.id === now.activeTabId);
+      if (tab) workspace.terminal(tab.focused)?.focus();
+    }
+    wasDrawerOpen.current = drawerOpen;
+  }, [drawerOpen, workspace]);
+
+  // Escape puts the phone drawer away, unless a dialog opened from it (the
+  // host editor, the palette) takes the key for itself.
+  useEffect(() => {
+    if (!narrow || !sidebarOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const inDialog =
+        event.target instanceof Element && event.target.closest('dialog, [role="dialog"]');
+      if (event.key === "Escape" && !event.defaultPrevented && !inDialog) {
+        shell.setSidebarOpen(false, LAYOUT_ONLY);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [narrow, sidebarOpen, shell]);
 
   // Shortcuts that arrive while focus is outside a terminal, such as on the tab bar.
   useEffect(() => {
@@ -130,15 +185,52 @@ export function App({ shell }: { shell: AppShell }) {
   };
 
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
-      <TabBar
-        workspace={workspace}
-        tabs={tabs}
-        activeTabId={activeTabId}
-        newTabHint={`New tab (${chord("tab.new")})`}
-      />
-      <div className="flex min-h-0 flex-1">
-        {sidebarOpen && (
+    <main className="flex h-dvh flex-col bg-background pt-[env(safe-area-inset-top)] text-foreground">
+      <div inert={drawerOpen} className="contents">
+        <TabBar
+          workspace={workspace}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          newTabHint={`New tab (${chord("tab.new")})`}
+          start={
+            <button
+              type="button"
+              aria-label="Hosts"
+              aria-pressed={sidebarOpen}
+              title={`Hosts (${chord("hosts.toggle")})`}
+              className="icon-btn"
+              // The drawer on a phone opens and closes without changing the saved choice.
+              onClick={() => shell.setSidebarOpen(!sidebarOpen, narrow ? LAYOUT_ONLY : {})}
+            >
+              <Icon name="sidebar" />
+            </button>
+          }
+          end={
+            <>
+              <button
+                type="button"
+                aria-label={`Theme: ${theme}`}
+                title={`Theme: ${theme}. Click for the next one.`}
+                className="icon-btn"
+                onClick={() => shell.run("theme.cycle")}
+              >
+                <Icon name={theme === "light" ? "sun" : theme === "dark" ? "moon" : "monitor"} />
+              </button>
+              <button
+                type="button"
+                aria-label="All commands"
+                title={`All commands (${chord("palette.open")})`}
+                className="icon-btn"
+                onClick={() => shell.setPaletteOpen(true)}
+              >
+                <Icon name="command" />
+              </button>
+            </>
+          }
+        />
+      </div>
+      <div className="relative flex min-h-0 flex-1">
+        {sidebarOpen && !narrow && (
           <Sidebar
             store={shell.hosts}
             onConnect={connectHost}
@@ -149,7 +241,27 @@ export function App({ shell }: { shell: AppShell }) {
             highlightSets={highlightSets}
           />
         )}
-        <div className="min-w-0 flex-1">
+        {sidebarOpen && narrow && (
+          // A drawer over the terminal; the scrim and Escape close it.
+          <div ref={drawerRef} className="fixed inset-0 z-30 flex">
+            <Sidebar
+              store={shell.hosts}
+              onConnect={connectHost}
+              onOpenVault={openVault}
+              {...(shell.files ? { onFiles: openFiles } : {})}
+              identities={vault.identities}
+              snippets={snippetList}
+              className="drawer w-[min(340px,calc(100vw-48px))] border-r pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-lg"
+            />
+            <button
+              type="button"
+              aria-label="Close hosts"
+              className="min-w-0 flex-1 bg-[var(--scrim)]"
+              onClick={() => shell.setSidebarOpen(false, LAYOUT_ONLY)}
+            />
+          </div>
+        )}
+        <div inert={drawerOpen} className="min-w-0 flex-1 bg-terminal">
           {active ? (
             <PaneTree
               key={active.id}
@@ -159,29 +271,12 @@ export function App({ shell }: { shell: AppShell }) {
               onUnlockVault={(retry) => shell.unlockVaultThen(retry)}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm opacity-80">
-              <p>No open terminals.</p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-                  onClick={() => workspace.newTab()}
-                >
-                  New tab <kbd className="ml-2 text-xs opacity-60">{chord("tab.new")}</kbd>
-                </button>
-                <button
-                  type="button"
-                  className="rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-                  onClick={() => shell.setConnectOpen(true)}
-                >
-                  Connect to host{" "}
-                  <kbd className="ml-2 text-xs opacity-60">{chord("ssh.connect")}</kbd>
-                </button>
-              </div>
-              <p className="opacity-60">
-                All commands: <kbd>{chord("palette.open")}</kbd>
-              </p>
-            </div>
+            <EmptyState
+              newTab={() => workspace.newTab()}
+              connect={() => shell.setConnectOpen(true)}
+              openPalette={() => shell.setPaletteOpen(true)}
+              chord={chord}
+            />
           )}
         </div>
       </div>
@@ -294,3 +389,54 @@ export function App({ shell }: { shell: AppShell }) {
 }
 
 const noSubscribe = (): (() => void) => () => {};
+
+/** A sidebar change the phone layout makes; the desktop choice stays saved. */
+const LAYOUT_ONLY = { persist: false } as const;
+
+/** What the window shows with every tab closed: the ways to start. */
+function EmptyState({
+  newTab,
+  connect,
+  openPalette,
+  chord,
+}: {
+  newTab: () => void;
+  connect: () => void;
+  openPalette: () => void;
+  chord: (action: "tab.new" | "ssh.connect" | "palette.open") => string;
+}) {
+  const rows = [
+    { label: "New tab", icon: "terminal", hint: chord("tab.new"), run: newTab },
+    { label: "Connect to host", icon: "plug", hint: chord("ssh.connect"), run: connect },
+    { label: "All commands", icon: "command", hint: chord("palette.open"), run: openPalette },
+  ] as const;
+  return (
+    <div className="flex h-full flex-col items-center justify-center p-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-5 flex items-center gap-3">
+          <span className="flex size-10 items-center justify-center rounded-xl border border-line-strong bg-surface-2 font-mono text-lg font-semibold text-accent">
+            τ
+          </span>
+          <div>
+            <p className="font-semibold">No open terminals.</p>
+            <p className="text-[13px] text-muted">Open a shell here or on a saved host.</p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          {rows.map((row) => (
+            <button
+              key={row.label}
+              type="button"
+              onClick={row.run}
+              className="group flex h-11 items-center gap-3 rounded-lg border border-line bg-surface-1 px-3 text-left text-[13px] font-medium transition-colors hover:border-line-strong hover:bg-surface-2"
+            >
+              <Icon name={row.icon} className="size-4 text-muted group-hover:text-accent" />
+              <span className="flex-1">{row.label}</span>
+              {row.hint && <kbd className="kbd">{row.hint}</kbd>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

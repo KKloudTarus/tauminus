@@ -29,7 +29,7 @@ const CANCEL: AnswerSpec = { kind: "cancel" };
 export function PromptDialog({ prompt, onAnswer }: PromptDialogProps) {
   const titleId = useId();
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 p-4">
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-terminal/80 p-4">
       <dialog
         open
         aria-labelledby={titleId}
@@ -39,7 +39,7 @@ export function PromptDialog({ prompt, onAnswer }: PromptDialogProps) {
             onAnswer(CANCEL);
           }
         }}
-        className="static m-0 w-[min(520px,100%)] rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl"
+        className="panel static m-0 w-[min(520px,100%)] p-4"
       >
         <PromptBody prompt={prompt} titleId={titleId} onAnswer={onAnswer} />
       </dialog>
@@ -135,18 +135,24 @@ function HostKeyPrompt({
         your administrator or provider published before you trust it.
       </p>
       {prompt.certificateExpected && (
-        <p role="alert" className="mb-2 rounded border border-red-500/60 bg-red-500/10 p-2">
+        <p
+          role="alert"
+          className="mb-3 rounded-lg border border-danger/50 bg-danger/10 p-2.5 text-danger"
+        >
           A certificate authority is configured for this host, but the host did not present a
           certificate it signed. Someone may be intercepting the connection. Cancel unless you know
           why.
         </p>
       )}
-      <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        <dt className="opacity-60">Key type</dt>
+      <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg border border-line bg-terminal p-3 text-[13px]">
+        <dt className="text-faint">Key type</dt>
         <dd>{prompt.algorithm}</dd>
-        <dt className="opacity-60">Fingerprint</dt>
+        <dt className="text-faint">Fingerprint</dt>
         <dd>
-          <code className="break-all select-all" data-testid="host-key-fingerprint">
+          <code
+            className="font-mono text-xs leading-5 break-all select-all"
+            data-testid="host-key-fingerprint"
+          >
             {prompt.fingerprint}
           </code>
         </dd>
@@ -218,7 +224,7 @@ function SecretsForm({
               next[index] = event.target.value;
               setValues(next);
             }}
-            className="w-full rounded border border-current/20 bg-transparent px-2 py-1.5 outline-none focus:border-current/50"
+            className="field"
           />
         </label>
       ))}
@@ -250,11 +256,7 @@ function Button({
       ref={buttonRef}
       type={type}
       onClick={onClick}
-      className={
-        primary
-          ? "rounded bg-foreground px-3 py-1.5 text-background hover:opacity-90"
-          : "rounded border border-current/20 px-3 py-1.5 hover:bg-current/10"
-      }
+      className={primary ? "btn btn-primary" : "btn"}
     >
       {children}
     </button>

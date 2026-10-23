@@ -5,8 +5,7 @@ import type { ForwardKindSpec } from "@/ipc/index.ts";
 
 import { type RuleRow, isKind, newRow, opensToNetwork } from "./rules.ts";
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1 outline-none focus:border-current/50";
+const FIELD = "field";
 
 const KINDS: { kind: ForwardKindSpec; name: string; hint: string }[] = [
   { kind: "local", name: "Local (-L)", hint: "Listen here, connect from the server" },
@@ -29,7 +28,7 @@ export function ForwardFields({
   const update = (index: number, patch: Partial<RuleRow>) =>
     onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
   return (
-    <details className="mb-3 rounded border border-current/15 px-3 py-2" open={rows.length > 0}>
+    <details className="disclosure mb-3" open={rows.length > 0}>
       <summary className="cursor-pointer select-none">
         Port forwarding{rows.length > 0 ? ` (${rows.length})` : ""}
       </summary>
@@ -48,7 +47,7 @@ export function ForwardFields({
               key={kind}
               type="button"
               title={hint}
-              className="rounded border border-current/20 px-2 py-1 text-xs hover:bg-current/10"
+              className="btn btn-sm text-xs"
               onClick={() => onChange([...rows, newRow(kind)])}
             >
               Add {name}
@@ -102,7 +101,7 @@ function RuleFields({
         <button
           type="button"
           aria-label="Remove rule"
-          className="rounded px-2 hover:bg-current/10"
+          className="btn btn-ghost btn-xs"
           onClick={onRemove}
         >
           ×
@@ -175,7 +174,7 @@ function RuleFields({
         <span>Start when the host connects</span>
       </label>
       {row.bind.trim() && opensToNetwork(row.bind) && (
-        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+        <p className="mt-1 text-xs text-error">
           Other machines on the network can use this tunnel.
         </p>
       )}

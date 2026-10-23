@@ -12,9 +12,8 @@ import type {
   SerialSpec,
 } from "@/ipc/index.ts";
 
-const FIELD =
-  "w-full rounded border border-current/20 bg-transparent px-2 py-1 outline-none focus:border-current/50";
-const BUTTON = "rounded px-2 py-0.5 hover:bg-current/10 disabled:opacity-40";
+const FIELD = "field";
+const BUTTON = "btn btn-ghost btn-xs";
 /** What most consoles use: 115200 8N1, no flow control. */
 const CONSOLE_BAUD = 115_200;
 
@@ -56,7 +55,7 @@ export function SerialDialog({
   };
   const listId = useId();
   return (
-    <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">
+    <div className="overlay">
       <dialog
         open
         aria-labelledby={titleId}
@@ -66,7 +65,7 @@ export function SerialDialog({
             onClose();
           }
         }}
-        className="static m-0 w-[min(480px,92vw)] rounded-lg border border-current/15 bg-background p-4 text-sm text-foreground shadow-xl"
+        className="panel static m-0 w-[min(480px,92vw)] p-4"
       >
         <h2 id={titleId} className="mb-3 text-base font-medium">
           Open a serial port
@@ -97,7 +96,7 @@ export function SerialDialog({
             </datalist>
           </label>
           {error && (
-            <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+            <p role="alert" className="text-xs text-error">
               {error}
             </p>
           )}
