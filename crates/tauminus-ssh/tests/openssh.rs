@@ -1376,6 +1376,10 @@ async fn a_thirty_second_outage_is_survived_by_reconnecting_to_tmux() {
         .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
         .await
         .unwrap();
+    // Typed only once tmux has drawn its screen: tmux 3.2 drops what
+    // arrived before it started.
+    output_until(&mut first, "\u{1b}[?1049h").await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     first
         .input
         .send(TerminalInput::Text("echo MARK-$((40+2))\r".into()))
