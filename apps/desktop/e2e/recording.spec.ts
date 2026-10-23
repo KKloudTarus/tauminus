@@ -58,9 +58,8 @@ test("records a pane from what it shows, then plays it back, searches, and bookm
   const dialog = recordings(page);
   await dialog.getByRole("button", { name: /^Play / }).click();
   const player = dialog.getByTestId("player-screen");
-  // It starts from the screen as it was when recording began. The worker
-  // starts first, slowly on a loaded dev server.
-  await expect(player).toContainText("before recording", { timeout: 20_000 });
+  // It starts from the screen as it was when recording began.
+  await expect(player).toContainText("before recording");
   await dialog.getByRole("button", { name: "Play" }).click();
   await expect(player).toContainText("the needle", { timeout: 10_000 });
 
@@ -107,7 +106,7 @@ test("skip idle plays a long pause short", async ({ page }) => {
   const dialog = recordings(page);
   await dialog.getByRole("button", { name: "Play a long pause" }).click();
   const player = dialog.getByTestId("player-screen");
-  await expect(dialog.getByTestId("player")).toBeVisible({ timeout: 20_000 });
+  await expect(dialog.getByTestId("player")).toBeVisible();
   await dialog.getByRole("button", { name: "Play" }).click();
   await expect(player).toContainText("first line");
   await expect(player).toContainText("after the pause", { timeout: 8000 });
