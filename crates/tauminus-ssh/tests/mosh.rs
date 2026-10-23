@@ -5,6 +5,9 @@
 //! and the real `mosh-client` carries the terminal. Needs mosh installed,
 //! or `TAUMINUS_MOSH_BIN` naming a directory with both programs.
 
+// Mosh is for macOS and Linux, and the test sshd runs on Unix only.
+#![cfg(unix)]
+
 mod support;
 
 use std::sync::Arc;
@@ -35,7 +38,7 @@ async fn a_mosh_session_starts_over_ssh_and_runs_commands() {
     };
     let Some(bin) = mosh_bin() else {
         assert!(
-            std::env::var_os("CI").is_none() || cfg!(windows),
+            std::env::var_os("CI").is_none(),
             "CI needs mosh"
         );
         return;
