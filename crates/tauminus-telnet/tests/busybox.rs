@@ -170,11 +170,11 @@ async fn a_shell_over_telnet_sees_the_window_size_echoes_and_ends() {
 
 #[tokio::test]
 async fn a_closed_port_is_refused() {
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
+    // Bound and never listening: the port stays closed, and no other test
+    // can take it, as one could a port bound and let go.
+    let closed = tokio::net::TcpSocket::new_v4().unwrap();
+    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let port = closed.local_addr().unwrap().port();
     let target = TelnetTarget {
         host: HostName::parse("127.0.0.1").unwrap(),
         port,
