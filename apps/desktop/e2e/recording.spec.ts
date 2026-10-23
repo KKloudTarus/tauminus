@@ -155,3 +155,28 @@ test("an hour-long recording seeks anywhere in under 200 ms", async ({ page }) =
   test.info().annotations.push({ type: "seek ms", description: times.join(", ") });
   expect(Math.max(...times)).toBeLessThan(200);
 });
+
+test("shows the recording badge beside the broadcast one", async ({ page }) => {
+  await createVault(page);
+  await palette(page, "Split pane right");
+  const pane = page.locator('section[data-pane-id][data-focused="true"]');
+  // Two panes now: run commands once the focused one has the keyboard.
+  const command = async (name: string) => {
+    await expect(pane.getByRole("textbox", { name: "Terminal input" })).toBeFocused();
+    await page.keyboard.press("Control+Shift+P");
+    await page.getByPlaceholder("Type a command").fill(name);
+    await page.keyboard.press("Enter");
+  };
+  await command("Broadcast input to every pane in this tab");
+  await command("Record this pane, or stop recording it");
+  const rec = await pane.getByTestId("recording-status").boundingBox();
+  const broadcast = await pane.getByTestId("broadcast-badge").boundingBox();
+  if (!rec || !broadcast) throw new Error("a badge is missing");
+  // toBeVisible ignores what covers an element; the boxes must not overlap.
+  const apart =
+    rec.y >= broadcast.y + broadcast.height ||
+    broadcast.y >= rec.y + rec.height ||
+    rec.x >= broadcast.x + broadcast.width ||
+    broadcast.x >= rec.x + rec.width;
+  expect(apart).toBe(true);
+});
