@@ -8,14 +8,22 @@ use encoding_rs::{CoderResult, Decoder, EncoderResult};
 use tauminus_domain::Encoding;
 
 /// One session's converter. UTF-8 passes through untouched.
-pub(crate) struct Transcoder {
+pub struct Transcoder {
     codec: Option<(&'static encoding_rs::Encoding, Decoder)>,
     /// The last chunk was decoded; the decoder takes no more.
     finished: bool,
 }
 
+impl std::fmt::Debug for Transcoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transcoder")
+            .field("encoding", &self.codec.as_ref().map(|(e, _)| e.name()))
+            .finish_non_exhaustive()
+    }
+}
+
 impl Transcoder {
-    pub(crate) fn new(encoding: Encoding) -> Self {
+    pub fn new(encoding: Encoding) -> Self {
         let codec = match encoding {
             Encoding::Utf8 => None,
             other => {
@@ -35,7 +43,7 @@ impl Transcoder {
     /// Windows sets map single bytes to U+0080..U+009F, which xterm.js acts
     /// on (U+009B is CSI), so a stray byte in a file would drive the
     /// terminal. O(n).
-    pub(crate) fn decode(&mut self, bytes: &[u8], last: bool) -> Vec<u8> {
+    pub fn decode(&mut self, bytes: &[u8], last: bool) -> Vec<u8> {
         let Some((_, decoder)) = &mut self.codec else {
             return bytes.to_vec();
         };
@@ -72,7 +80,7 @@ impl Transcoder {
     /// control, is sent as `_`: never as an HTML entity, which a shell
     /// would take as typed text, and never as `?`, which a shell takes as
     /// a pattern, so `rm ~/tmp/✓` cannot become `rm ~/tmp/?`. O(n).
-    pub(crate) fn encode(&self, text: &str) -> Vec<u8> {
+    pub fn encode(&self, text: &str) -> Vec<u8> {
         let Some((codec, _)) = &self.codec else {
             return text.as_bytes().to_vec();
         };

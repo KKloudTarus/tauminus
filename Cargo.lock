@@ -5100,6 +5100,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauminus-charset"
+version = "0.0.0"
+dependencies = [
+ "encoding_rs",
+ "tauminus-domain",
+]
+
+[[package]]
 name = "tauminus-desktop"
 version = "0.0.0"
 dependencies = [
@@ -5167,7 +5175,6 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "data-encoding",
- "encoding_rs",
  "hmac",
  "nix 0.28.0",
  "rand",
@@ -5177,6 +5184,7 @@ dependencies = [
  "sha2 0.11.1",
  "socket2",
  "tauminus-app",
+ "tauminus-charset",
  "tauminus-domain",
  "thiserror 2.0.21",
  "tokio",
