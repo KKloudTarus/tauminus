@@ -335,3 +335,49 @@ impl crate::ports::SnippetStore for FakeSnippetStore {
         format!("snippet{}", self.ids.fetch_add(1, Ordering::SeqCst))
     }
 }
+
+/// A trigger library in memory. `fail_next` makes the next save fail.
+#[derive(Default)]
+pub(crate) struct FakeTriggerStore {
+    saved: Mutex<Option<tauminus_domain::TriggerLibrary>>,
+    fail: AtomicBool,
+    ids: AtomicUsize,
+}
+
+impl FakeTriggerStore {
+    pub(crate) fn saved(&self) -> Option<tauminus_domain::TriggerLibrary> {
+        self.saved.lock().unwrap().clone()
+    }
+
+    pub(crate) fn fail_next(&self) {
+        self.fail.store(true, Ordering::SeqCst);
+    }
+}
+
+impl crate::ports::TriggerStore for FakeTriggerStore {
+    fn load(
+        &self,
+    ) -> BoxFuture<'_, Result<tauminus_domain::TriggerLibrary, crate::ports::StoreError>> {
+        let saved = self.saved().unwrap_or_default();
+        Box::pin(async move { Ok(saved) })
+    }
+
+    fn save<'a>(
+        &'a self,
+        library: &'a tauminus_domain::TriggerLibrary,
+    ) -> BoxFuture<'a, Result<(), crate::ports::StoreError>> {
+        Box::pin(async move {
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(crate::ports::StoreError::Io(std::io::Error::other(
+                    "disk full",
+                )));
+            }
+            *self.saved.lock().unwrap() = Some(library.clone());
+            Ok(())
+        })
+    }
+
+    fn new_id(&self) -> String {
+        format!("set{}", self.ids.fetch_add(1, Ordering::SeqCst))
+    }
+}

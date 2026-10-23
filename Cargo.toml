@@ -32,6 +32,11 @@ anyhow = "1.0.104"
 # The OS clipboard, text only; WebKitGTK refuses navigator.clipboard reads.
 arboard = { version = "3.7.0", default-features = false }
 portable-pty = "0.9.0"
+# Highlight and trigger patterns: linear-time matching, so output a host
+# sends cannot make a pattern backtrack.
+regex = "1.13.1"
+# Checks a pattern's syntax without compiling it, for reading a file of them.
+regex-syntax = "0.8.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }

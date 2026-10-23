@@ -18,6 +18,7 @@ mod keychain;
 mod recordings;
 mod sealed_stream;
 mod snippets;
+mod triggers;
 pub mod vault;
 mod vault_backend;
 
@@ -32,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rand::TryRng;
-use tauminus_app::ports::{BoxFuture, HostStore, SnippetStore, StoreError};
+use tauminus_app::ports::{BoxFuture, HostStore, SnippetStore, StoreError, TriggerStore};
 use tauminus_domain::{Inventory, Library};
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -162,6 +163,38 @@ impl SnippetStore for JsonSnippetStore {
 
     fn save<'a>(&'a self, library: &'a Library) -> BoxFuture<'a, Result<(), StoreError>> {
         let bytes = snippets::to_json(library);
+        Box::pin(self.0.save(bytes))
+    }
+
+    fn new_id(&self) -> String {
+        new_id()
+    }
+}
+
+/// Highlight and trigger sets kept in `path`, usually `triggers.json` in
+/// the app's config directory.
+#[derive(Debug, Clone)]
+pub struct JsonTriggerStore(JsonFile);
+
+impl JsonTriggerStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self(JsonFile::new(path, "highlight sets"))
+    }
+}
+
+impl TriggerStore for JsonTriggerStore {
+    fn load(&self) -> BoxFuture<'_, Result<tauminus_domain::TriggerLibrary, StoreError>> {
+        Box::pin(self.0.load(
+            tauminus_domain::TriggerLibrary::default,
+            triggers::from_json,
+        ))
+    }
+
+    fn save<'a>(
+        &'a self,
+        library: &'a tauminus_domain::TriggerLibrary,
+    ) -> BoxFuture<'a, Result<(), StoreError>> {
+        let bytes = triggers::to_json(library);
         Box::pin(self.0.save(bytes))
     }
 

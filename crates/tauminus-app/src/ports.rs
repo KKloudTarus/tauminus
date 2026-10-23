@@ -496,6 +496,19 @@ pub trait SnippetStore: Send + Sync + 'static {
     fn new_id(&self) -> String;
 }
 
+/// Keeps the highlight and trigger sets, replacing everything at once as
+/// [`SnippetStore`] does.
+pub trait TriggerStore: Send + Sync + 'static {
+    /// An empty library when nothing was saved yet.
+    fn load(&self) -> BoxFuture<'_, Result<tauminus_domain::TriggerLibrary, StoreError>>;
+    fn save<'a>(
+        &'a self,
+        library: &'a tauminus_domain::TriggerLibrary,
+    ) -> BoxFuture<'a, Result<(), StoreError>>;
+    /// A fresh, unguessable id for a new set.
+    fn new_id(&self) -> String;
+}
+
 /// A host as `~/.ssh/config` describes it, before validation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigHost {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tauminus_domain::{
     EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
     IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget, TelnetTarget,
-    UserName, env_list,
+    TriggerSetId, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -88,6 +88,12 @@ impl HostBook {
             .host(id)
             .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
         Ok(host.startup.clone())
+    }
+
+    /// The highlight and trigger sets a host names, its own then its
+    /// groups'. O(log H + d·k).
+    pub async fn triggers(&self, id: &HostId) -> Result<Vec<TriggerSetId>, HostsError> {
+        self.inventory.lock().await.triggers(id)
     }
 
     /// Applies `change` to a copy, saves it, then publishes it. Returns the

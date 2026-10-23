@@ -128,7 +128,9 @@ fn check_bindings(root: &Path) -> Result<()> {
 /// a crate from using what it does not list; this stops the list itself from
 /// growing a runtime, serializer, or driver. Dev-dependencies are not checked.
 const LAYER_RULES: &[(&str, &[&str])] = &[
-    ("tauminus-domain", &["thiserror"]),
+    // regex and its parser: pure matching with no I/O, for highlight rules;
+    // the domain checks and matches them with one engine (ADR 0020).
+    ("tauminus-domain", &["regex", "regex-syntax", "thiserror"]),
     // zeroize: a dependency-free crate that wipes secrets when they drop.
     (
         "tauminus-app",

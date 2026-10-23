@@ -197,6 +197,7 @@ async fn settings_survive_a_round_trip_through_the_view() {
                 value: "ops".into(),
             },
         ]),
+        triggers: Some(vec!["errors".into(), "logs".into()]),
     };
     let parsed = settings(spec.clone()).unwrap();
     let back = settings_spec(&parsed);
