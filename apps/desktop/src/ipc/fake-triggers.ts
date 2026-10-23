@@ -7,7 +7,14 @@
 // and offsets count code points. Patterns are JavaScript's here, and the
 // backend's linear-time engine in the app.
 
-import type { HitView, StyleSpec, TriggerSetView, TriggersClient } from "./triggers.ts";
+import type {
+  FiredView,
+  HitView,
+  StyleSpec,
+  TriggerSetView,
+  TriggerView,
+  TriggersClient,
+} from "./triggers.ts";
 
 /** What the backend's syntax refuses: lookaround and backreferences. */
 const UNSUPPORTED = /\(\?<?[=!]|\\[1-9]/u;
@@ -48,7 +55,11 @@ export function fakeTriggers(triggersOf: (host: string) => readonly string[]): T
   let revision = 0;
   const prepared = new Map<
     number,
-    { revision: number; rules: { regex: RegExp; style: StyleSpec }[] }
+    {
+      revision: number;
+      rules: { regex: RegExp; style: StyleSpec }[];
+      triggers: { regex: RegExp; trigger: TriggerView }[];
+    }
   >();
   let handles = 1;
   const sorted = () =>
@@ -63,8 +74,13 @@ export function fakeTriggers(triggersOf: (host: string) => readonly string[]): T
       for (const rule of input.rules) {
         const problem = check(rule.pattern);
         if (problem) return Promise.reject(new Error(problem));
-        if (!rule.style.fg && !rule.style.bg) {
+        const { action } = rule;
+        if (action.kind === "highlight" && !action.style.fg && !action.style.bg) {
           return Promise.reject(new Error("a highlight needs a text or a background colour"));
+        }
+        // oxlint-disable-next-line no-control-regex -- control characters are what is refused
+        if (action.kind === "send" && /[\u0000-\u001f\u007f-\u009f]/u.test(action.text)) {
+          return Promise.reject(new Error("text to send holds no control characters"));
         }
       }
       const id = input.id ?? `set-${next++}`;
@@ -93,13 +109,26 @@ export function fakeTriggers(triggersOf: (host: string) => readonly string[]): T
     check: (pattern) => Promise.resolve(check(pattern)),
     prepare: (host) => {
       const named = [...(host ? triggersOf(host) : []), ...defaultsOf(sets)];
-      const rules = [...new Set(named)]
+      const applied = [...new Set(named)]
         .flatMap((id) => sets.find((s) => s.id === id)?.rules ?? [])
-        .filter((r) => r.enabled)
-        .map((r) => ({ regex: new RegExp(r.pattern, "gu"), style: r.style }));
+        .filter((r) => r.enabled);
+      const rules = applied.flatMap((r) =>
+        r.action.kind === "highlight"
+          ? [{ regex: new RegExp(r.pattern, "gu"), style: r.action.style }]
+          : [],
+      );
+      const triggers = applied.flatMap((r) =>
+        r.action.kind === "highlight"
+          ? []
+          : [{ regex: new RegExp(r.pattern, "u"), trigger: { name: r.name, action: r.action } }],
+      );
       const handle = handles++;
-      prepared.set(handle, { revision, rules });
-      return Promise.resolve({ handle, styles: rules.map((r) => r.style) });
+      prepared.set(handle, { revision, rules, triggers });
+      return Promise.resolve({
+        handle,
+        styles: rules.map((r) => r.style),
+        triggers: triggers.map((t) => t.trigger),
+      });
     },
     scan: (handle, lines) => {
       const entry = prepared.get(handle);
@@ -131,5 +160,28 @@ export function fakeTriggers(triggersOf: (host: string) => readonly string[]): T
       });
       return Promise.resolve(hits);
     },
+    fire: (handle, lines) => {
+      const entry = prepared.get(handle);
+      if (!entry || entry.revision !== revision) return Promise.resolve(null);
+      const fired: FiredView[] = [];
+      lines.forEach((text, line) => {
+        entry.triggers.forEach(({ regex }, rule) => {
+          const match = regex.exec(text);
+          if (!match) return;
+          const start = points(text, match.index);
+          fired.push({
+            line,
+            rule,
+            start,
+            end: start + points(match[0], match[0].length),
+            // The backend hides secrets of known shapes; enough of that here.
+            text: text.replaceAll(/(token=)\S+/gu, "$1•••"),
+          });
+        });
+      });
+      return Promise.resolve(fired);
+    },
+    // The e2e build shows no system notifications: the app's notice does.
+    notify: () => Promise.resolve(false),
   };
 }

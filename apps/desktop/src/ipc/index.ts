@@ -72,12 +72,15 @@ export {
   tauriSnippets,
 } from "./snippets.ts";
 export {
+  type ActionSpec,
+  type FiredView,
   type HitView,
   type PreparedView,
   type RuleSpec,
   type StyleSpec,
   type TriggerSetInput,
   type TriggerSetView,
+  type TriggerView,
   type TriggersClient,
   tauriTriggers,
 } from "./triggers.ts";

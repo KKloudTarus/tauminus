@@ -43,6 +43,7 @@ import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 import { type HighlightSource, Highlighter } from "./highlighter.ts";
+import { type FiredBatch, type TriggerSource, TriggerWatcher } from "./trigger-watcher.ts";
 
 /** Delay before retrying an acknowledgement whose IPC call failed. */
 const ACK_RETRY_MS = 100;
@@ -247,6 +248,7 @@ export class TerminalController {
   readonly #guard: CommandGuard | undefined;
   readonly #recorder: CommandRecorder | undefined;
   readonly #highlighter: Highlighter | undefined;
+  readonly #watcher: TriggerWatcher | undefined;
   readonly #guardSource: GuardSource | undefined;
   /** Output parses so far, and who waits for the next; for the guard's echo wait. */
   #parses = 0;
@@ -304,6 +306,8 @@ export class TerminalController {
       record?: (entry: RecordedCommand) => void;
       /** The highlight rules for this pane's host, or the defaults. */
       highlights?: HighlightSource;
+      /** The trigger rules for this pane's host, and what to do when one fires. */
+      triggers?: { source: TriggerSource; fired: (batch: FiredBatch) => void };
     } = {},
   ) {
     this.#sessions = sessions;
@@ -389,6 +393,9 @@ export class TerminalController {
     this.#highlighter = options.highlights
       ? new Highlighter(this.terminal, options.highlights)
       : undefined;
+    this.#watcher = options.triggers
+      ? new TriggerWatcher(this.terminal, options.triggers.source, options.triggers.fired)
+      : undefined;
     this.terminal.onWriteParsed(() => {
       this.#parses += 1;
       for (const waiter of this.#parseWaiters) waiter();
@@ -420,6 +427,7 @@ export class TerminalController {
     globalThis.addEventListener?.("focus", this.#onWake);
     this.terminal.onData((raw) => {
       const data = defusePaste(raw);
+      this.#noteTyping(data);
       // Wheel scrolling and Alt+click send arrow keys worked out from this
       // pane's screen; they mean nothing in another.
       if (!this.#fromPointer) this.#onInput?.(data);
@@ -599,6 +607,53 @@ export class TerminalController {
   }
 
   /**
+   * Types text a trigger sends, as `type` does (through the prod guard,
+   * into the history, not broadcast), unless the shell is asking for a
+   * secret or a full-screen program has the screen: there, keys would be a
+   * password or an editor's commands. `false` when it was not sent.
+   */
+  sendFromTrigger(data: string): boolean {
+    if (!this.canSendFromTrigger) return false;
+    this.type(data);
+    return true;
+  }
+
+  /**
+   * Whether a trigger may type now: not at a password prompt, not into a
+   * full-screen program, not over a line the user is typing (with Enter,
+   * it would run).
+   */
+  get canSendFromTrigger(): boolean {
+    return !(
+      this.terminal.buffer.active.type === "alternate" ||
+      this.atSecretPrompt ||
+      this.#typing
+    );
+  }
+
+  /**
+   * Whether the user has typed on the current line: keys since the last
+   * Enter, Ctrl+C, Ctrl+D, or Ctrl+U.
+   */
+  #typing = false;
+
+  #noteTyping(data: string): void {
+    const end = Math.max(
+      data.lastIndexOf("\r"),
+      data.lastIndexOf("\n"),
+      data.lastIndexOf("\u0003"),
+      data.lastIndexOf("\u0004"),
+      data.lastIndexOf("\u0015"),
+    );
+    const after = data.slice(end + 1);
+    // Keys that type something: not a lone escape sequence such as an arrow.
+    // oxlint-disable-next-line no-control-regex -- escape sequences are what is left out
+    const typed = after.replaceAll(/\u001b(\[[0-9;?]*[ -/]*[@-~]|O.|.)/gu, "").length > 0;
+    if (end >= 0) this.#typing = typed;
+    else if (typed) this.#typing = true;
+  }
+
+  /**
    * Types keys another pane's user typed: a paste is bracketed or not as
    * this pane's shell asked, whatever the other one did.
    */
@@ -765,6 +820,7 @@ export class TerminalController {
   /** The highlight sets, or the host's list of them, changed. */
   refreshHighlights(): void {
     this.#highlighter?.refresh();
+    this.#watcher?.refresh();
   }
 
   /** Re-reads the theme tokens, after the app switches light or dark. */
@@ -861,6 +917,7 @@ export class TerminalController {
     this.#retireWebgl();
     this.#guard?.dispose();
     this.#highlighter?.dispose();
+    this.#watcher?.dispose();
     // A tab closed with a command running keeps what it printed so far.
     this.#recorder?.flush();
     this.#recorder?.dispose();

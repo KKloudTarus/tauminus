@@ -82,7 +82,11 @@ function source(overrides: Partial<HighlightSource> = {}) {
   const base: HighlightSource = {
     prepare: () => {
       calls.prepare += 1;
-      return Promise.resolve<PreparedView>({ handle: calls.prepare, styles: [STYLE] });
+      return Promise.resolve<PreparedView>({
+        handle: calls.prepare,
+        styles: [STYLE],
+        triggers: [],
+      });
     },
     scan: (_handle, lines) => {
       calls.scan += 1;
@@ -164,9 +168,9 @@ describe("Highlighter", () => {
     expect(answers).toHaveLength(1);
     highlighter.refresh();
     // The old sets answer late: not used.
-    answers[0]?.({ handle: 1, styles: [STYLE] });
+    answers[0]?.({ handle: 1, styles: [STYLE], triggers: [] });
     await settle();
-    answers[1]?.({ handle: 2, styles: [STYLE] });
+    answers[1]?.({ handle: 2, styles: [STYLE], triggers: [] });
     await settle();
     expect(scanned.every((handle) => handle === 2)).toBe(true);
     expect(scanned.length).toBeGreaterThan(0);

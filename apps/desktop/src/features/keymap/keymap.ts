@@ -50,7 +50,8 @@ export type Action =
   | "serial.open"
   | "recording.toggle"
   | "recordings.open"
-  | "triggers.open";
+  | "triggers.open"
+  | "captures.open";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -88,6 +89,7 @@ export const ACTIONS: readonly Action[] = [
   "recording.toggle",
   "recordings.open",
   "triggers.open",
+  "captures.open",
 ];
 
 export type Platform = "mac" | "other";
@@ -131,6 +133,7 @@ const OTHER: Bindings = {
   "recording.toggle": [],
   "recordings.open": [],
   "triggers.open": [],
+  "captures.open": [],
 };
 
 const MAC: Bindings = {
@@ -170,6 +173,7 @@ const MAC: Bindings = {
   "recording.toggle": [],
   "recordings.open": [],
   "triggers.open": [],
+  "captures.open": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {
