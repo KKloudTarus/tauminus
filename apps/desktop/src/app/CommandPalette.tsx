@@ -52,6 +52,7 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
             </Command.Item>
           );
         })}
+        {paletteOpen && <WorkspaceItems shell={shell} />}
         {paletteOpen && shell.snippets && <SnippetItems shell={shell} snippets={shell.snippets} />}
         {paletteOpen && shell.forwards && <RuleItems shell={shell} forwards={shell.forwards} />}
       </Command.List>
@@ -131,3 +132,24 @@ function SnippetItems({ shell, snippets }: { shell: AppShell; snippets: Snippets
 }
 
 const SNIPPET_ITEMS = 50;
+
+/** "Open workspace" for each saved one; at most 50, so cmdk filters them. */
+function WorkspaceItems({ shell }: { shell: AppShell }) {
+  const all = useSyncExternalStore(shell.workspaces.subscribe, shell.workspaces.getSnapshot);
+  return all.map((workspace) => {
+    const label = `Open workspace: ${workspace.name}`;
+    return (
+      <Command.Item
+        key={workspace.id}
+        value={`${label}\u0000${workspace.id}`}
+        onSelect={() => {
+          shell.setPaletteOpen(false);
+          void shell.openWorkspace(workspace.id);
+        }}
+        className="flex cursor-default items-center rounded px-3 py-2 data-[selected=true]:bg-current/10"
+      >
+        {label}
+      </Command.Item>
+    );
+  });
+}

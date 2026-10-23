@@ -6,15 +6,19 @@ import {
   type LayoutNode,
   type PaneId,
   type Side,
+  type Template,
   balanced,
   closePane,
   countPanes,
+  fromTemplate,
   neighbor,
   pane,
   paneIds,
   paneReceivingSpace,
   resizeSplit,
   splitPane,
+  templatePanes,
+  toTemplate,
 } from "./layout.ts";
 
 /** What the workspace needs from a terminal; `TerminalController` satisfies it. */
@@ -94,13 +98,13 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
     return this.#terminals.size;
   }
 
-  /** Opens a tab with one pane and makes it active. Returns false at the pane limit. */
   /** What the focused pane of the active tab was opened with. O(t). */
   focusedSpec(): S | undefined {
     const tab = this.#snapshot.tabs.find((t) => t.id === this.#snapshot.activeTabId);
     return tab ? this.#terminals.get(tab.focused)?.spec : undefined;
   }
 
+  /** Opens a tab with one pane and makes it active. Returns false at the pane limit. */
   newTab(spec?: S): boolean {
     if (this.#disposed || this.#terminals.size >= MAX_PANES) {
       return false;
@@ -109,6 +113,40 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
     const tab: Tab = { id: this.#id("tab"), root: pane(paneId), focused: paneId };
     this.#update({ tabs: [...this.#snapshot.tabs, tab], activeTabId: tab.id });
     return true;
+  }
+
+  /**
+   * Opens `template` as a new active tab. Returns false, opening nothing,
+   * when it holds no pane or would pass a pane limit.
+   */
+  openTemplate(template: Template<S | undefined>): boolean {
+    const count = templatePanes(template);
+    if (
+      this.#disposed ||
+      count === 0 ||
+      count > MAX_PANES_PER_TAB ||
+      this.#terminals.size + count > MAX_PANES
+    ) {
+      return false;
+    }
+    const root = fromTemplate(
+      template,
+      (spec) => this.#newPane(spec),
+      () => this.#id("split"),
+    );
+    if (!root) return false;
+    const [first] = paneIds(root);
+    if (!first) return false;
+    const tab: Tab = { id: this.#id("tab"), root, focused: first };
+    this.#update({ tabs: [...this.#snapshot.tabs, tab], activeTabId: tab.id });
+    return true;
+  }
+
+  /** Each tab's layout with what its panes were opened with, in tab order. O(P). */
+  templates(): Template<S | undefined>[] {
+    return this.#snapshot.tabs.map((tab) =>
+      toTemplate(tab.root, (id) => this.#terminals.get(id)?.spec),
+    );
   }
 
   /** Closes a tab and disposes its terminals. The next tab, or the previous one, becomes active. */

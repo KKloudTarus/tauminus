@@ -10,6 +10,7 @@ import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { SnippetForm } from "@/features/snippets/SnippetForm.tsx";
 import { SnippetHosts } from "@/features/snippets/SnippetHosts.tsx";
+import { WorkspacesDialog } from "@/features/workspace/WorkspacesDialog.tsx";
 import { SnippetsDialog } from "@/features/snippets/SnippetsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
@@ -31,6 +32,7 @@ export function App({ shell }: { shell: AppShell }) {
     historyOpen,
     forwardsOpen,
     snippetsOpen,
+    workspacesOpen,
     snippetToFill,
     snippetHosts,
     files,
@@ -87,6 +89,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.historyOpen ||
         state.forwardsOpen ||
         state.snippetsOpen ||
+        state.workspacesOpen ||
         state.snippetToFill !== undefined ||
         state.snippetHosts !== undefined ||
         state.files !== undefined;
@@ -192,6 +195,14 @@ export function App({ shell }: { shell: AppShell }) {
           onRun={chooseSnippet}
           onRunOnHosts={chooseSnippetHosts}
           onClose={() => shell.setSnippetsOpen(false)}
+        />
+      )}
+      {workspacesOpen && (
+        <WorkspacesDialog
+          workspaces={shell.workspaces}
+          onSave={(name) => shell.saveWorkspace(name)}
+          onOpen={(id) => void shell.openWorkspace(id)}
+          onClose={() => shell.setWorkspacesOpen(false)}
         />
       )}
       {snippetHosts && (

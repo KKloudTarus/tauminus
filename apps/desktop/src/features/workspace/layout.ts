@@ -397,3 +397,75 @@ function centreOffset(from: Rect, to: Rect, side: Side): number {
     ? Math.abs(from.y + from.height / 2 - (to.y + to.height / 2))
     : Math.abs(from.x + from.width / 2 - (to.x + to.width / 2));
 }
+
+/** A layout to open again: what each pane opens, and each split's shares. */
+export type Template<S> =
+  | { readonly kind: "pane"; readonly spec: S }
+  | {
+      readonly kind: "split";
+      readonly direction: Direction;
+      readonly sizes: readonly number[];
+      readonly children: readonly Template<S>[];
+    };
+
+/** Panes in a template. O(n). */
+export function templatePanes<S>(template: Template<S>): number {
+  return template.kind === "pane"
+    ? 1
+    : template.children.reduce((sum, child) => sum + templatePanes(child), 0);
+}
+
+/**
+ * A layout from a template, as valid as any other: a split of one child
+ * becomes that child, a child split in its parent's direction is folded
+ * into it, and sizes that do not fit are shared equally. A template read
+ * from storage may break any of these. O(n).
+ */
+export function fromTemplate<S>(
+  template: Template<S>,
+  makePane: (spec: S) => PaneId,
+  makeId: () => string,
+): LayoutNode | null {
+  if (template.kind === "pane") return pane(makePane(template.spec));
+  const built = template.children.map((child) => fromTemplate(child, makePane, makeId));
+  // Shares far apart would round to zero or overflow; such sizes are
+  // shared equally instead.
+  const fits =
+    template.sizes.length === template.children.length &&
+    template.sizes.every((s) => s >= 1e-3 && s <= 1e6);
+  const children: LayoutNode[] = [];
+  const shares: number[] = [];
+  built.forEach((node, index) => {
+    if (!node) return;
+    const share = fits ? (template.sizes[index] ?? 1) : 1;
+    if (node.kind === "split" && node.direction === template.direction) {
+      node.children.forEach((child, j) => {
+        children.push(child);
+        shares.push((share * (node.sizes[j] ?? 0)) / TOTAL);
+      });
+    } else {
+      children.push(node);
+      shares.push(share);
+    }
+  });
+  const [only] = children;
+  if (children.length <= 1) return only ?? null;
+  return {
+    kind: "split",
+    id: makeId(),
+    direction: template.direction,
+    children,
+    sizes: normalize(shares),
+  };
+}
+
+/** The template of a layout, with what each pane was opened with. O(n). */
+export function toTemplate<S>(root: LayoutNode, specOf: (pane: PaneId) => S): Template<S> {
+  if (root.kind === "pane") return { kind: "pane", spec: specOf(root.id) };
+  return {
+    kind: "split",
+    direction: root.direction,
+    sizes: root.sizes,
+    children: root.children.map((child) => toTemplate(child, specOf)),
+  };
+}
