@@ -272,6 +272,20 @@ export class AppShell {
       theme: loadTheme(options.storage),
     };
     applyTheme(options.root, this.#state.theme);
+    // Under "system" the OS can switch light and dark at any time; the
+    // terminals re-read their colors then, as they do for a chosen theme.
+    const scheme = options.root.ownerDocument.defaultView?.matchMedia?.(
+      "(prefers-color-scheme: dark)",
+    );
+    if (scheme) {
+      const onScheme = () => {
+        if (this.#state.theme === "system") {
+          this.workspace.forEachTerminal((terminal) => terminal.refreshTheme());
+        }
+      };
+      scheme.addEventListener("change", onScheme);
+      this.#stopScheme = () => scheme.removeEventListener("change", onScheme);
+    }
 
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
@@ -341,6 +355,7 @@ export class AppShell {
 
   readonly #storage: Storage | undefined;
   readonly #root: HTMLElement;
+  #stopScheme: (() => void) | undefined;
   readonly #clipboard: TextClipboard | undefined;
   readonly #history: HistoryClient | undefined;
 
@@ -1296,6 +1311,7 @@ export class AppShell {
 
   dispose(): void {
     clearInterval(this.#recordingWatch);
+    this.#stopScheme?.();
     this.workspace.dispose();
     this.#listeners.clear();
   }
