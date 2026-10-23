@@ -57,6 +57,7 @@ describe("withSession", () => {
     const settings = {
       forwardAgent: true,
       history: false,
+      aiOutput: true,
       encoding: "Shift_JIS" as const,
       tmux: "work",
       env: [
@@ -68,6 +69,7 @@ describe("withSession", () => {
     expect(withSession(settings, sessionFields({}))).toEqual({
       forwardAgent: null,
       history: null,
+      aiOutput: null,
       encoding: null,
       tmux: null,
       env: null,
@@ -80,6 +82,7 @@ describe("withSession", () => {
       {
         forwardAgent: "inherit",
         history: "inherit",
+        aiOutput: "inherit",
         encoding: "inherit",
         tmux: "inherit",
         env: "X=a \r\nY=b=c\r\n",
@@ -100,6 +103,7 @@ describe("withSession", () => {
         {
           forwardAgent: "inherit",
           history: "inherit",
+          aiOutput: "inherit",
           encoding: "inherit",
           tmux: "inherit",
           env: "LANG",
@@ -112,6 +116,7 @@ describe("withSession", () => {
         {
           forwardAgent: "inherit",
           history: "inherit",
+          aiOutput: "inherit",
           encoding: "inherit",
           tmux: "inherit",
           env: "=x",

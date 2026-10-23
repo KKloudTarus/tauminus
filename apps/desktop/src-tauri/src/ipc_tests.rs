@@ -272,6 +272,47 @@ fn triggers_fire_on_lines_and_notify_only_from_the_backend_s_own_text() {
 }
 
 #[test]
+fn the_ai_assistant_is_off_and_takes_no_output_from_the_view() {
+    let (app, _dir) = app("ai");
+    let settings = call(&app, "ai_settings_get", json!({})).unwrap();
+    assert_eq!(settings["enabled"], false);
+    assert_eq!(settings["hasKey"], false);
+    // Off: nothing is asked, whatever the session.
+    let off = call(&app, "ai_ask", json!({"id": 1, "request": "ls"})).unwrap_err();
+    assert_eq!(off["code"], "not_allowed");
+    // Cleartext to another machine is refused.
+    let cleartext = call(
+        &app,
+        "ai_settings_set",
+        json!({"settings": {"enabled": true, "baseUrl": "http://10.0.0.5:11434/v1", "model": "m", "localOutput": false}}),
+    )
+    .unwrap_err();
+    assert_eq!(cleartext["code"], "invalid_argument");
+    let on = call(
+        &app,
+        "ai_settings_set",
+        json!({"settings": {"enabled": true, "baseUrl": "http://localhost:11434/v1", "model": "llama3", "localOutput": false}}),
+    )
+    .unwrap();
+    assert_eq!(on["loopback"], true);
+    assert_eq!(on["baseUrl"], "http://localhost:11434/v1");
+    // No such session: refused before any request.
+    let missing = call(&app, "ai_preview", json!({"id": 999})).unwrap_err();
+    assert_eq!(missing["code"], "not_found");
+    // An explanation names a session and a preview, and carries no text.
+    let missing = call(&app, "ai_explain", json!({"id": 999, "preview": 1})).unwrap_err();
+    assert_eq!(missing["code"], "not_found");
+    // The key needs the vault, which is locked here.
+    let locked = call(
+        &app,
+        "ai_key_set",
+        json!({"key": "sk-test", "baseUrl": "http://localhost:11434/v1"}),
+    )
+    .unwrap_err();
+    assert_eq!(locked["code"], "vault_locked");
+}
+
+#[test]
 fn filling_a_password_names_a_session_and_nothing_else() {
     let (app, _dir) = app("fill");
     // No such session: refused before the vault is asked.

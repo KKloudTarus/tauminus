@@ -52,7 +52,10 @@ export type Action =
   | "recordings.open"
   | "triggers.open"
   | "captures.open"
-  | "terminal.fillPassword";
+  | "terminal.fillPassword"
+  | "ai.ask"
+  | "ai.explain"
+  | "ai.settings";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -92,6 +95,9 @@ export const ACTIONS: readonly Action[] = [
   "triggers.open",
   "captures.open",
   "terminal.fillPassword",
+  "ai.ask",
+  "ai.explain",
+  "ai.settings",
 ];
 
 export type Platform = "mac" | "other";
@@ -137,6 +143,9 @@ const OTHER: Bindings = {
   "triggers.open": [],
   "captures.open": [],
   "terminal.fillPassword": ["ctrl+shift+l"],
+  "ai.ask": [],
+  "ai.explain": [],
+  "ai.settings": [],
 };
 
 const MAC: Bindings = {
@@ -178,6 +187,9 @@ const MAC: Bindings = {
   "triggers.open": [],
   "captures.open": [],
   "terminal.fillPassword": ["meta+shift+l"],
+  "ai.ask": [],
+  "ai.explain": [],
+  "ai.settings": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

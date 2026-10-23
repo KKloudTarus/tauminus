@@ -20,6 +20,7 @@ pub(crate) struct Memory {
     failing: StdMutex<Option<VaultError>>,
     history: Arc<StdMutex<Option<HistoryKeys>>>,
     recordings: Arc<StdMutex<Option<[u8; 32]>>>,
+    ai_key: Arc<StdMutex<Option<AiKey>>>,
 }
 
 struct MemoryOpen {
@@ -165,6 +166,15 @@ impl OpenVault for MemoryOpen {
             },
             made,
         ))
+    }
+
+    fn ai_key(&self) -> Result<Option<AiKey>, VaultError> {
+        Ok(self.owner.ai_key.lock().unwrap().clone())
+    }
+
+    fn set_ai_key(&mut self, key: Option<&AiKey>) -> Result<(), VaultError> {
+        self.owner.ai_key.lock().unwrap().clone_from(&key.cloned());
+        Ok(())
     }
 
     fn save(&mut self) -> Result<(), VaultError> {

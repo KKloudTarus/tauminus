@@ -411,3 +411,27 @@ fn recording_keys_are_made_once_and_outlive_a_password_change() {
     assert_eq!(*first.secret, *again.secret);
     assert_eq!(first.public, again.public);
 }
+
+#[test]
+fn the_ai_key_is_kept_with_its_origin_and_can_be_removed() {
+    use tauminus_app::vault::AiKey;
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    assert!(open.ai_key().unwrap().is_none());
+    open.set_ai_key(Some(&AiKey {
+        origin: "https://api.openai.com".into(),
+        key: secret("sk-test"),
+    }))
+    .unwrap();
+    open.save().unwrap();
+    let mut open = backend.unlock(&secret("correct horse")).unwrap();
+    let key = open.ai_key().unwrap().unwrap();
+    assert_eq!(key.origin, "https://api.openai.com");
+    assert_eq!(key.key.as_str(), "sk-test");
+    assert!(open.identities().unwrap().is_empty(), "not an identity");
+    assert!(!format!("{key:?}").contains("sk-test"));
+    open.set_ai_key(None).unwrap();
+    open.save().unwrap();
+    let open = backend.unlock(&secret("correct horse")).unwrap();
+    assert!(open.ai_key().unwrap().is_none());
+}

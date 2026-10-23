@@ -7,6 +7,7 @@
 //! session. It depends on no runtime, driver, or framework, so every rule here is
 //! testable without I/O.
 
+mod ai;
 mod flow;
 mod forward;
 mod guard;
@@ -26,6 +27,10 @@ mod telnet;
 mod terminal;
 mod trigger;
 
+pub use ai::{
+    AiAnswer, AiEndpoint, AiError, AiPrompt, Ask, AskContext, MAX_BASE_URL, MAX_MODEL, MAX_REQUEST,
+    answer, plain_output, prompt,
+};
 pub use flow::{FlowControl, FlowSignal, Watermarks};
 pub use forward::{
     Bind, BindAddress, Destination, Forward, ForwardError, ForwardRule, MAX_FORWARDS,

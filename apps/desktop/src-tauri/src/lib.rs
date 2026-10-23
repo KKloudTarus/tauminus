@@ -4,6 +4,7 @@
 //! Composition root: builds the adapters, hands them to the use cases, and
 //! exposes the use cases to the webview as IPC commands.
 
+mod ai;
 mod clipboard;
 mod commands;
 mod drops;
@@ -51,6 +52,13 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         commands::session_write,
         fill::session_fill_offer,
         fill::session_fill_password,
+        ai::ai_settings_get,
+        ai::ai_settings_set,
+        ai::ai_key_set,
+        ai::ai_key_clear,
+        ai::ai_ask,
+        ai::ai_preview,
+        ai::ai_explain,
         commands::session_write_bytes,
         commands::session_resize,
         commands::session_probe,
@@ -215,6 +223,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
     let recording_sessions = Arc::clone(&sessions);
     let fill_sessions = Arc::clone(&sessions);
+    let ai_sessions = Arc::clone(&sessions);
     app.manage(sessions);
 
     let store = Arc::new(JsonHostStore::new(config_dir.join("hosts.json")));
@@ -270,11 +279,37 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         hosts::Hosts::Unavailable(_) => None,
     };
     app.manage(fill::FillState(fill));
+    manage_assistant(app, ai_sessions, Arc::clone(&vault), &config_dir);
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(
         home.map(|home| OpenSshConfig::user(home, local)),
     ));
+}
+
+/// The AI assistant, off until the user turns it on; it needs the saved
+/// hosts to find whether a session's host lets it read its output.
+fn manage_assistant<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+    sessions: Arc<SessionManager>,
+    vault: Arc<Vault>,
+    config_dir: &std::path::Path,
+) {
+    let assistant = match &*app.state::<hosts::Hosts>() {
+        hosts::Hosts::Ready(book) => tauminus_ai::OpenAiCompatible::new().map(|transport| {
+            Arc::new(tauminus_app::Assistant::new(
+                sessions,
+                Arc::clone(book),
+                vault,
+                Arc::new(tauminus_store::JsonAiSettingsStore::new(
+                    config_dir.join("ai.json"),
+                )),
+                Arc::new(transport),
+            ))
+        }),
+        hosts::Hosts::Unavailable(_) => Err("saved hosts could not be read".to_owned()),
+    };
+    app.manage(ai::AiState(assistant));
 }
 
 pub fn run() -> anyhow::Result<()> {

@@ -31,6 +31,28 @@ export const commands = {
 	 *  the session showed more since, nothing is typed (`cancelled`).
 	 */
 	sessionFillPassword: (id: SessionHandle, seen: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("session_fill_password", { id, seen })),
+	aiSettingsGet: () => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_get")),
+	/**  Saves the settings. A new server address forgets the saved key. */
+	aiSettingsSet: (settings: AiSettingsSpec) => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_set", { settings })),
+	/**
+	 *  Saves the API key in the vault, for the server's address only;
+	 *  `base_url` is the address the form shows, which must be the saved one.
+	 */
+	aiKeySet: (key: string, baseUrl: string) => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_key_set", { key, baseUrl })),
+	aiKeyClear: () => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_key_clear")),
+	/**
+	 *  A command for what the user typed in session `id`. Sends nothing the
+	 *  session printed.
+	 */
+	aiAsk: (id: SessionHandle, request: string) => typedError<AiReplyView, CommandError>(__TAURI_INVOKE("ai_ask", { id, request })),
+	/**
+	 *  The output an explanation of session `id` would send, read by the
+	 *  backend from what the session showed; `not_allowed` where the session's
+	 *  host does not let the assistant read it.
+	 */
+	aiPreview: (id: SessionHandle) => typedError<AiPreviewView, CommandError>(__TAURI_INVOKE("ai_preview", { id })),
+	/**  Sends the explanation `preview` showed. */
+	aiExplain: (id: SessionHandle, preview: number) => typedError<AiReplyView, CommandError>(__TAURI_INVOKE("ai_explain", { id, preview })),
 	/**  Sends bytes that are not valid UTF-8, such as legacy mouse reports. */
 	sessionWriteBytes: (id: SessionHandle, data: number[]) => typedError<null, CommandError>(__TAURI_INVOKE("session_write_bytes", { id, data })),
 	sessionResize: (id: SessionHandle, size: GridSize) => typedError<null, CommandError>(__TAURI_INVOKE("session_resize", { id, size })),
@@ -307,6 +329,46 @@ export type ActiveRecording = {
 	recording: RecordingView,
 };
 
+/**  What an explanation would send, for the user to read before sending. */
+export type AiPreviewView = {
+	preview: number,
+	text: string,
+};
+
+/**  A model's answer, as plain text. */
+export type AiReplyView = {
+	text: string,
+	/**  One line the view may put on the prompt line without Enter. */
+	command: string | null,
+	/**
+	 *  The prod guard's reasons to look twice at `command`, with the
+	 *  built-in rules on for every host.
+	 */
+	findings: GuardFinding[],
+};
+
+export type AiSettingsSpec = {
+	enabled: boolean,
+	/**  Empty for no server. */
+	baseUrl: string,
+	model: string,
+	localOutput: boolean,
+};
+
+/**
+ *  The assistant's settings. The key is never shown, only whether one is
+ *  saved for the server as it is now.
+ */
+export type AiSettingsView = {
+	enabled: boolean,
+	baseUrl: string | null,
+	model: string | null,
+	localOutput: boolean,
+	hasKey: boolean,
+	/**  The server is on a loopback address (it may still be a tunnel). */
+	loopback: boolean,
+};
+
 /**  The user's reply to a prompt. */
 export type AnswerSpec = { kind: "trustHostKey"; remember: boolean } | { kind: "secret"; value: string } | { kind: "responses"; values: string[] } | { kind: "cancel" };
 
@@ -403,7 +465,12 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 /**  The vault must be unlocked first. */
 "vault_locked" | "wrong_password" | 
 /**  A system service, such as the OS keychain, is missing. */
-"unavailable" | "internal";
+"unavailable" | 
+/**
+ *  A setting forbids it, such as a host that does not let the AI
+ *  assistant read its output.
+ */
+"not_allowed" | "internal";
 
 export type ExitFilterSpec = "any" | "success" | "failure";
 
@@ -795,6 +862,11 @@ export type SettingsSpec = {
 	forwardAgent?: boolean | null,
 	/**  Record commands in the history; `null` inherits (on at the root). */
 	history?: boolean | null,
+	/**
+	 *  Let the AI assistant read this host's output; `null` inherits (off
+	 *  at the root).
+	 */
+	aiOutput?: boolean | null,
 	/**
 	 *  Variables sent before the shell starts. A host's value for a name
 	 *  wins over its groups'.

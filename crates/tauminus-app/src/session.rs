@@ -112,11 +112,62 @@ struct SessionControl {
     tap: TapSlot,
     /// Bytes of output the session has shown.
     received: AtomicU64,
-    /// The last of it, where a prompt would be.
-    tail: Mutex<Vec<u8>>,
+    /// The last of it: a prompt, or what the AI assistant may explain.
+    recent: Mutex<Recent>,
     /// `received` when a password was last filled. 0 at first, which no
     /// fill sees: a fill needs a prompt, so output.
     filled_at: AtomicU64,
+}
+
+/// Output a session keeps, from its end.
+pub const RECENT_OUTPUT: usize = 16 * 1024;
+
+/// The last [`RECENT_OUTPUT`] bytes of output, as a ring: a chunk costs
+/// O(min(chunk, `RECENT_OUTPUT`)) and moves nothing already kept.
+#[derive(Debug, Default)]
+struct Recent {
+    buf: Vec<u8>,
+    /// Where the oldest byte is, once `buf` is full.
+    start: usize,
+}
+
+impl Recent {
+    fn push(&mut self, chunk: &[u8]) {
+        if chunk.len() >= RECENT_OUTPUT {
+            self.buf.clear();
+            self.buf
+                .extend_from_slice(&chunk[chunk.len() - RECENT_OUTPUT..]);
+            self.start = 0;
+            return;
+        }
+        if self.buf.capacity() == 0 {
+            self.buf.reserve_exact(RECENT_OUTPUT);
+        }
+        let fill = (RECENT_OUTPUT - self.buf.len()).min(chunk.len());
+        self.buf.extend_from_slice(&chunk[..fill]);
+        let mut rest = &chunk[fill..];
+        // At most twice: up to the end, then from the front.
+        while !rest.is_empty() {
+            let n = (RECENT_OUTPUT - self.start).min(rest.len());
+            self.buf[self.start..self.start + n].copy_from_slice(&rest[..n]);
+            self.start = (self.start + n) % RECENT_OUTPUT;
+            rest = &rest[n..];
+        }
+    }
+
+    /// The last `n` bytes, oldest first. O(n).
+    fn last(&self, n: usize) -> Vec<u8> {
+        let (newer, older) = self.buf.split_at(self.start);
+        let skip = self.buf.len().saturating_sub(n);
+        let mut out = Vec::with_capacity(self.buf.len() - skip);
+        if skip < older.len() {
+            out.extend_from_slice(&older[skip..]);
+            out.extend_from_slice(newer);
+        } else {
+            out.extend_from_slice(&newer[skip - older.len()..]);
+        }
+        out
+    }
 }
 
 /// The tap, and whether the pump has ended: a tap put on after that would
@@ -238,10 +289,20 @@ impl SessionManager {
     }
 
     /// The last [`PROMPT_TAIL`] bytes of output, and how many came in all.
+    /// O(`PROMPT_TAIL`).
     pub fn tail(&self, id: SessionId) -> Result<(Vec<u8>, u64), SessionError> {
         let control = self.control(id)?;
-        let tail = lock(&control.tail);
-        Ok((tail.clone(), control.received.load(Ordering::Relaxed)))
+        let recent = lock(&control.recent);
+        Ok((
+            recent.last(PROMPT_TAIL),
+            control.received.load(Ordering::Relaxed),
+        ))
+    }
+
+    /// The last [`RECENT_OUTPUT`] bytes of output, kept in memory only.
+    /// O(`RECENT_OUTPUT`).
+    pub fn recent(&self, id: SessionId) -> Result<Vec<u8>, SessionError> {
+        Ok(lock(&self.control(id)?.recent).last(RECENT_OUTPUT))
     }
 
     /// Marks the output so far as filled at: `false` when it was already,
@@ -483,13 +544,7 @@ impl<S: OutputSink> Pump<S> {
         self.control
             .received
             .fetch_add(chunk.len() as u64, Ordering::Relaxed);
-        {
-            // O(PROMPT_TAIL) per chunk.
-            let mut tail = lock(&self.control.tail);
-            tail.extend_from_slice(&chunk[chunk.len().saturating_sub(PROMPT_TAIL)..]);
-            let over = tail.len().saturating_sub(PROMPT_TAIL);
-            tail.drain(..over);
-        }
+        lock(&self.control.recent).push(&chunk);
         for batch in self.batcher.push(chunk) {
             if matches!(self.deliver(batch), Step::Stop) {
                 return Step::Stop;

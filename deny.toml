@@ -52,6 +52,11 @@ allow = [
   "Zlib",
 ]
 confidence-threshold = 0.9
+# The Mozilla root list as data, which rustls-platform-verifier uses on
+# wasm32 only; no Tauminus build targets wasm32.
+exceptions = [
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+]
 
 [bans]
 multiple-versions = "warn"
@@ -64,6 +69,7 @@ deny = [
   { crate = "russh", wrappers = ["tauminus-ssh"], reason = "only the SSH adapter speaks the SSH protocol" },
   { crate = "encoding_rs", wrappers = ["tauminus-charset"], reason = "one place converts character sets" },
   { crate = "serialport", wrappers = ["tauminus-serial"], reason = "only the serial adapter opens ports" },
+  { crate = "reqwest", wrappers = ["tauminus-ai", "tauri"], reason = "only the AI adapter makes outbound HTTP requests" },
   { crate = "arboard", wrappers = ["tauminus-desktop"], reason = "the OS clipboard belongs to the desktop shell" },
   { crate = "keyring-core", wrappers = ["tauminus-store", "zbus-secret-service-keyring-store", "apple-native-keyring-store", "windows-native-keyring-store"], reason = "only the store adapter talks to the OS keychain" },
   { crate = "tauri", wrappers = ["tauminus-desktop", "tauri-specta", "tauri-plugin-notification"], reason = "Tauri belongs to the desktop shell; add each tauri-plugin-* crate here by name" },

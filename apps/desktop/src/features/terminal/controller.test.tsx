@@ -1217,6 +1217,62 @@ describe("TerminalController filling a password from the vault", () => {
   });
 });
 
+const writtenTo = (sessions: FakeSessions) =>
+  sessions.session.write.mock.calls.map(([data]) => data).join("");
+
+describe("TerminalController putting an AI's command on the line", () => {
+  it("types it as a paste, without Enter", async () => {
+    const { sessions, controller } = await running("db.example");
+    expect(controller.insertCommand("ls -la")).toBe(true);
+    await expect.poll(() => writtenTo(sessions)).toBe("ls -la");
+  });
+
+  it("refuses control characters, a full-screen program, and a line being typed", async () => {
+    const { sessions, controller } = await running("db.example");
+    expect(controller.insertCommand("ls\rrm -rf /")).toBe(false);
+    expect(controller.insertCommand("ls\u001b[2K")).toBe(false);
+    expect(controller.insertCommand("ls\u009b")).toBe(false);
+    expect(controller.insertCommand("")).toBe(false);
+    controller.terminal.write("\u001b[?1049h");
+    await vi.waitFor(() => expect(controller.terminal.buffer.active.type).toBe("alternate"));
+    expect(controller.insertCommand("ls")).toBe(false);
+    controller.terminal.write("\u001b[?1049l");
+    await vi.waitFor(() => expect(controller.terminal.buffer.active.type).toBe("normal"));
+    controller.type("cd ");
+    expect(controller.canInsertCommand).toBe(false);
+    expect(controller.insertCommand("ls")).toBe(false);
+    await expect.poll(() => writtenTo(sessions)).toBe("cd ");
+  });
+
+  it("keeps it to this pane when input is broadcast", async () => {
+    const { sessions, controller } = await running("db.example");
+    const heard: string[] = [];
+    controller.setInputListener((data) => heard.push(data));
+    expect(controller.insertCommand("ls -la")).toBe(true);
+    await expect.poll(() => writtenTo(sessions)).toBe("ls -la");
+    expect(heard).toEqual([]);
+    // A paste of the user's own still goes to every linked pane.
+    controller.terminal.paste("x");
+    expect(heard).toEqual(["x"]);
+  });
+
+  it("waits for the prompt where the shell marks it", async () => {
+    const { sessions, controller } = setup({ spec: sshTo("db.example"), record: () => {} });
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const show = (text: string) => sessions.events.onOutput(new TextEncoder().encode(text));
+    // A command runs: past the C mark, the shell is not at its prompt.
+    show("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    await vi.waitFor(() => expect(controller.canInsertCommand).toBe(true));
+    show("\u001b]133;C\u0007");
+    await vi.waitFor(() => expect(controller.canInsertCommand).toBe(false));
+    expect(controller.insertCommand("ls")).toBe(false);
+    show("\u001b]133;D;0\u0007\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    await vi.waitFor(() => expect(controller.canInsertCommand).toBe(true));
+  });
+});
+
 describe("mostUrgent", () => {
   it("takes the most urgent of a tab's panes", () => {
     expect(mostUrgent([])).toBe("idle");

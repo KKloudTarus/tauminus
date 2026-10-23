@@ -168,6 +168,14 @@ export class CommandRecorder {
     }
   }
 
+  /**
+   * Whether the shell waits for a command, as its marks (OSC 133) say;
+   * `undefined` for a shell that does not mark its prompts.
+   */
+  get atPrompt(): boolean | undefined {
+    return this.#integrated ? this.#atPrompt : undefined;
+  }
+
   /** Shell integration, OSC 133: `A` prompt, `B` input, `C` output, `D;n` done. */
   shellMark(data: string): void {
     if (this.#disposed) return;

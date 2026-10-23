@@ -9,4 +9,4 @@ disallowed-methods = [
 ]
 
 # Product and account names that read wrong in backticks.
-doc-valid-idents = ["WebKitGTK", "PuTTY", "LocalSystem", "SQLCipher", ".."]
+doc-valid-idents = ["WebKitGTK", "PuTTY", "LocalSystem", "SQLCipher", "OpenAI", ".."]

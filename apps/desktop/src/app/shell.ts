@@ -28,6 +28,7 @@ import type { FiredBatch, TriggerSource } from "@/features/terminal/trigger-watc
 import { visibleText } from "@/features/terminal/visible-text.ts";
 import type { HighlightSource } from "@/features/terminal/highlighter.ts";
 import type {
+  AiClient,
   FilesClient,
   ForwardsClient,
   HistoryClient,
@@ -98,7 +99,17 @@ export const ACTION_LABELS: Record<Action, string> = {
   "triggers.open": "Highlight sets and triggers",
   "captures.open": "Captured lines: what trigger rules kept",
   "terminal.fillPassword": "Type this host's password at its prompt",
+  "ai.ask": "Ask AI for a command",
+  "ai.explain": "Explain this pane's output with AI",
+  "ai.settings": "AI assistant settings",
 };
+
+export interface AssistantOpen {
+  mode: "ask" | "explain" | "settings";
+  pane: PaneId | undefined;
+  /** The pane's session when the dialog opened; none for settings alone. */
+  session: number | undefined;
+}
 
 interface ShellState {
   paletteOpen: boolean;
@@ -112,6 +123,11 @@ interface ShellState {
   recordingsOpen: boolean;
   triggersOpen: boolean;
   capturesOpen: boolean;
+  /**
+   * The AI assistant's dialog, and the pane it was opened from: its
+   * session is what it asks about, and where a command may be put.
+   */
+  assistant: AssistantOpen | undefined;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -156,6 +172,8 @@ export class AppShell {
   readonly serial: SerialClient | undefined;
   /** Session recordings, when this window keeps them. */
   readonly recordings: RecordingsClient | undefined;
+  /** The AI assistant, when this window has a backend for it. */
+  readonly ai: AiClient | undefined;
   /** Settles once a host pane's session is up and its startup snippets typed. */
   readonly #ready = new WeakMap<
     TerminalController,
@@ -193,6 +211,7 @@ export class AppShell {
     triggers?: TriggersClient;
     serial?: SerialClient;
     recordings?: RecordingsClient;
+    ai?: AiClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -231,6 +250,7 @@ export class AppShell {
     this.workspaces = new SavedWorkspaces(options.storage);
     this.serial = options.serial;
     this.recordings = options.recordings;
+    this.ai = options.ai;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -243,6 +263,7 @@ export class AppShell {
       recordingsOpen: false,
       triggersOpen: false,
       capturesOpen: false,
+      assistant: undefined,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -386,6 +407,36 @@ export class AppShell {
     if (!this.forwards) return;
     this.setForwardsOpen(true);
     void this.forwards.toggle(hostId, ruleId);
+  }
+
+  /**
+   * Opens the AI assistant on the focused pane. Asking and explaining need
+   * a pane with a session; settings do not.
+   */
+  openAssistant(mode: AssistantOpen["mode"]): void {
+    if (!this.ai) return;
+    const pane = this.workspace.activeTab?.focused;
+    const session = pane ? this.workspace.terminal(pane)?.sessionId : undefined;
+    const usable = mode === "settings" || session !== undefined;
+    this.#set({
+      ...this.#state,
+      assistant: { mode: usable ? mode : "settings", pane, session },
+    });
+  }
+
+  closeAssistant(): void {
+    if (!this.#state.assistant) return;
+    this.#set({ ...this.#state, assistant: undefined });
+    this.#focusActivePane();
+  }
+
+  /**
+   * Puts an AI's command on `pane`'s line without Enter; `false` when the
+   * pane is gone or not at a prompt, and nothing was typed.
+   */
+  insertSuggestion(pane: PaneId | undefined, command: string): boolean {
+    const controller = pane ? this.workspace.terminal(pane) : undefined;
+    return controller?.insertCommand(command) ?? false;
   }
 
   /** The focused pane types its host's password, after an unlock if need be. */
@@ -1137,6 +1188,15 @@ export class AppShell {
         return;
       case "terminal.fillPassword":
         this.#fillPassword();
+        return;
+      case "ai.ask":
+        this.openAssistant("ask");
+        return;
+      case "ai.explain":
+        this.openAssistant("explain");
+        return;
+      case "ai.settings":
+        this.openAssistant("settings");
         return;
       case "broadcast.off":
         this.broadcast.clear();
