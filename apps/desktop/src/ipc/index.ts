@@ -12,6 +12,7 @@ import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
+import type { RecordingsClient } from "./recordings.ts";
 import type { SessionClient } from "./sessions.ts";
 
 export {
@@ -87,6 +88,13 @@ export {
   tauriVault,
 } from "./vault.ts";
 export { type LinkOpener, tauriLinks } from "./links.ts";
+export {
+  type ActiveRecording,
+  type BookmarkSpec,
+  type RecordingView,
+  type RecordingsClient,
+  tauriRecordings,
+} from "./recordings.ts";
 export {
   type AnswerSpec,
   type EndpointSpec,
@@ -189,4 +197,25 @@ export async function filesClient(): Promise<FilesClient> {
     return (await import("./fake-files.ts")).fakeFiles();
   }
   return (await import("./files.ts")).tauriFiles;
+}
+
+/**
+ * Session recordings; the `e2e` build keeps them in memory, sealed to the
+ * fake vault, and offers `__tauminusSeedRecording(title, cast)` and
+ * `__tauminusCutRecordings()` to tests.
+ */
+export async function recordingsClient(): Promise<RecordingsClient> {
+  if (import.meta.env.MODE === "e2e") {
+    const vault = (await import("./fake-vault.ts")).sharedFakeVault();
+    const fake = (await import("./fake-recordings.ts")).fakeRecordings(() => !vault.unlocked());
+    Reflect.set(globalThis, "__tauminusSeedRecording", (title: string, cast: string) =>
+      fake.seed(title, cast),
+    );
+    Reflect.set(globalThis, "__tauminusCutRecordings", () => fake.cut());
+    Reflect.set(globalThis, "__tauminusHourLongCast", async (bytes: number) =>
+      (await import("./fake-recordings.ts")).fakeHourLongCast(bytes),
+    );
+    return fake;
+  }
+  return (await import("./recordings.ts")).tauriRecordings;
 }

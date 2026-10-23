@@ -15,6 +15,7 @@ mod hosts;
 mod keys;
 mod mosh;
 mod output;
+mod recording;
 mod serial;
 mod session;
 mod sftp;
@@ -43,6 +44,10 @@ pub use hosts::{
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
 pub use output::{OutputBatcher, ReadyBatches};
+pub use recording::{
+    Bookmark, MAX_BOOKMARK_TEXT, MAX_BOOKMARKS, RecordingMeta, Utf8Carry, cast_header, cast_output,
+    cast_resize,
+};
 pub use serial::{
     BAUD_RATES, Parity, SerialError, SerialFlow, SerialPortInfo, SerialSettings, StopBits,
 };

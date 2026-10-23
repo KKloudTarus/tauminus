@@ -443,6 +443,15 @@ pub trait TelnetConnector: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
 }
 
+/// Hears a session's output as the view gets it, and its size changes; for
+/// recording. Called on the session's pump: it must never wait.
+pub trait OutputTap: Send + Sync + 'static {
+    fn output(&self, bytes: &[u8]);
+    fn resize(&self, size: TerminalSize);
+    /// The session ended, or the tap was taken off.
+    fn end(&self);
+}
+
 /// Starts the local `mosh-client` toward a server the bootstrap started
 /// on `host`, on a PTY of its own.
 pub trait MoshClient: Send + Sync + 'static {

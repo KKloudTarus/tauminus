@@ -15,6 +15,7 @@ mod hosts;
 mod ipc;
 mod links;
 mod mosh;
+mod recordings;
 mod serial;
 mod snippets;
 mod ssh;
@@ -64,6 +65,16 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         snippets::host_startup,
         telnet::telnet_connect,
         mosh::mosh_connect,
+        recordings::recording_start,
+        recordings::recording_stop,
+        recordings::recordings_active,
+        recordings::recordings_list,
+        recordings::recording_read,
+        recordings::recording_checkpoints,
+        recordings::recording_save_checkpoints,
+        recordings::recording_bookmarks,
+        recordings::recording_save_bookmarks,
+        recordings::recording_delete,
         serial::serial_ports,
         serial::serial_open,
         hosts::hosts_import_ssh_config,
@@ -161,6 +172,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         Arc::clone(&sessions),
     ));
     app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
+    let recording_sessions = Arc::clone(&sessions);
     app.manage(sessions);
 
     let store = Arc::new(JsonHostStore::new(config_dir.join("hosts.json")));
@@ -209,6 +221,13 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         tauminus_domain::Retention::default(),
     ));
     app.manage(history);
+    app.manage(Arc::new(tauminus_app::recording::Recordings::new(
+        Arc::new(tauminus_store::FileRecordingStore::new(
+            config_dir.join("recordings"),
+        )),
+        Arc::clone(&vault),
+        recording_sessions,
+    )));
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(

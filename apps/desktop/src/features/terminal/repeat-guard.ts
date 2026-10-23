@@ -18,3 +18,26 @@ export function dropsRepeat(params: (number | number[])[], cols: number, rows: n
   const count = typeof first === "number" && first > 0 ? first : 1;
   return count > cols * rows;
 }
+
+/** A terminal's parser, as far as {@link hardenParser} uses it. */
+interface Guardable {
+  readonly cols: number;
+  readonly rows: number;
+  readonly parser: {
+    registerCsiHandler(
+      id: { final: string },
+      callback: (params: (number | number[])[]) => boolean,
+    ): unknown;
+  };
+}
+
+/**
+ * Puts every guard on output a terminal parses: the live pane's, and any
+ * that replays a recording of it, which holds what a host sent unfiltered.
+ * Runs before xterm.js's own handlers; returning true drops the sequence.
+ */
+export function hardenParser(term: Guardable): void {
+  term.parser.registerCsiHandler({ final: "b" }, (params) =>
+    dropsRepeat(params, term.cols, term.rows),
+  );
+}
