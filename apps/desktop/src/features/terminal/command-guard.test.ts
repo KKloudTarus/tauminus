@@ -9,6 +9,7 @@ import {
   CHECK_TIMEOUT_MS,
   CommandGuard,
   ECHO_WAIT_MS,
+  SECRET_PROMPT,
   type GuardRequest,
   type GuardSource,
   type Marker,
@@ -157,6 +158,23 @@ function setup(answer = false) {
   };
   return { screen, source, sent, asked, markers, guard, type, link, arrive };
 }
+
+describe("SECRET_PROMPT", () => {
+  it.each([
+    "[sudo] password for me: ",
+    "[sudo] password for me: ****",
+    "Password for 'https://u@github.com': ",
+    "Enter MFA code for arn:aws:iam::1:mfa/me: ",
+    "Unseal Key (will be hidden): ",
+    "Enter passphrase for key '/home/me/.ssh/id': ",
+    "Password: (press TAB for no echo) ",
+  ])("knows %j asks for a secret", (line) => expect(SECRET_PROMPT.test(line)).toBe(true));
+
+  it.each(["me@host:~/passwords$ ", "$ echo token", "Do you want to continue? [Y/n] y"])(
+    "knows %j does not",
+    (line) => expect(SECRET_PROMPT.test(line)).toBe(false),
+  );
+});
 
 describe("readLine", () => {
   it("reads from the anchor to the end of the wrapped line", () => {
@@ -518,6 +536,75 @@ describe("CommandGuard", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("sends Ctrl+C at once and drops what waited behind a check", async () => {
+    const { sent, guard, source } = setup(true);
+    let release: (() => void) | undefined;
+    const check = source.check.bind(source);
+    source.check = async (lines) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return check(lines);
+    };
+    for (const key of [...keys("ls"), "\r", ...keys("pwd")]) guard.input(key);
+    await expect.poll(() => release).toBeDefined();
+    guard.interrupt();
+    expect(sent.join("")).toBe("ls\u0003");
+    release?.();
+    await guard.settled();
+    // Nothing under check or behind it is asked about or sent: Ctrl+C
+    // cleared that line.
+    expect(sent.join("")).toBe("ls\u0003");
+  });
+
+  it("sends nothing a question approved after Ctrl+C was about", async () => {
+    let approve: ((yes: boolean) => void) | undefined;
+    const screen = new FakeScreen();
+    const source = new FakeSource();
+    const sent: string[] = [];
+    const guard = new CommandGuard(source, {
+      send: (data) => sent.push(data),
+      parsed: () => 0,
+      nextParse: async () => false,
+      screen: () => screen,
+      mark: () => new FakeMarker(0),
+      ask: () =>
+        new Promise<boolean>((resolve) => {
+          approve = resolve;
+        }),
+    });
+    guard.input("echo a\rrm -rf /\r");
+    await expect.poll(() => approve).toBeDefined();
+    guard.interrupt();
+    approve?.(true);
+    await guard.settled();
+    expect(sent).toEqual(["\u0003"]);
+  });
+
+  it.each([
+    ["while Enter waits for the echo", ["r", "m", "\r"]],
+    ["while a paste is checked", ["echo a\recho b\r"]],
+  ])("drops what Ctrl+C cut off %s", async (_, input) => {
+    const { sent, guard, source, link } = setup(true);
+    link.lagging = true;
+    let release: (() => void) | undefined;
+    const check = source.check.bind(source);
+    source.check = async (lines) => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return check(lines);
+    };
+    for (const key of input) guard.input(key);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    guard.interrupt();
+    release?.();
+    await guard.settled();
+    expect(sent.at(-1)).toBe("\u0003");
+    expect(sent).not.toContain("\r");
+    expect(sent.join("")).not.toContain("echo");
   });
 
   it("drops input after dispose", async () => {
