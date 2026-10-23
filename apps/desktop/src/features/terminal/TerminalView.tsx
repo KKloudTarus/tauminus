@@ -122,7 +122,8 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
       {recording && (
         <output
           data-testid="recording-status"
-          className="absolute top-1 right-3 rounded bg-red-600 px-1.5 text-[10px] font-semibold text-white"
+          // Below the Broadcast badge when the pane has one, so both show.
+          className="chip chip-prod absolute top-2 right-3 in-data-[broadcast=true]:top-9"
           title="This pane is being recorded"
         >
           ● REC
