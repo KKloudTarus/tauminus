@@ -197,6 +197,10 @@ struct File {
     /// an edited key fails the next unlock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     history: Option<String>,
+    /// The session recordings' X25519 public key, as `history` is for
+    /// commands; bound by the manifest the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recordings: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -244,6 +248,7 @@ pub struct OpenVault {
     /// replaces another window's change (such as a new password).
     seen: Option<u64>,
     history: Option<[u8; KEY_LEN]>,
+    recordings: Option<[u8; KEY_LEN]>,
 }
 
 impl std::fmt::Debug for OpenVault {
@@ -295,6 +300,7 @@ impl VaultFile {
             records: BTreeMap::new(),
             seen: None,
             history: None,
+            recordings: None,
         };
         let wrapping = derive(password, &salt, kdf)?;
         vault.set_slot(SlotKind::Password, &wrapping)?;
@@ -333,6 +339,16 @@ impl VaultFile {
             .0
             .history
             .map(|text| decode_exact::<KEY_LEN>(&text, "history key"))
+            .transpose()
+    }
+
+    /// The recordings' public key, without unlocking; as trusted as
+    /// [`Self::history_public`].
+    pub fn recordings_public(&self) -> Result<Option<[u8; KEY_LEN]>, VaultError> {
+        self.read()?
+            .0
+            .recordings
+            .map(|text| decode_exact::<KEY_LEN>(&text, "recordings key"))
             .transpose()
     }
 
@@ -394,10 +410,14 @@ fn open(
         records,
         manifest,
         history,
+        recordings,
         ..
     } = file;
     let history = history
         .map(|text| decode_exact::<KEY_LEN>(&text, "history key"))
+        .transpose()?;
+    let recordings = recordings
+        .map(|text| decode_exact::<KEY_LEN>(&text, "recordings key"))
         .transpose()?;
     // Checked on every path, so a keychain unlock never carries costs the
     // password path would refuse into the next save.
@@ -419,7 +439,7 @@ fn open(
         &data_key,
         &nonce,
         &decode(&manifest.data)?,
-        &manifest_aad(&id, costs, &salt, history.as_ref()),
+        &manifest_aad(&id, costs, &salt, history.as_ref(), recordings.as_ref()),
     )
     .map_err(|()| VaultError::Corrupt("the record list fails its check".into()))?;
     if *listed != manifest_of(&records) {
@@ -454,6 +474,7 @@ fn open(
         records: opened,
         seen: Some(seen),
         history,
+        recordings,
     })
 }
 
@@ -523,6 +544,15 @@ impl OpenVault {
 
     pub fn history_public(&self) -> Option<[u8; KEY_LEN]> {
         self.history
+    }
+
+    /// The recordings' public key, to save with the vault.
+    pub fn set_recordings_public(&mut self, key: [u8; KEY_LEN]) {
+        self.recordings = Some(key);
+    }
+
+    pub fn recordings_public(&self) -> Option<[u8; KEY_LEN]> {
+        self.recordings
     }
 
     pub fn has_keychain_key(&self) -> bool {
@@ -601,7 +631,13 @@ impl OpenVault {
             &self.data_key,
             &nonce,
             &manifest_of(&records),
-            &manifest_aad(&self.id, self.kdf, &self.salt, self.history.as_ref()),
+            &manifest_aad(
+                &self.id,
+                self.kdf,
+                &self.salt,
+                self.history.as_ref(),
+                self.recordings.as_ref(),
+            ),
         )?;
         let out = File {
             manifest: Sealed {
@@ -619,6 +655,7 @@ impl OpenVault {
             slots: self.slots.clone(),
             records,
             history: self.history.map(|key| encode(&key)),
+            recordings: self.recordings.map(|key| encode(&key)),
         };
         let mut bytes = serde_json::to_vec_pretty(&out)
             .map_err(|e| VaultError::Io(std::io::Error::other(e)))?;
@@ -708,7 +745,13 @@ fn slot_aad(vault: &str, kind: SlotKind, kdf: Kdf, salt: &[u8]) -> Vec<u8> {
 
 /// Binds the KDF costs and salt too, so every unlock path, the keychain's
 /// included, refuses a file whose costs or salt were edited.
-fn manifest_aad(vault: &str, kdf: Kdf, salt: &[u8], history: Option<&[u8; KEY_LEN]>) -> Vec<u8> {
+fn manifest_aad(
+    vault: &str,
+    kdf: Kdf,
+    salt: &[u8],
+    history: Option<&[u8; KEY_LEN]>,
+    recordings: Option<&[u8; KEY_LEN]>,
+) -> Vec<u8> {
     let Kdf {
         memory_kib,
         iterations,
@@ -722,6 +765,10 @@ fn manifest_aad(vault: &str, kdf: Kdf, salt: &[u8], history: Option<&[u8; KEY_LE
     // history keep their additional data and still open.
     if let Some(key) = history {
         let _ = write!(aad, "/history/{}", hex(key));
+    }
+    // The same for recordings.
+    if let Some(key) = recordings {
+        let _ = write!(aad, "/recordings/{}", hex(key));
     }
     aad.into_bytes()
 }

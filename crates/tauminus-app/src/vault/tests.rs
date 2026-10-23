@@ -19,6 +19,7 @@ pub(crate) struct Memory {
     /// Saves fail with this, as on a full disk or another window's write.
     failing: StdMutex<Option<VaultError>>,
     history: Arc<StdMutex<Option<HistoryKeys>>>,
+    recordings: Arc<StdMutex<Option<[u8; 32]>>>,
 }
 
 struct MemoryOpen {
@@ -79,6 +80,10 @@ impl VaultBackend for Arc<Memory> {
 
     fn history_public(&self) -> Option<[u8; 32]> {
         self.history.lock().unwrap().as_ref().map(|k| k.public)
+    }
+
+    fn recordings_public(&self) -> Option<[u8; 32]> {
+        *self.recordings.lock().unwrap()
     }
 
     fn new_id(&self) -> String {
@@ -147,6 +152,19 @@ impl OpenVault for MemoryOpen {
 
     fn forget_previous_history_keys(&mut self, _known: &[PreviousHistoryKeys]) -> bool {
         false
+    }
+
+    fn recording_keys(&mut self) -> Result<(RecordingKeys, bool), VaultError> {
+        let mut slot = self.owner.recordings.lock().unwrap();
+        let made = slot.is_none();
+        let public = *slot.get_or_insert([4; 32]);
+        Ok((
+            RecordingKeys {
+                secret: Zeroizing::new([6; 32]),
+                public,
+            },
+            made,
+        ))
     }
 
     fn save(&mut self) -> Result<(), VaultError> {
