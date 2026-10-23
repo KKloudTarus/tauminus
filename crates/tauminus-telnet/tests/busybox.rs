@@ -170,25 +170,34 @@ async fn a_shell_over_telnet_sees_the_window_size_echoes_and_ends() {
 
 #[tokio::test]
 async fn a_closed_port_is_refused() {
-    // Bound and never listening: the port stays closed, and no other test
-    // can take it, as one could a port bound and let go.
-    let closed = tokio::net::TcpSocket::new_v4().unwrap();
-    closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let port = closed.local_addr().unwrap().port();
-    let target = TelnetTarget {
-        host: HostName::parse("127.0.0.1").unwrap(),
-        port,
-        encoding: Encoding::Utf8,
-    };
-    let error = TcpTelnetConnector::default()
-        .connect(&target, TerminalSize::default())
-        .await
-        .err()
-        .unwrap();
-    assert!(
-        matches!(error, tauminus_app::ports::ConnectError::Refused { .. }),
-        "{error}"
-    );
+    // A port bound and let go is closed, until a test beside this one
+    // takes it: then the connect works, and another port is tried. (A port
+    // kept bound without listening is refused on Linux but times out on
+    // macOS.)
+    for _ in 0..5 {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let target = TelnetTarget {
+            host: HostName::parse("127.0.0.1").unwrap(),
+            port,
+            encoding: Encoding::Utf8,
+        };
+        let Err(error) = TcpTelnetConnector::default()
+            .connect(&target, TerminalSize::default())
+            .await
+        else {
+            continue;
+        };
+        assert!(
+            matches!(error, tauminus_app::ports::ConnectError::Refused { .. }),
+            "{error}"
+        );
+        return;
+    }
+    panic!("every closed port was taken before it could be tried");
 }
 
 #[tokio::test]
