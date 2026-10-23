@@ -53,13 +53,14 @@ async fn roundtrip(io: &mut BoxedIo, greeting: &[u8]) {
 #[tokio::test]
 async fn direct_connects_to_the_endpoint() {
     let server = echo_server(b"SSH-2.0-test\r\n").await;
-    let mut io = open(
+    let (mut io, peer) = open(
         &Route::Direct,
         &endpoint("127.0.0.1", server.port()),
         TIMEOUT,
     )
     .await
     .unwrap();
+    assert_eq!(peer, Some(std::net::Ipv4Addr::LOCALHOST.into()));
     roundtrip(&mut io, b"SSH-2.0-test\r\n").await;
 }
 
@@ -158,9 +159,11 @@ async fn socks5_tunnels_to_the_endpoint_by_name() {
         host: HostName::parse("127.0.0.1").unwrap(),
         port: proxy.port(),
     };
-    let mut io = open(&route, &endpoint("localhost", server.port()), TIMEOUT)
+    let (mut io, peer) = open(&route, &endpoint("localhost", server.port()), TIMEOUT)
         .await
         .unwrap();
+    // Through a proxy, the address is the proxy's business.
+    assert_eq!(peer, None);
     roundtrip(&mut io, b"SSH-2.0-socks\r\n").await;
 }
 
@@ -173,9 +176,11 @@ async fn socks5_sends_address_literals_as_addresses() {
         host: HostName::parse("127.0.0.1").unwrap(),
         port: proxy.port(),
     };
-    let mut io = open(&route, &endpoint("127.0.0.1", server.port()), TIMEOUT)
+    let (mut io, peer) = open(&route, &endpoint("127.0.0.1", server.port()), TIMEOUT)
         .await
         .unwrap();
+    // Through a proxy, the address is the proxy's business.
+    assert_eq!(peer, None);
     roundtrip(&mut io, b"SSH-2.0-socks\r\n").await;
     assert_eq!(*types.lock().unwrap(), [1], "IPv4 address type");
 }
@@ -238,9 +243,11 @@ async fn http_connect_keeps_bytes_that_follow_the_header() {
         host: HostName::parse("127.0.0.1").unwrap(),
         port: proxy.port(),
     };
-    let mut io = open(&route, &endpoint("127.0.0.1", server.port()), TIMEOUT)
+    let (mut io, peer) = open(&route, &endpoint("127.0.0.1", server.port()), TIMEOUT)
         .await
         .unwrap();
+    // Through a proxy, the address is the proxy's business.
+    assert_eq!(peer, None);
     roundtrip(&mut io, b"SSH-2.0-http\r\n\0").await;
 }
 
@@ -296,13 +303,15 @@ async fn http_connect_rejects_an_endless_header() {
 #[tokio::test]
 async fn proxy_command_carries_the_stream_over_stdio() {
     // `cat` echoes stdin to stdout: a stand-in for `nc %h %p`.
-    let mut io = open(
+    let (mut io, peer) = open(
         &Route::ProxyCommand("cat".into()),
         &endpoint("db", 22),
         TIMEOUT,
     )
     .await
     .unwrap();
+    // Through a proxy, the address is the proxy's business.
+    assert_eq!(peer, None);
     io.write_all(b"ping").await.unwrap();
     let mut back = [0u8; 4];
     io.read_exact(&mut back).await.unwrap();
@@ -312,13 +321,15 @@ async fn proxy_command_carries_the_stream_over_stdio() {
 #[cfg(unix)]
 #[tokio::test]
 async fn proxy_command_receives_expanded_tokens() {
-    let mut io = open(
+    let (mut io, peer) = open(
         &Route::ProxyCommand("printf '%h:%p:%r'".into()),
         &endpoint("db.internal", 2222),
         TIMEOUT,
     )
     .await
     .unwrap();
+    // Through a proxy, the address is the proxy's business.
+    assert_eq!(peer, None);
     let mut out = String::new();
     io.read_to_string(&mut out).await.unwrap();
     assert_eq!(out, "db.internal:2222:u");

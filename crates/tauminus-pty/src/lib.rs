@@ -215,6 +215,9 @@ fn command_for(shell: &LocalShell) -> CommandBuilder {
     remove_launcher_environment(&mut command);
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
+    for (name, value) in &shell.env {
+        command.env(name, value);
+    }
     command
 }
 

@@ -583,3 +583,23 @@ async fn only_ssh_hosts_join_a_groups_tmux_session() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_mosh_host_behind_a_proxy_cannot_open_but_keeps_its_files() {
+    let book = book().await;
+    let mut db = parse_host(&book, input("db", "db")).unwrap();
+    db.id = HostId::parse("db").unwrap();
+    db.protocol = Protocol::Mosh;
+    db.settings.route = Some(Route::ProxyCommand("nc %h %p".into()));
+    let inventory = book.edit(|i| i.put_host(db)).await.unwrap();
+    let view = view(&inventory);
+    let host = &view.hosts[0];
+    assert!(host.target.is_some(), "files and forwards still reach it");
+    assert!(
+        host.problem
+            .as_deref()
+            .is_some_and(|p| p.contains("jump host")),
+        "{:?}",
+        host.problem
+    );
+}

@@ -230,6 +230,8 @@ pub(crate) enum ProtocolSpec {
     Ssh,
     /// Clear text, for devices and old systems.
     Telnet,
+    /// Signs in over SSH; the terminal runs over Mosh.
+    Mosh,
 }
 
 impl From<ProtocolSpec> for Protocol {
@@ -237,6 +239,7 @@ impl From<ProtocolSpec> for Protocol {
         match spec {
             ProtocolSpec::Ssh => Self::Ssh,
             ProtocolSpec::Telnet => Self::Telnet,
+            ProtocolSpec::Mosh => Self::Mosh,
         }
     }
 }
@@ -246,6 +249,7 @@ impl From<Protocol> for ProtocolSpec {
         match protocol {
             Protocol::Ssh => Self::Ssh,
             Protocol::Telnet => Self::Telnet,
+            Protocol::Mosh => Self::Mosh,
         }
     }
 }
@@ -349,6 +353,17 @@ fn view(inventory: &Inventory) -> HostsView {
                     (None, problem.map(|e| e.to_string()))
                 } else {
                     match resolved {
+                        // Files and forwards could still go that way, but
+                        // the terminal could not: UDP goes straight to it.
+                        Ok(target)
+                            if h.protocol == Protocol::Mosh
+                                && (!target.jumps.is_empty() || target.route != Route::Direct) =>
+                        {
+                            (
+                                Some(SshTargetSpec::from(&target)),
+                                Some(tauminus_app::MoshOpenError::Routed.to_string()),
+                            )
+                        }
                         Ok(target) => (Some(SshTargetSpec::from(&target)), None),
                         Err(problem) => (None, Some(problem)),
                     }

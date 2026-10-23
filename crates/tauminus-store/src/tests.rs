@@ -282,7 +282,7 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 7, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 8, "hosts": []}"#.to_owned()),
         (
             "tmux name",
             r#"{"version": 6, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"tmux": "a b"}}]}"#.to_owned(),
@@ -563,4 +563,23 @@ mod snippet_file {
             Err(StoreError::Conflict)
         ));
     }
+}
+
+#[tokio::test]
+async fn a_mosh_host_loads_back_at_version_7() {
+    use tauminus_domain::Protocol;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut host = inventory
+        .host(&HostId::parse("db1").unwrap())
+        .unwrap()
+        .clone();
+    host.protocol = Protocol::Mosh;
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    let bytes = std::fs::read(dir.0.join("hosts.json")).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 7);
+    assert_eq!(store.load().await.unwrap(), inventory);
 }

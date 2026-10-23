@@ -300,6 +300,10 @@ pub enum Protocol {
     Ssh,
     /// Clear text; for devices and old systems that speak nothing else.
     Telnet,
+    /// Signs in over SSH, then the terminal runs over Mosh (UDP), which
+    /// survives a changing network and shows typing at once. Files,
+    /// forwards, and key installs still go over SSH.
+    Mosh,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -552,7 +556,7 @@ impl Inventory {
             .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
         // SSH, and with it files, forwards, and key installs, never
         // reaches a Telnet host, whatever asks.
-        if host.protocol != Protocol::Ssh {
+        if host.protocol == Protocol::Telnet {
             return Err(HostsError::Target(format!(
                 "{} is a Telnet host",
                 host.label.as_str()

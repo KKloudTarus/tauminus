@@ -14,6 +14,7 @@ fn shell(program: &str, args: &[&str]) -> LocalShell {
         program: Some(program.into()),
         args: args.iter().map(ToString::to_string).collect(),
         cwd: None,
+        env: Vec::new(),
     }
 }
 

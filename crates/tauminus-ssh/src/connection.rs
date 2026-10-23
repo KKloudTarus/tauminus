@@ -33,6 +33,8 @@ pub(crate) struct Connection {
     /// Whether the last hop serves agent channels for a shell that asks.
     forward_agent: bool,
     runtime: tokio::runtime::Handle,
+    /// The destination's address, when it was reached straight over TCP.
+    peer: Option<std::net::IpAddr>,
 }
 
 impl std::fmt::Debug for Connection {
@@ -52,6 +54,7 @@ impl Connection {
         routes: Arc<Routes>,
         forward_agent: bool,
         ledger: crate::pipe::Ledger,
+        peer: Option<std::net::IpAddr>,
     ) -> Arc<Self> {
         assert!(!hops.is_empty(), "a connection has at least one hop");
         Arc::new_cyclic(|me| Self {
@@ -62,7 +65,13 @@ impl Connection {
             ledger: Arc::new(ledger),
             forward_agent,
             runtime: tokio::runtime::Handle::current(),
+            peer,
         })
+    }
+
+    /// The address the destination was reached at, if straight over TCP.
+    pub(crate) const fn peer(&self) -> Option<std::net::IpAddr> {
+        self.peer
     }
 
     /// The hop that reaches the target.

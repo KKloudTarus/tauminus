@@ -383,13 +383,26 @@ function HostForm({
       <Field label="Protocol">
         <select
           value={protocol}
-          onChange={(e) => setProtocol(e.target.value === "telnet" ? "telnet" : "ssh")}
+          onChange={(e) =>
+            setProtocol(
+              e.target.value === "telnet" ? "telnet" : e.target.value === "mosh" ? "mosh" : "ssh",
+            )
+          }
           className={FIELD}
         >
           <option value="ssh">SSH</option>
+          <option value="mosh">Mosh</option>
           <option value="telnet">Telnet</option>
         </select>
       </Field>
+      {protocol === "mosh" && (
+        <p className="mb-3 text-xs opacity-70">
+          Signs in over SSH with this host's settings, then the terminal runs over Mosh, which keeps
+          going across sleep and network changes and shows typing at once. Needs Mosh installed here
+          and on the host, UDP ports 60000 to 61000 open to it, and a direct route: no jump host or
+          proxy. Files and forwards still use SSH. Not available on Windows.
+        </p>
+      )}
       {protocol === "telnet" && (
         <p className="mb-3 text-xs text-red-600 dark:text-red-400">
           Telnet sends everything, passwords included, as clear text. It connects on port 23 unless
@@ -472,7 +485,7 @@ function HostForm({
       />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
       <ForwardFields rows={rules} onChange={setRules} />
-      {snippets && protocol === "ssh" && (
+      {snippets && protocol !== "telnet" && (
         <StartupFields value={startup} snippets={snippets} onChange={setStartup} />
       )}
     </Form>

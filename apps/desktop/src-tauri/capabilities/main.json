@@ -21,6 +21,7 @@
     "allow-snippet-command",
     "allow-host-startup",
     "allow-telnet-connect",
+    "allow-mosh-connect",
     "allow-serial-ports",
     "allow-serial-open",
     "allow-host-save",

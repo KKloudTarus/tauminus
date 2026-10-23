@@ -25,7 +25,8 @@ export function ForwardsDialog({
   useEffect(() => store.watch(), [store]);
   useEffect(() => dialog.current?.focus(), []);
   // Forwards run over SSH; a host switched to Telnet keeps its rules unused.
-  const withRules = hosts.filter((host) => host.protocol === "ssh" && host.forwards.length > 0);
+  // Mosh hosts forward over SSH too.
+  const withRules = hosts.filter((host) => host.protocol !== "telnet" && host.forwards.length > 0);
 
   return (
     <div className="fixed inset-0 z-20 flex items-start justify-center bg-black/30 pt-[10vh]">

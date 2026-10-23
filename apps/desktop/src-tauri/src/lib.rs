@@ -14,6 +14,7 @@ mod history;
 mod hosts;
 mod ipc;
 mod links;
+mod mosh;
 mod serial;
 mod snippets;
 mod ssh;
@@ -62,6 +63,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         snippets::snippet_command,
         snippets::host_startup,
         telnet::telnet_connect,
+        mosh::mosh_connect,
         serial::serial_ports,
         serial::serial_open,
         hosts::hosts_import_ssh_config,
@@ -149,6 +151,13 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     ));
     app.manage(tauminus_app::TelnetSessions::new(
         Arc::new(tauminus_telnet::TcpTelnetConnector::default()),
+        Arc::clone(&sessions),
+    ));
+    app.manage(tauminus_app::MoshSessions::new(
+        Arc::clone(&connector),
+        Arc::new(tauminus_mosh::NativeMoshClient::new(Arc::new(
+            NativePtyLauncher,
+        ))),
         Arc::clone(&sessions),
     ));
     app.manage(SshSessions::new(connector, Arc::clone(&sessions)));

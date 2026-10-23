@@ -32,6 +32,8 @@ export type SessionSpec =
   | { kind: "host"; hostId: string; label: string; target: SshTargetSpec }
   /** A saved Telnet host: clear text, no host key, no prompts. */
   | { kind: "telnet"; hostId: string; label: string }
+  /** A saved host signed in to over SSH, its terminal carried by Mosh. */
+  | { kind: "mosh"; hostId: string; label: string }
   /** A serial port and its line settings. */
   | { kind: "serial"; port: SerialSpec };
 
@@ -121,9 +123,11 @@ export const tauriSessions: SessionClient = {
           .catch((error: unknown) => console.warn("prompt reply failed", error));
       };
       opening =
-        spec.kind === "host"
-          ? commands.hostConnect(spec.hostId, size, output, exit, prompts)
-          : commands.sshOpen(spec.target, size, output, exit, prompts);
+        spec.kind === "mosh"
+          ? commands.moshConnect(spec.hostId, size, output, exit, prompts)
+          : spec.kind === "host"
+            ? commands.hostConnect(spec.hostId, size, output, exit, prompts)
+            : commands.sshOpen(spec.target, size, output, exit, prompts);
     }
     const id = await unwrap(opening);
     return {

@@ -138,7 +138,7 @@ Goal: Termius Starter parity on desktop.
 - [x] Auto-reconnect after sleep or network change, reattach `tmux` when the host uses it
 - [x] Telnet transport (RFC 854, NAWS, TTYPE, ECHO)
 - [x] Serial transport with port enumeration, baud and framing settings
-- [ ] Mosh on macOS and Linux through the upstream `mosh-client`
+- [x] Mosh on macOS and Linux through the upstream `mosh-client`
 - [x] Character encoding per host
 
 ### Exit criteria

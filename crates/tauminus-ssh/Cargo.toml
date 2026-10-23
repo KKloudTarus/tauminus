@@ -53,6 +53,9 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# The Mosh test bootstraps over a real sshd, which lives in these tests.
+tauminus-mosh.workspace = true
+tauminus-pty.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 
 [lints]

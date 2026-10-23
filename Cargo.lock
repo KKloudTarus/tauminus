@@ -5171,6 +5171,7 @@ dependencies = [
  "specta-typescript",
  "tauminus-app",
  "tauminus-domain",
+ "tauminus-mosh",
  "tauminus-presence",
  "tauminus-pty",
  "tauminus-serial",
@@ -5191,6 +5192,16 @@ name = "tauminus-domain"
 version = "0.0.0"
 dependencies = [
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "tauminus-mosh"
+version = "0.0.0"
+dependencies = [
+ "tauminus-app",
+ "tauminus-domain",
+ "tauminus-pty",
+ "tokio",
 ]
 
 [[package]]
@@ -5249,6 +5260,8 @@ dependencies = [
  "tauminus-app",
  "tauminus-charset",
  "tauminus-domain",
+ "tauminus-mosh",
+ "tauminus-pty",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

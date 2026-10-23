@@ -824,3 +824,19 @@ fn a_host_joins_its_groups_tmux_session_unless_it_turns_it_off() {
     assert!(TmuxSession::parse("a;b").is_err());
     assert!(TmuxSession::parse("").is_err());
 }
+
+#[test]
+fn a_mosh_host_signs_in_over_ssh_and_has_no_telnet_target() {
+    use crate::Protocol;
+    let mut inventory = Inventory::default();
+    let mut db = host("db", None);
+    db.protocol = Protocol::Mosh;
+    inventory.put_host(db).unwrap();
+    let id = HostId::parse("db").unwrap();
+    let me = UserName::parse("me").unwrap();
+    // The bootstrap, files, and forwards all use this.
+    assert!(inventory.resolve_route(&id, &me).is_ok());
+    assert!(inventory.telnet_target(&id).is_err());
+    // A Mosh host does not join tmux: only an SSH terminal runs it.
+    assert_eq!(inventory.tmux(&id).unwrap(), None);
+}
