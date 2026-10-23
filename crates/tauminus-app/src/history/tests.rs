@@ -226,6 +226,15 @@ async fn opening_applies_the_size_cap() {
         history.record(entry(&format!("cmd{n}"))).await.unwrap();
     }
     vault.unlock(secret("correct horse")).await.unwrap();
+    // The prune runs in the background, after the one the first open
+    // started if that one is still going.
+    history.search(query("")).await.unwrap();
+    for _ in 0..500 {
+        if memory.rows.lock().unwrap().len() <= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     // Each entry is "cmdN" + "out" + "web": 10 bytes; two fit.
     assert_eq!(
         found(&history.search(query("")).await.unwrap()),
