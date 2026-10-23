@@ -22,6 +22,8 @@ import { VaultStore } from "@/features/vault/vault-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
 import { SnippetsStore } from "@/features/snippets/snippets-store.ts";
+import { TriggersStore } from "@/features/triggers/triggers-store.ts";
+import type { HighlightSource } from "@/features/terminal/highlighter.ts";
 import type {
   FilesClient,
   ForwardsClient,
@@ -36,6 +38,7 @@ import type {
   SerialSpec,
   SnippetView,
   SnippetsClient,
+  TriggersClient,
   TextClipboard,
   VaultClient,
 } from "@/ipc/index.ts";
@@ -86,6 +89,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "serial.open": "Open a serial port",
   "recording.toggle": "Record this pane, or stop recording it",
   "recordings.open": "Recordings: play back recorded sessions",
+  "triggers.open": "Highlight sets: colour what output matches",
 };
 
 interface ShellState {
@@ -98,6 +102,7 @@ interface ShellState {
   workspacesOpen: boolean;
   serialOpen: boolean;
   recordingsOpen: boolean;
+  triggersOpen: boolean;
   /**
    * A snippet waiting for its placeholders to be filled in, and the saved
    * hosts to run it on, if it runs on hosts rather than the focused pane.
@@ -126,6 +131,8 @@ export class AppShell {
   readonly forwards: ForwardsStore | undefined;
   /** Saved snippets, when this window has a backend for them. */
   readonly snippets: SnippetsStore | undefined;
+  /** Highlight sets, when this window has a backend for them. */
+  readonly triggers: TriggersStore | undefined;
   /** The panes that type together. */
   readonly broadcast = new Broadcast();
   /** Sets of tabs saved to open again. */
@@ -168,6 +175,7 @@ export class AppShell {
     forwards?: ForwardsClient;
     files?: FilesClient;
     snippets?: SnippetsClient;
+    triggers?: TriggersClient;
     serial?: SerialClient;
     recordings?: RecordingsClient;
     renderer?: RendererPreference;
@@ -194,6 +202,17 @@ export class AppShell {
       ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
       : undefined;
     this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
+    this.triggers = options.triggers
+      ? new TriggersStore(options.triggers, () => this.#refreshHighlights())
+      : undefined;
+    // A host or group may name other sets now.
+    let hostsSeen = this.hosts.getSnapshot().view;
+    this.hosts.subscribe(() => {
+      const { view } = this.hosts.getSnapshot();
+      if (view === hostsSeen) return;
+      hostsSeen = view;
+      this.#refreshHighlights();
+    });
     this.workspaces = new SavedWorkspaces(options.storage);
     this.serial = options.serial;
     this.recordings = options.recordings;
@@ -207,6 +226,7 @@ export class AppShell {
       workspacesOpen: false,
       serialOpen: false,
       recordingsOpen: false,
+      triggersOpen: false,
       snippetToFill: undefined,
       snippetHosts: undefined,
       files: undefined,
@@ -222,6 +242,7 @@ export class AppShell {
         ...(spec ? { spec } : {}),
         ...(savedHostId(spec) ? { guard: this.hosts.guardFor(savedHostId(spec) ?? "") } : {}),
         ...(this.#history ? { record: this.#recorderFor(spec) } : {}),
+        ...(this.triggers ? { highlights: this.#highlightsFor(spec) } : {}),
         mac: this.platform === "mac",
         ...(links
           ? {
@@ -336,6 +357,40 @@ export class AppShell {
     if (!this.forwards) return;
     this.setForwardsOpen(true);
     void this.forwards.toggle(hostId, ruleId);
+  }
+
+  setTriggersOpen(open: boolean): void {
+    if (this.#state.triggersOpen === open) return;
+    if (open && !this.triggers?.getSnapshot().loaded) void this.triggers?.load();
+    this.#set({ ...this.#state, triggersOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Where a pane's highlight rules come from: its saved host's, or the defaults. */
+  #highlightsFor(spec: SessionSpec | undefined): HighlightSource {
+    const client = this.triggers?.client;
+    const host = savedHostId(spec) ?? null;
+    return {
+      prepare: async () => {
+        if (!client) return { handle: 0, styles: [] };
+        try {
+          return await client.prepare(host);
+        } catch (error) {
+          // A host deleted while its pane is open: the pane is a session
+          // with no saved host now, and gets the defaults.
+          if (host !== null && error instanceof SessionCommandError && error.code === "not_found") {
+            return client.prepare(null);
+          }
+          throw error;
+        }
+      },
+      scan: (handle, lines) => client?.scan(handle, lines) ?? Promise.resolve([]),
+    };
+  }
+
+  /** Every pane matches again with the rules saved now. */
+  #refreshHighlights(): void {
+    this.workspace.forEachTerminal((controller) => controller.refreshHighlights());
   }
 
   setSnippetsOpen(open: boolean): void {
@@ -968,6 +1023,9 @@ export class AppShell {
         return;
       case "recordings.open":
         this.setRecordingsOpen(true);
+        return;
+      case "triggers.open":
+        this.setTriggersOpen(true);
         return;
       case "broadcast.off":
         this.broadcast.clear();
