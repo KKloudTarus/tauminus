@@ -231,7 +231,7 @@ export class CommandGuard {
       this.#typed = "";
     } else if (data === KILL_WORD) {
       this.#typed = this.#typed.replace(/\S*\s*$/u, "");
-    } else if (data !== "" && !Array.from(data).some((c) => isControl(c, true))) {
+    } else if (data !== "" && !ANY_CONTROL.test(data)) {
       this.#typed += data;
     } else {
       this.#typedValid = false;
@@ -452,14 +452,16 @@ function merge(findings: readonly GuardFinding[]): GuardFinding[] {
  * A C0 control or DEL. Tab and newline count only when `all` is set: a
  * pasted line keeps them as text, and a line editor reads the rest as keys.
  */
-function isControl(char: string, all = false): boolean {
-  const code = char.codePointAt(0) ?? 0;
-  if (!all && (char === "\t" || char === "\n")) return false;
-  return code < 0x20 || code === 0x7f;
-}
+/** C0 controls and DEL, but tab and newline: what acts as a key, not text. */
+// oxlint-disable-next-line no-control-regex -- matching controls is the point
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/u;
+/** The same, tab and newline included. */
+// oxlint-disable-next-line no-control-regex -- matching controls is the point
+const ANY_CONTROL = /[\u0000-\u001f\u007f]/u;
 
+/** One regex pass: a 1 MiB paste costs milliseconds, in each guarded pane it reaches. */
 function hasControl(text: string): boolean {
-  return Array.from(text).some((c) => isControl(c));
+  return CONTROL.test(text);
 }
 
 /**
@@ -496,15 +498,7 @@ function unbracketed(data: string): string {
 
 /** The text between controls other than tab and newline. */
 function splitAtControls(text: string): string[] {
-  const pieces = [""];
-  for (const char of text) {
-    if (isControl(char)) {
-      pieces.push("");
-    } else {
-      pieces[pieces.length - 1] += char;
-    }
-  }
-  return pieces;
+  return text.split(CONTROL);
 }
 
 /** Endings of common prompts: `# ` for root, `$ `, `% ` for zsh, `> `. */
