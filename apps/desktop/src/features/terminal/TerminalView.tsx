@@ -90,7 +90,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
         <p
           role="alert"
           data-testid={fill.kind === "echoed" ? "password-echoed" : "password-failed"}
-          className="absolute right-3 bottom-2 max-w-[70%] rounded bg-amber-500 px-2 py-1 text-xs text-black shadow"
+          className="absolute right-3 bottom-2 max-w-[70%] rounded-md bg-warn px-2 py-1 text-xs font-medium text-black shadow"
         >
           {fill.kind === "echoed"
             ? "The host showed what was typed: it may not have asked for a password. Ctrl+U clears the line before Enter."
@@ -104,7 +104,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
           tabIndex={-1}
           data-testid="password-fill"
           title={`Types the vault password for ${fill.login}, without Enter`}
-          className="absolute right-3 bottom-2 rounded border border-current/20 bg-background px-2 py-1 text-xs shadow hover:bg-current/10"
+          className="btn btn-sm absolute right-3 bottom-2 bg-background text-xs shadow"
           onClick={() => {
             void controller.fillPassword().then((outcome) => {
               if (outcome === "locked") {
