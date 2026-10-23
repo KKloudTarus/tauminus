@@ -46,6 +46,7 @@ fn input(label: &str, address: &str) -> HostInput {
         tags: vec![],
         settings: SettingsSpec::default(),
         forwards: None,
+        startup: None,
     }
 }
 
@@ -356,7 +357,21 @@ async fn forwarding_rules_save_list_and_survive_an_edit_that_omits_them() {
     }]);
     let host = parse_host(&book, db).unwrap();
     let id = host.id.to_string();
-    let listed = view(&book.edit(|i| put_host(i, host, false)).await.unwrap());
+    let listed = view(
+        &book
+            .edit(|i| {
+                put_host(
+                    i,
+                    host,
+                    Keep {
+                        forwards: false,
+                        startup: true,
+                    },
+                )
+            })
+            .await
+            .unwrap(),
+    );
     let rules = &listed.hosts[0].forwards;
     assert_eq!(rules.len(), 1);
     assert!(rules[0].id.is_some(), "a new rule gets an id");
@@ -366,7 +381,21 @@ async fn forwarding_rules_save_list_and_survive_an_edit_that_omits_them() {
     let mut renamed = input("DB primary", "db.internal");
     renamed.id = Some(id.clone());
     let host = parse_host(&book, renamed).unwrap();
-    let listed = view(&book.edit(|i| put_host(i, host, true)).await.unwrap());
+    let listed = view(
+        &book
+            .edit(|i| {
+                put_host(
+                    i,
+                    host,
+                    Keep {
+                        forwards: true,
+                        startup: true,
+                    },
+                )
+            })
+            .await
+            .unwrap(),
+    );
     assert_eq!(listed.hosts[0].label, "DB primary");
     assert_eq!(listed.hosts[0].forwards.len(), 1);
 
@@ -375,8 +404,53 @@ async fn forwarding_rules_save_list_and_survive_an_edit_that_omits_them() {
     cleared.id = Some(id);
     cleared.forwards = Some(vec![]);
     let host = parse_host(&book, cleared).unwrap();
-    let listed = view(&book.edit(|i| put_host(i, host, false)).await.unwrap());
+    let listed = view(
+        &book
+            .edit(|i| {
+                put_host(
+                    i,
+                    host,
+                    Keep {
+                        forwards: false,
+                        startup: true,
+                    },
+                )
+            })
+            .await
+            .unwrap(),
+    );
     assert_eq!(listed.hosts[0].forwards.len(), 0);
+}
+
+#[tokio::test]
+async fn startup_snippets_save_and_survive_an_edit_that_omits_them() {
+    let book = book().await;
+    let mut db = input("DB", "db.internal");
+    db.startup = Some(vec!["tmux".into(), "env".into()]);
+    let host = parse_host(&book, db).unwrap();
+    let id = host.id.to_string();
+    let keep = |startup| Keep {
+        forwards: true,
+        startup,
+    };
+    let listed = view(&book.edit(|i| put_host(i, host, keep(false))).await.unwrap());
+    assert_eq!(listed.hosts[0].startup, ["tmux", "env"]);
+
+    let mut renamed = input("DB primary", "db.internal");
+    renamed.id = Some(id.clone());
+    let host = parse_host(&book, renamed).unwrap();
+    let listed = view(&book.edit(|i| put_host(i, host, keep(true))).await.unwrap());
+    assert_eq!(listed.hosts[0].startup, ["tmux", "env"]);
+
+    let mut twice = input("DB", "db.internal");
+    twice.id = Some(id.clone());
+    twice.startup = Some(vec!["a".into(), "a".into()]);
+    let host = parse_host(&book, twice).unwrap();
+    assert!(book.edit(|i| put_host(i, host, keep(false))).await.is_err());
+    let mut bad = input("DB", "db.internal");
+    bad.id = Some(id);
+    bad.startup = Some(vec!["not an id".into()]);
+    assert!(parse_host(&book, bad).is_err());
 }
 
 #[tokio::test]

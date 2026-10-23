@@ -256,18 +256,24 @@ export class TerminalController {
       this.#recorder?.shellMark(data);
       return false;
     });
-    this.terminal.onData((raw) => {
-      const data = defusePaste(raw);
-      if (this.#guard) {
-        this.#guard.input(data);
-      } else {
-        this.#recorder?.input(data);
-        this.#input.push({ kind: "text", data });
-      }
-    });
+    this.terminal.onData((raw) => this.type(defusePaste(raw)));
     this.terminal.onBinary((data) =>
       this.#input.push({ kind: "bytes", data: binaryStringToBytes(data) }),
     );
+  }
+
+  /**
+   * Sends `data` as typed keys: through the prod guard when the host has
+   * one, which asks before anything with Enter in it runs, and into the
+   * history as the user's own input would go.
+   */
+  type(data: string): void {
+    if (this.#guard) {
+      this.#guard.input(data);
+    } else {
+      this.#recorder?.input(data);
+      this.#input.push({ kind: "text", data });
+    }
   }
 
   get status(): TerminalStatus {

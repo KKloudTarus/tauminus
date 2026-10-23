@@ -7,6 +7,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import type { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { matchRules, ruleChoices } from "@/features/forwards/rules.ts";
 import { ACTIONS, type Action, displayChord } from "@/features/keymap/keymap.ts";
+import { type SnippetsStore, snippetTitle } from "@/features/snippets/snippets-store.ts";
 import type { HostView } from "@/ipc/index.ts";
 
 import { ACTION_LABELS, type AppShell } from "./shell.ts";
@@ -51,6 +52,7 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
             </Command.Item>
           );
         })}
+        {paletteOpen && shell.snippets && <SnippetItems shell={shell} snippets={shell.snippets} />}
         {paletteOpen && shell.forwards && <RuleItems shell={shell} forwards={shell.forwards} />}
       </Command.List>
     </Command.Dialog>
@@ -92,3 +94,40 @@ function RuleItems({ shell, forwards }: { shell: AppShell; forwards: ForwardsSto
 }
 
 const RULE_ITEMS = 50;
+
+/**
+ * "Run snippet" for those whose folder and name hold every word typed, at
+ * most {@link SNIPPET_ITEMS}. O(S) per keystroke, S ≤ 2000.
+ */
+function SnippetItems({ shell, snippets }: { shell: AppShell; snippets: SnippetsStore }) {
+  const all = useSyncExternalStore(snippets.subscribe, snippets.getSnapshot).snippets;
+  const search = useCommandState((state) => state.search);
+  const titled = useMemo(
+    () =>
+      all.map((s) => ({ id: s.id, title: snippetTitle(s), key: snippetTitle(s).toLowerCase() })),
+    [all],
+  );
+  const words = search.toLowerCase().split(/\s+/u).filter(Boolean);
+  return titled
+    .filter((s) => words.every((w) => `run snippet: ${s.key}`.includes(w)))
+    .slice(0, SNIPPET_ITEMS)
+    .map(({ id, title }) => {
+      const label = `Run snippet: ${title}`;
+      return (
+        <Command.Item
+          key={id}
+          // Unique, so two snippets with one name are told apart.
+          value={`${label}\u0000${id}`}
+          onSelect={() => {
+            shell.setPaletteOpen(false);
+            shell.chooseSnippet(id);
+          }}
+          className="flex cursor-default items-center rounded px-3 py-2 data-[selected=true]:bg-current/10"
+        >
+          {label}
+        </Command.Item>
+      );
+    });
+}
+
+const SNIPPET_ITEMS = 50;

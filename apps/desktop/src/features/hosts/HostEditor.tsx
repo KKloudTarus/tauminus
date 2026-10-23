@@ -10,6 +10,7 @@ import type {
   HostView,
   IdentityView,
   SettingsSpec,
+  SnippetView,
 } from "@/ipc/index.ts";
 
 import { ForwardFields } from "@/features/forwards/ForwardFields.tsx";
@@ -189,11 +190,14 @@ export function EditorDialog({
   store,
   editing,
   identities = NO_IDENTITIES,
+  snippets,
   onClose,
 }: {
   store: HostsStore;
   editing: Editing;
   identities?: readonly IdentityView[];
+  /** Snippets to start with; without them the choice is not shown or saved. */
+  snippets?: readonly SnippetView[];
   onClose: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -214,6 +218,7 @@ export function EditorDialog({
           store={store}
           host={editing.host}
           identities={identities}
+          snippets={snippets}
           titleId={titleId}
           onDone={onClose}
         />
@@ -234,12 +239,14 @@ function HostForm({
   store,
   host,
   identities,
+  snippets,
   titleId,
   onDone,
 }: {
   store: HostsStore;
   host: HostView | undefined;
   identities: readonly IdentityView[];
+  snippets: readonly SnippetView[] | undefined;
   titleId: string;
   onDone: () => void;
 }) {
@@ -259,6 +266,7 @@ function HostForm({
   const [guard, setGuard] = useState(() => guardFields(host?.settings.guard));
   const [session, setSession] = useState(() => sessionFields(host?.settings));
   const [rules, setRules] = useState(() => (host?.forwards ?? []).map(ruleRow));
+  const [startup, setStartup] = useState<readonly string[]>(() => host?.startup ?? []);
   const [error, setError] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
@@ -297,6 +305,8 @@ function HostForm({
           guard,
         ),
         forwards,
+        // Without the library this window cannot show them; keep them as saved.
+        ...(snippets ? { startup: [...startup] } : {}),
       });
       onDone();
     } catch (failure) {
@@ -409,6 +419,7 @@ function HostForm({
       />
       <GuardFields value={guard} onChange={setGuard} inherited="Inherit (on when tagged prod)" />
       <ForwardFields rows={rules} onChange={setRules} />
+      {snippets && <StartupFields value={startup} snippets={snippets} onChange={setStartup} />}
     </Form>
   );
 }
@@ -762,5 +773,83 @@ function Form({
         </button>
       </div>
     </form>
+  );
+}
+
+/** Most startup snippets a host runs, as the backend allows. */
+const MAX_STARTUP = 8;
+
+/** The snippets typed into each new shell on the host, in order. */
+export function StartupFields({
+  value,
+  snippets,
+  onChange,
+}: {
+  value: readonly string[];
+  snippets: readonly SnippetView[];
+  onChange: (value: readonly string[]) => void;
+}) {
+  const selectId = useId();
+  const byId = new Map(snippets.map((s) => [s.id, s]));
+  const left = snippets.filter((s) => !value.includes(s.id));
+  return (
+    <fieldset className="flex flex-col gap-1 rounded border border-current/15 p-2">
+      <legend className="px-1">Startup snippets</legend>
+      {value.length === 0 && (
+        <p className="opacity-60">Each new shell on this host can start by running snippets.</p>
+      )}
+      <ol aria-label="Startup snippets" className="flex flex-col gap-1">
+        {value.map((id, i) => {
+          const name = byId.get(id)?.name ?? `${id} (deleted)`;
+          return (
+            <li key={id} className="flex items-center gap-2">
+              <span className="w-5 text-right opacity-60">{i + 1}.</span>
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              <button
+                type="button"
+                className="rounded px-2 hover:bg-current/10 disabled:opacity-40"
+                aria-label={`Run ${name} earlier`}
+                disabled={i === 0}
+                onClick={() => {
+                  const next = [...value];
+                  [next[i - 1], next[i]] = [id, value[i - 1] ?? id];
+                  onChange(next);
+                }}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="rounded px-2 hover:bg-current/10"
+                aria-label={`Remove ${name}`}
+                onClick={() => onChange(value.filter((other) => other !== id))}
+              >
+                ×
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+      {left.length > 0 && value.length < MAX_STARTUP && (
+        <label htmlFor={selectId} className="flex items-center gap-2">
+          Add
+          <select
+            id={selectId}
+            value=""
+            onChange={(e) => {
+              if (e.target.value) onChange([...value, e.target.value]);
+            }}
+            className={FIELD}
+          >
+            <option value="">Choose a snippet</option>
+            {left.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.folder ? `${s.folder} / ${s.name}` : s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </fieldset>
   );
 }

@@ -156,6 +156,17 @@ describe("TerminalController with TerminalView", () => {
       .toBe("ls -la");
   });
 
+  it("types a snippet as keys on a host without a guard", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.type("uptime\r");
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data).join(""))
+      .toBe("uptime\r");
+  });
+
   it("removes escapes from inside a bracketed paste before the shell sees it", async () => {
     const { sessions, controller } = setup();
     await mount(controller);
@@ -575,6 +586,22 @@ describe("TerminalController with the prod guard", () => {
     await expect
       .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
       .toContain("echo a\recho b\r");
+  });
+
+  it("asks before a snippet typed into it runs", async () => {
+    const { sessions, controller } = guarded();
+    const view = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.type("systemctl restart nginx\r");
+    await expect
+      .poll(() => view.getByRole("heading").query()?.textContent)
+      .toBe("Paste 1 line into db-prod?");
+    expect(sessions.session.write.mock.calls.map(([data]) => data)).toEqual([]);
+    await view.getByRole("button", { name: "Paste" }).click();
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
+      .toContain("systemctl restart nginx\r");
   });
 
   it("answers no to a pending question when disposed", async () => {

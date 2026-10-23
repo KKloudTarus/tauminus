@@ -16,6 +16,8 @@ import {
 } from "./HostEditor.tsx";
 import { HostsStore } from "./hosts-store.ts";
 
+const snippet = (id: string) => ({ id, name: id, folder: null, body: "true", variables: [] });
+
 describe("withEdits", () => {
   it("keeps what the form does not show", () => {
     const base = {
@@ -117,6 +119,44 @@ describe("EditorDialog", () => {
     const saved = store.getSnapshot().view.hosts[0]!;
     expect(saved.guarded).toBe(true);
     expect(saved.settings.guard).toEqual({ enabled: true, allow: [], deny: ["systemctl stop *"] });
+  });
+
+  it("orders startup snippets, and keeps them when the library is not loaded", async () => {
+    const client = fakeHosts();
+    await client.saveHost({ label: "db", address: "db.internal", startup: ["tmux"] });
+    const store = new HostsStore(client);
+    await store.load();
+    const host = store.getSnapshot().view.hosts[0]!;
+
+    // Without the library the field is not shown, and the save keeps them.
+    let closed = false;
+    const blind = await render(
+      <EditorDialog
+        store={store}
+        editing={{ kind: "host", host }}
+        onClose={() => (closed = true)}
+      />,
+    );
+    await expect.element(blind.getByText("Startup snippets")).not.toBeInTheDocument();
+    await blind.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => closed).toBe(true);
+    expect(store.getSnapshot().view.hosts[0]!.startup).toEqual(["tmux"]);
+    await blind.unmount();
+
+    closed = false;
+    const screen = await render(
+      <EditorDialog
+        store={store}
+        editing={{ kind: "host", host: store.getSnapshot().view.hosts[0]! }}
+        snippets={[snippet("tmux"), snippet("env")]}
+        onClose={() => (closed = true)}
+      />,
+    );
+    await screen.getByRole("combobox", { name: "Add" }).selectOptions("env");
+    await screen.getByRole("button", { name: "Run env earlier" }).click();
+    await screen.getByRole("button", { name: "Save" }).click();
+    await expect.poll(() => closed).toBe(true);
+    expect(store.getSnapshot().view.hosts[0]!.startup).toEqual(["env", "tmux"]);
   });
 
   it("saves an edit without dropping the route or methods", async () => {

@@ -104,6 +104,7 @@ export function fakeHosts(): HostsClient {
       forwards: (input.forwards ?? hosts.find((h) => h.id === input.id)?.forwards ?? []).map(
         (rule) => Object.assign({}, rule, { id: rule.id ?? id() }),
       ),
+      startup: input.startup ?? hosts.find((h) => h.id === input.id)?.startup ?? [],
     };
     if (!host.label || !host.address) throw new Error("label and address are required");
     hosts = [...hosts.filter((h) => h.id !== host.id), host];

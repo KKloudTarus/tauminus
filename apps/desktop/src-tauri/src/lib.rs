@@ -14,17 +14,22 @@ mod history;
 mod hosts;
 mod ipc;
 mod links;
+mod snippets;
 mod ssh;
 mod vault;
 
 use std::sync::Arc;
 
 use tauminus_app::vault::Vault;
-use tauminus_app::{HostBook, LocalShells, SessionConfig, SessionManager, SshSessions};
+use tauminus_app::{
+    HostBook, LocalShells, SessionConfig, SessionManager, SnippetBook, SshSessions,
+};
 use tauminus_pty::NativePtyLauncher;
 use tauminus_ssh::{AgentSource, HostKeyStore, OpenSshConfig, RusshConnector};
 use tauminus_store::vault::VaultFile;
-use tauminus_store::{FileHistoryBackend, FileVaultBackend, JsonHostStore, OsKeychain};
+use tauminus_store::{
+    FileHistoryBackend, FileVaultBackend, JsonHostStore, JsonSnippetStore, OsKeychain,
+};
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
 use tracing::info;
@@ -48,6 +53,11 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         hosts::group_save,
         hosts::group_delete,
         hosts::ssh_config_aliases,
+        snippets::snippets_list,
+        snippets::snippet_save,
+        snippets::snippet_delete,
+        snippets::snippet_command,
+        snippets::host_startup,
         hosts::hosts_import_ssh_config,
         ssh::host_connect,
         forwards::forward_start,
@@ -138,6 +148,16 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
             // Keep the file as it is; saving now would destroy it.
             tracing::error!(error = %e, "saved hosts unavailable");
             hosts::Hosts::Unavailable(e.to_string())
+        }
+    });
+    let store = Arc::new(JsonSnippetStore::new(config_dir.join("snippets.json")));
+    let library = tauri::async_runtime::block_on(SnippetBook::open(store));
+    app.manage(match library {
+        Ok(book) => snippets::Snippets::Ready(Arc::new(book)),
+        Err(e) => {
+            // Keep the file as it is; saving now would destroy it.
+            tracing::error!(error = %e, "saved snippets unavailable");
+            snippets::Snippets::Unavailable(e.to_string())
         }
     });
     let backend = FileVaultBackend::new(

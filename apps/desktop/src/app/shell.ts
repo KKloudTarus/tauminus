@@ -18,6 +18,7 @@ import { HostsStore } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
+import { SnippetsStore } from "@/features/snippets/snippets-store.ts";
 import type {
   FilesClient,
   ForwardsClient,
@@ -27,6 +28,8 @@ import type {
   LinkOpener,
   SessionClient,
   SessionSpec,
+  SnippetView,
+  SnippetsClient,
   TextClipboard,
   VaultClient,
 } from "@/ipc/index.ts";
@@ -63,6 +66,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "history.open": "Search the command history",
   "forwards.open": "Port forwarding",
   "files.open": "Files on this host (SFTP)",
+  "snippets.open": "Snippets",
 };
 
 interface ShellState {
@@ -71,6 +75,9 @@ interface ShellState {
   vaultOpen: boolean;
   historyOpen: boolean;
   forwardsOpen: boolean;
+  snippetsOpen: boolean;
+  /** A snippet waiting for its placeholders to be filled in, if any. */
+  snippetToFill: SnippetView | undefined;
   /** The host whose files are open, if any. */
   files: { host: HostView; store: FilesStore } | undefined;
   sidebarOpen: boolean;
@@ -90,6 +97,8 @@ export class AppShell {
   readonly files: FilesClient | undefined;
   /** Port forwarding, when this window has a backend for it. */
   readonly forwards: ForwardsStore | undefined;
+  /** Saved snippets, when this window has a backend for them. */
+  readonly snippets: SnippetsStore | undefined;
   /** A connect waiting for the vault to unlock. */
   #afterUnlock: (() => void) | undefined;
   readonly keymap: Keymap;
@@ -110,6 +119,7 @@ export class AppShell {
     history?: HistoryClient;
     forwards?: ForwardsClient;
     files?: FilesClient;
+    snippets?: SnippetsClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -133,12 +143,15 @@ export class AppShell {
     this.forwards = options.forwards
       ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
       : undefined;
+    this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
       vaultOpen: false,
       historyOpen: false,
       forwardsOpen: false,
+      snippetsOpen: false,
+      snippetToFill: undefined,
       files: undefined,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
       theme: loadTheme(options.storage),
@@ -164,6 +177,7 @@ export class AppShell {
           : {}),
       });
       controller.setKeyHandler((event) => this.handleKey(event));
+      if (spec?.kind === "host") this.#startupOn(controller, spec.hostId);
       return controller;
     });
   }
@@ -237,6 +251,85 @@ export class AppShell {
     if (!this.forwards) return;
     this.setForwardsOpen(true);
     void this.forwards.toggle(hostId, ruleId);
+  }
+
+  setSnippetsOpen(open: boolean): void {
+    if (this.#state.snippetsOpen === open) return;
+    // Loaded at start and kept current by each change; a failed load retries.
+    if (open && !this.snippets?.getSnapshot().loaded) void this.snippets?.load();
+    this.#set({ ...this.#state, snippetsOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Runs a snippet in the focused pane, asking first for its placeholders. */
+  chooseSnippet(id: string): void {
+    const snippet = this.snippets?.find(id);
+    if (!snippet) return;
+    if (snippet.variables.length > 0) {
+      this.#set({ ...this.#state, snippetsOpen: false, snippetToFill: snippet });
+      return;
+    }
+    this.#set({ ...this.#state, snippetsOpen: false });
+    void this.runSnippet(id, {});
+  }
+
+  closeSnippetForm(): void {
+    if (this.#state.snippetToFill === undefined) return;
+    this.#set({ ...this.#state, snippetToFill: undefined });
+    this.#focusActivePane();
+  }
+
+  /**
+   * Types a snippet into the focused pane as keys, through the prod guard
+   * on a guarded host, which asks before it runs.
+   */
+  async runSnippet(id: string, values: Record<string, string>): Promise<void> {
+    const snippets = this.snippets;
+    const controller = this.#activeController();
+    this.closeSnippetForm();
+    if (!snippets) return;
+    if (!controller) {
+      this.hosts.notify("Open a terminal to run a snippet in");
+      return;
+    }
+    try {
+      controller.type(await snippets.client.command(id, values));
+    } catch (error) {
+      this.hosts.notify(`Snippet: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.#focusActivePane();
+  }
+
+  /**
+   * Types a host's startup snippets each time its session comes up,
+   * including after a reconnect. A host with none costs no call.
+   */
+  #startupOn(controller: TerminalController, hostId: string): void {
+    const snippets = this.snippets;
+    if (!snippets) return;
+    let was = controller.getStatus().kind;
+    controller.subscribe(() => {
+      const now = controller.getStatus().kind;
+      const started = now === "running" && was !== "running";
+      was = now;
+      if (!started) return;
+      const host = this.hosts.getSnapshot().view.hosts.find((h) => h.id === hostId);
+      if (!host || host.startup.length === 0) return;
+      snippets.client
+        .startup(hostId)
+        .then(({ text, skipped }) => {
+          if (text) controller.type(text);
+          for (const s of skipped) {
+            const name = snippets.find(s.id)?.name ?? s.id;
+            this.hosts.notify(`${host.label}: startup snippet ${name} skipped: ${s.reason}`);
+          }
+        })
+        .catch((error: unknown) =>
+          this.hosts.notify(
+            `${host.label}: startup snippets did not run: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
+    });
   }
 
   /** The history client, when this window keeps one. */
@@ -317,6 +410,9 @@ export class AppShell {
         return;
       case "forwards.open":
         this.setForwardsOpen(true);
+        return;
+      case "snippets.open":
+        this.setSnippetsOpen(true);
         return;
       case "files.open": {
         const spec = this.workspace.focusedSpec();
