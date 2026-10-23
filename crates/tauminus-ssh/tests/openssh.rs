@@ -915,28 +915,24 @@ async fn a_character_cut_off_by_the_end_shows_and_raw_bytes_pass_as_they_are() {
         .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
         .await
         .unwrap();
-    // Bytes sent as they are reach the shell untouched, not converted.
+    // Bytes sent as they are reach the shell untouched: the terminal
+    // echoes C3 A9, which Big5 reads as 矇. Converted as text they would
+    // have been é, which Big5 lacks, and shown as `_`. Ctrl+U then clears
+    // the line, so the shell never runs them.
     stream
         .input
-        .send(TerminalInput::Text("od -An -tx1 -N3; ".into()))
+        .send(TerminalInput::Data(vec![0xc3, 0xa9]))
         .await
         .unwrap();
     stream
         .input
         // `exec`: nothing, not even "logout", comes after the lone byte.
-        .send(TerminalInput::Text("exec printf '[\\244'\n".into()))
-        .await
-        .unwrap();
-    stream
-        .input
-        // With a line end: a terminal in canonical mode, as macOS keeps
-        // it, hands `od` nothing before one.
-        .send(TerminalInput::Data(vec![0xc3, 0xa9, b'\n']))
+        .send(TerminalInput::Text("\u{15}exec printf '[\\244'\n".into()))
         .await
         .unwrap();
     let (output, code) = collect(&mut stream).await;
     assert_eq!(code, Some(0), "{output}");
-    assert!(output.contains(" c3 a9"), "{output}");
+    assert!(output.contains('矇'), "{output}");
     // A Big5 lead byte with nothing after it: shown, not lost.
     assert!(output.contains("[\u{fffd}"), "{output}");
 }
