@@ -918,7 +918,7 @@ async fn a_character_cut_off_by_the_end_shows_and_raw_bytes_pass_as_they_are() {
     // Bytes sent as they are reach the shell untouched, not converted.
     stream
         .input
-        .send(TerminalInput::Text("od -An -tx1 -N2; ".into()))
+        .send(TerminalInput::Text("od -An -tx1 -N3; ".into()))
         .await
         .unwrap();
     stream
@@ -929,7 +929,9 @@ async fn a_character_cut_off_by_the_end_shows_and_raw_bytes_pass_as_they_are() {
         .unwrap();
     stream
         .input
-        .send(TerminalInput::Data(vec![0xc3, 0xa9]))
+        // With a line end: a terminal in canonical mode, as macOS keeps
+        // it, hands `od` nothing before one.
+        .send(TerminalInput::Data(vec![0xc3, 0xa9, b'\n']))
         .await
         .unwrap();
     let (output, code) = collect(&mut stream).await;
