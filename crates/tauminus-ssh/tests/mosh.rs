@@ -37,10 +37,7 @@ async fn a_mosh_session_starts_over_ssh_and_runs_commands() {
         return;
     };
     let Some(bin) = mosh_bin() else {
-        assert!(
-            std::env::var_os("CI").is_none(),
-            "CI needs mosh"
-        );
+        assert!(std::env::var_os("CI").is_none(), "CI needs mosh");
         return;
     };
     let scratch = Scratch::new("mosh");
