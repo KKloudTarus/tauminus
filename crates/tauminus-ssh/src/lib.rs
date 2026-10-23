@@ -13,10 +13,14 @@
 mod auth;
 mod bridge;
 mod config;
+mod connection;
 mod forward;
 mod host_keys;
 pub mod known_hosts;
+mod pipe;
+mod socks;
 mod transport;
+mod tunnel;
 #[cfg_attr(
     not(any(windows, test)),
     expect(dead_code, reason = "agent pipes and Pageant exist only on Windows")
@@ -31,16 +35,18 @@ use std::time::Duration;
 use russh::client::{self, Handle};
 use russh::keys::{Algorithm, PrivateKey, PublicKeyOrCertificate};
 use tauminus_app::ports::{
-    BoxFuture, ConnectError, Credentials, Prompter, ScriptOutcome, SshConnector, TerminalStream,
+    BoxFuture, ConnectError, Credentials, Prompter, ScriptOutcome, SshConnection, SshConnector,
 };
-use tauminus_domain::{Endpoint, KeyKind, SshTarget, TerminalSize};
+use tauminus_domain::{Endpoint, KeyKind, SshTarget};
 use tokio::sync::{Notify, watch};
 
 pub use auth::AgentSource;
 pub use config::OpenSshConfig;
 pub use host_keys::HostKeyStore;
 
+use crate::connection::{Alarm, Connection};
 use crate::known_hosts::KnownHosts;
+use crate::tunnel::Routes;
 
 /// How long each TCP connect, proxy handshake, and SSH handshake up to the
 /// host key check may take.
@@ -57,6 +63,10 @@ pub struct RusshConnector {
     home: Option<PathBuf>,
     agent: AgentSource,
     connect_timeout: Duration,
+    /// Bytes a connection's forwards may hold unread, and how long one
+    /// write to a local peer may make no progress.
+    forward_budget: usize,
+    forward_stall: Duration,
 }
 
 impl RusshConnector {
@@ -67,6 +77,8 @@ impl RusshConnector {
             home,
             agent,
             connect_timeout: CONNECT_TIMEOUT,
+            forward_budget: pipe::BUDGET,
+            forward_stall: pipe::STALL,
         }
     }
 
@@ -78,15 +90,25 @@ impl RusshConnector {
         self
     }
 
+    /// Replaces how much forwarded data a connection may hold for local
+    /// peers that read slowly (64 MiB), and how long one write to such a
+    /// peer may make no progress (30 s), past which it is reset.
+    #[must_use]
+    pub fn with_forward_limits(mut self, budget: usize, stall: Duration) -> Self {
+        self.forward_budget = budget;
+        self.forward_stall = stall;
+        self
+    }
+
     /// Connects every hop in order and signs in on each; the last hop
-    /// gets `credentials`. Returns the connections, last hop last.
-    async fn hops(
+    /// gets `credentials`.
+    async fn connect(
         &self,
         target: &SshTarget,
         prompter: Arc<dyn Prompter>,
         credentials: Arc<Credentials>,
         forward_agent: bool,
-    ) -> Result<Vec<Handle<Client>>, ConnectError> {
+    ) -> Result<Arc<Connection>, ConnectError> {
         let none = Credentials::default();
         // Dropped when this future ends or is dropped, which cancels a host
         // key prompt still waiting inside a handshake nobody awaits anymore.
@@ -97,6 +119,9 @@ impl RusshConnector {
             .chain(std::iter::once(&target.destination))
             .collect();
         let mut connections: Vec<Handle<Client>> = Vec::with_capacity(hops.len());
+        let (alarm, closed) = watch::channel(false);
+        let alarm = Arc::new(alarm);
+        let routes = Arc::new(Routes::default());
         for (index, hop) in hops.iter().enumerate() {
             let io = match connections.last() {
                 None => transport::open(&target.route, hop, self.connect_timeout).await?,
@@ -122,6 +147,8 @@ impl RusshConnector {
             let handler = Client {
                 forward: (last && forward_agent)
                     .then(|| forward::AgentForward::new(self.agent.clone())),
+                routes: last.then(|| Arc::clone(&routes)),
+                _alarm: Alarm(Arc::clone(&alarm)),
                 host: hop.host.to_string(),
                 port: hop.port,
                 known,
@@ -147,7 +174,13 @@ impl RusshConnector {
             tracing::debug!(hop = %hop, index, "authenticated");
             connections.push(handle);
         }
-        Ok(connections)
+        Ok(Connection::new(
+            connections,
+            closed,
+            routes,
+            forward_agent,
+            pipe::Ledger::new(self.forward_budget, self.forward_stall),
+        ))
     }
 
     /// Runs `script` with `sh -s` on the last hop, without a PTY, and
@@ -164,10 +197,8 @@ impl RusshConnector {
         /// A script that has not finished by then never will; a server that
         /// keeps the channel open must not hold the caller forever.
         const SCRIPT_TIMEOUT: Duration = Duration::from_mins(1);
-        let connections = self.hops(target, prompter, credentials, false).await?;
-        let last = connections
-            .last()
-            .ok_or_else(|| ConnectError::Protocol("no hops".into()))?;
+        let connection = self.connect(target, prompter, credentials, false).await?;
+        let last = connection.last();
         // One bound over everything after sign-in: a live server can stall
         // the channel open, the exec, or the output, and keepalives would
         // keep it from ever timing out.
@@ -217,47 +248,6 @@ impl RusshConnector {
             output: String::from_utf8_lossy(&output).into_owned(),
         })
     }
-
-    async fn open(
-        &self,
-        target: &SshTarget,
-        size: TerminalSize,
-        prompter: Arc<dyn Prompter>,
-        credentials: Arc<Credentials>,
-    ) -> Result<TerminalStream, ConnectError> {
-        let connections = self
-            .hops(target, prompter, credentials, target.session.forward_agent)
-            .await?;
-        let last = connections
-            .last()
-            .ok_or_else(|| ConnectError::Protocol("no hops".into()))?;
-        let channel = last.channel_open_session().await.map_err(protocol)?;
-        channel
-            .request_pty(
-                true,
-                "xterm-256color",
-                u32::from(size.cols()),
-                u32::from(size.rows()),
-                0,
-                0,
-                &[],
-            )
-            .await
-            .map_err(protocol)?;
-        // Like OpenSSH, without asking for a reply: a server refusing a
-        // name, as `AcceptEnv` makes most do, is not an error.
-        for var in &target.session.env {
-            channel
-                .set_env(false, var.name(), var.value())
-                .await
-                .map_err(protocol)?;
-        }
-        if target.session.forward_agent {
-            channel.agent_forward(false).await.map_err(protocol)?;
-        }
-        channel.request_shell(true).await.map_err(protocol)?;
-        Ok(bridge::spawn(channel, connections))
-    }
 }
 
 /// Runs the SSH handshake. `limit` applies until the host key check starts,
@@ -288,14 +278,19 @@ async fn handshake(
 }
 
 impl SshConnector for RusshConnector {
-    fn connect_with<'a>(
+    fn connection<'a>(
         &'a self,
         target: &'a SshTarget,
-        size: TerminalSize,
         prompter: Arc<dyn Prompter>,
         credentials: Arc<Credentials>,
-    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
-        Box::pin(self.open(target, size, prompter, credentials))
+        forward_agent: bool,
+    ) -> BoxFuture<'a, Result<Arc<dyn SshConnection>, ConnectError>> {
+        Box::pin(async move {
+            let connection = self
+                .connect(target, prompter, credentials, forward_agent)
+                .await?;
+            Ok(connection as Arc<dyn SshConnection>)
+        })
     }
 
     fn run_script<'a>(
@@ -416,11 +411,17 @@ fn protocol(error: impl std::fmt::Display) -> ConnectError {
 }
 
 /// The russh client handler for one hop: it decides about host keys, and on
-/// the last hop serves forwarded agent channels when the host allows it.
+/// the last hop serves forwarded agent channels when the host allows it and
+/// remote forwards that are running. Every other channel a server opens is
+/// refused.
 pub(crate) struct Client {
     /// Set only on the last hop of a host that forwards the agent; any
     /// other agent channel a server opens is refused.
     forward: Option<forward::AgentForward>,
+    /// Set only on the last hop.
+    routes: Option<Arc<Routes>>,
+    /// Marks the connection closed when russh drops this handler.
+    _alarm: Alarm,
     host: String,
     port: u16,
     known: Arc<KnownHosts>,
@@ -510,6 +511,90 @@ impl client::Handler for Client {
         }
         Ok(())
     }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        match &self.routes {
+            Some(routes) => routes.dispatch(connected_address, connected_port, channel, reply),
+            None => refuse(reply, &self.host, "forwarded-tcpip").await,
+        }
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        _channel: russh::Channel<client::Msg>,
+        _socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply, &self.host, "forwarded-streamlocal").await;
+        Ok(())
+    }
+
+    async fn server_channel_open_session(
+        &mut self,
+        _channel: russh::Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply, &self.host, "session").await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_tcpip(
+        &mut self,
+        _channel: russh::Channel<client::Msg>,
+        _host_to_connect: &str,
+        _port_to_connect: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply, &self.host, "direct-tcpip").await;
+        Ok(())
+    }
+
+    async fn server_channel_open_direct_streamlocal(
+        &mut self,
+        _channel: russh::Channel<client::Msg>,
+        _socket_path: &str,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply, &self.host, "direct-streamlocal").await;
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        _channel: russh::Channel<client::Msg>,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        refuse(reply, &self.host, "x11").await;
+        Ok(())
+    }
+}
+
+/// Refuses a channel the server opened that nothing here asked for.
+/// russh's defaults would accept it and keep it open with no reader.
+async fn refuse(reply: client::ChannelOpenHandle, host: &str, kind: &str) {
+    tracing::warn!(host, kind, "refusing a channel the server opened");
+    reply
+        .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+        .await;
 }
 
 #[cfg(test)]

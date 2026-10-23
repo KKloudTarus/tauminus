@@ -5069,6 +5069,7 @@ dependencies = [
 name = "tauminus-ssh"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "data-encoding",
  "hmac",
  "nix 0.28.0",
@@ -5076,6 +5077,7 @@ dependencies = [
  "russh",
  "sha1",
  "sha2 0.11.1",
+ "socket2",
  "tauminus-app",
  "tauminus-domain",
  "thiserror 2.0.21",

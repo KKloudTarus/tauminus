@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use tauminus_domain::{
-    EnvVar, Group, GroupId, Hop, Host, HostId, HostName, HostsError, IdentityId, Inventory, Label,
-    Policy, Route, Settings, SshTarget, UserName, env_list,
+    EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
+    IdentityId, Inventory, Label, Policy, Route, Settings, SshTarget, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -65,6 +65,19 @@ impl HostBook {
 
     pub fn new_group_id(&self) -> Result<GroupId, HostsError> {
         GroupId::parse(&self.store.new_id())
+    }
+
+    pub fn new_forward_id(&self) -> Result<ForwardId, HostsError> {
+        ForwardId::parse(&self.store.new_id())
+    }
+
+    /// A host's forwarding rules, as saved now. O(log H + r).
+    pub async fn forward_rules(&self, id: &HostId) -> Result<Vec<ForwardRule>, HostsError> {
+        let inventory = self.inventory.lock().await;
+        let host = inventory
+            .host(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        Ok(host.forwards.clone())
     }
 
     /// Applies `change` to a copy, saves it, then publishes it. Returns the

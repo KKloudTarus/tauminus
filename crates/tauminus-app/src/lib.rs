@@ -8,6 +8,10 @@
 //! commands. Nothing in this crate knows about Tauri or a specific transport
 //! library.
 
+mod connections;
+#[cfg(test)]
+mod fakes;
+mod forwards;
 pub mod history;
 mod hosts;
 mod local;
@@ -16,6 +20,8 @@ mod session;
 mod ssh;
 pub mod vault;
 
+pub use connections::{Connections, Login, LoginError};
+pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;
 pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};

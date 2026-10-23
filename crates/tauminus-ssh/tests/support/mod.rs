@@ -74,6 +74,20 @@ pub(crate) fn sshd_binary() -> Option<PathBuf> {
     found
 }
 
+trait OutputText {
+    fn output_text(&mut self) -> String;
+}
+
+impl OutputText for Command {
+    /// Runs to completion and returns stdout. Test setup only, so a
+    /// blocking wait is fine.
+    fn output_text(&mut self) -> String {
+        #[expect(clippy::disallowed_methods, reason = "test setup runs pgrep")]
+        let output = self.output().expect("runs");
+        String::from_utf8(output.stdout).expect("text")
+    }
+}
+
 pub(crate) fn current_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
@@ -181,6 +195,38 @@ impl Sshd {
 
     pub(crate) fn endpoint(&self) -> Endpoint {
         endpoint("127.0.0.1", self.port)
+    }
+
+    /// How many sessions this sshd serves now: one child per connection.
+    pub(crate) fn sessions(&self) -> usize {
+        Command::new("pgrep")
+            .args(["-P", &self.child.id().to_string()])
+            .stderr(Stdio::null())
+            .output_text()
+            .split_whitespace()
+            .count()
+    }
+
+    /// Kills the processes serving open sessions: each child of this sshd,
+    /// found by its pid, leads a process group with its own children, and
+    /// the whole group goes. Nothing else on the machine is touched.
+    pub(crate) fn kill_sessions(&self) {
+        let children = Command::new("pgrep")
+            .args(["-P", &self.child.id().to_string()])
+            .stderr(Stdio::null())
+            .output_text();
+        let groups: Vec<String> = children
+            .split_whitespace()
+            .map(|pid| format!("-{pid}"))
+            .collect();
+        assert!(!groups.is_empty(), "sshd has no session to kill");
+        let status = Command::new("kill")
+            .arg("-KILL")
+            .arg("--")
+            .args(&groups)
+            .status()
+            .expect("kill runs");
+        assert!(status.success(), "could not kill {groups:?}");
     }
 }
 

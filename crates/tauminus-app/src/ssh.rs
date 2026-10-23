@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tauminus_domain::{SessionId, SessionKind, SessionMeta, SshTarget, TerminalSize};
 use thiserror::Error;
 
+use crate::connections::Login;
 use crate::ports::{ConnectError, Credentials, OutputSink, Prompter, ScriptOutcome, SshConnector};
 use crate::session::{SessionError, SessionManager};
 
@@ -88,5 +89,24 @@ impl SshSessions {
                 kind: SessionKind::Ssh,
             },
         ))
+    }
+
+    /// Opens a shell on a saved host, on a connection of its own; SFTP
+    /// and forwards never share it (see `Connections`).
+    pub async fn open_saved(
+        &self,
+        login: &Login,
+        size: TerminalSize,
+        sink: impl OutputSink,
+        prompter: Arc<dyn Prompter>,
+    ) -> Result<SessionId, SshOpenError> {
+        self.open_with(
+            &login.target,
+            size,
+            sink,
+            prompter,
+            Arc::clone(&login.credentials),
+        )
+        .await
     }
 }
