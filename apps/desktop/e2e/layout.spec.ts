@@ -219,3 +219,20 @@ test("shows code as typed, without ligatures", async ({ page }) => {
   expect(await ligatures(fingerprint)).toBe("none");
   expect(await ligatures(page.locator(".xterm").first())).toBe("none");
 });
+
+test("follows the system theme when the OS switches", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("tauminus.theme", "system"));
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  await expect(focusedScreen(page)).toContainText("$");
+  const terminalBackground = () =>
+    page.evaluate(() => {
+      const viewport = document.querySelector(
+        'section[data-focused="true"] .xterm-scrollable-element',
+      );
+      return viewport ? getComputedStyle(viewport).backgroundColor : "";
+    });
+  await expect.poll(terminalBackground).toBe("rgb(14, 15, 19)");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(terminalBackground).toBe("rgb(255, 255, 255)");
+});
