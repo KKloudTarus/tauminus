@@ -270,3 +270,21 @@ fn triggers_fire_on_lines_and_notify_only_from_the_backend_s_own_text() {
     // A rule that does not notify cannot be made to.
     assert!(notify(2).is_err());
 }
+
+#[test]
+fn filling_a_password_names_a_session_and_nothing_else() {
+    let (app, _dir) = app("fill");
+    // No such session: refused before the vault is asked.
+    let missing = call(&app, "session_fill_offer", json!({"id": 999})).unwrap_err();
+    assert_eq!(missing["code"], "not_found");
+    let typed = call(&app, "session_fill_password", json!({"id": 999, "seen": 0})).unwrap_err();
+    assert_eq!(typed["code"], "not_found");
+    // What was seen is a count of bytes.
+    let bad = call(
+        &app,
+        "session_fill_password",
+        json!({"id": 999, "seen": -1}),
+    )
+    .unwrap_err();
+    assert_eq!(bad["code"], "invalid_argument");
+}

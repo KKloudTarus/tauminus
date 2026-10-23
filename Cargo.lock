@@ -5312,6 +5312,7 @@ dependencies = [
  "tauminus-domain",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -5377,6 +5378,7 @@ dependencies = [
  "tauminus-domain",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

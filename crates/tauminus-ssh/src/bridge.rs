@@ -210,6 +210,7 @@ async fn forward_input(
     while let Some(message) = input.recv().await {
         let sent = match message {
             TerminalInput::Text(text) => writer.data_bytes(codec.encode(&text)).await,
+            TerminalInput::Secret(secret) => writer.data_bytes(codec.encode(&secret)).await,
             TerminalInput::Data(bytes) => writer.data_bytes(bytes).await,
             TerminalInput::Resize(size) => {
                 writer

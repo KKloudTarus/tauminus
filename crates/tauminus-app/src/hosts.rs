@@ -136,6 +136,15 @@ impl HostBook {
         self.inventory.lock().await.records_history(id)
     }
 
+    /// The address a host is saved with now. O(log H).
+    pub async fn address(&self, id: &HostId) -> Option<HostName> {
+        self.inventory
+            .lock()
+            .await
+            .host(id)
+            .map(|host| host.address.clone())
+    }
+
     /// The vault identity a host logs in with, if any. O(d).
     pub async fn identity(&self, id: &HostId) -> Result<Option<IdentityId>, HostsError> {
         self.inventory.lock().await.identity(id)

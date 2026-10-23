@@ -569,6 +569,17 @@ impl Vault {
         .await
     }
 
+    /// What the view may see of identity `id`, without counting as use of
+    /// the vault: an offer made because of output must not keep it open.
+    /// O(log n).
+    pub async fn peek(&self, id: &str) -> Result<Option<IdentitySummary>, VaultError> {
+        let id = id.to_owned();
+        self.with_open_as(false, move |vault| {
+            Ok(vault.identity(&id)?.as_ref().map(IdentitySummary::from))
+        })
+        .await
+    }
+
     /// Adds or edits an identity and saves the vault. Returns its id.
     pub async fn save_identity(&self, input: IdentityInput) -> Result<String, VaultError> {
         check_identity(&input)?;
@@ -821,6 +832,17 @@ impl Vault {
         &self,
         work: impl FnOnce(&mut dyn OpenVault) -> Result<T, Failed> + Send + 'static,
     ) -> Result<T, VaultError> {
+        self.with_open_as(true, work).await
+    }
+
+    /// As [`Vault::with_open`]; a call that is not `use` leaves the idle
+    /// time as it was: what output from a host triggers must not keep the
+    /// vault open.
+    async fn with_open_as<T: Send + 'static>(
+        &self,
+        used: bool,
+        work: impl FnOnce(&mut dyn OpenVault) -> Result<T, Failed> + Send + 'static,
+    ) -> Result<T, VaultError> {
         let mut state = self.state.lock().await;
         state.expire();
         let mut open = state.open.take().ok_or(VaultError::Locked)?;
@@ -837,9 +859,13 @@ impl Vault {
         // file holds another window's change. Drop this copy, so what the
         // next unlock reads is what is on disk.
         if !matches!(result, Err(Failed { discard: true, .. })) {
-            state.open = Some(Open {
-                used: Used::now(),
-                ..open
+            state.open = Some(if used {
+                Open {
+                    used: Used::now(),
+                    ..open
+                }
+            } else {
+                open
             });
         }
         state.publish();

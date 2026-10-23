@@ -15,6 +15,22 @@ export const commands = {
 	sessionOpen: (size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("session_open", { size, onOutput, onExit })),
 	/**  Sends text input: keystrokes, paste, or terminal replies. */
 	sessionWrite: (id: SessionHandle, data: string) => typedError<null, CommandError>(__TAURI_INVOKE("session_write", { id, data })),
+	/**
+	 *  Whether session `id`'s saved host has a login password to type, and
+	 *  whose; `null` when it has none, or the session is not a saved host's.
+	 */
+	sessionFillOffer: (id: SessionHandle) => typedError<{
+	/**  The identity's name; `null` while the vault is locked. */
+	identity: string | null,
+	/**  The login it is for: `user@address`. */
+	login: string,
+} | null, CommandError>(__TAURI_INVOKE("session_fill_offer", { id })),
+	/**
+	 *  Types session `id`'s host's login password, without Enter. `seen` is
+	 *  the output the view had parsed when it read the prompt, in bytes; if
+	 *  the session showed more since, nothing is typed (`cancelled`).
+	 */
+	sessionFillPassword: (id: SessionHandle, seen: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("session_fill_password", { id, seen })),
 	/**  Sends bytes that are not valid UTF-8, such as legacy mouse reports. */
 	sessionWriteBytes: (id: SessionHandle, data: number[]) => typedError<null, CommandError>(__TAURI_INVOKE("session_write_bytes", { id, data })),
 	sessionResize: (id: SessionHandle, size: GridSize) => typedError<null, CommandError>(__TAURI_INVOKE("session_resize", { id, size })),
@@ -390,6 +406,14 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 "unavailable" | "internal";
 
 export type ExitFilterSpec = "any" | "success" | "failure";
+
+/**  What a pane may offer at a password prompt. */
+export type FillOfferView = {
+	/**  The identity's name; `null` while the vault is locked. */
+	identity: string | null,
+	/**  The login it is for: `user@address`. */
+	login: string,
+};
 
 /**
  *  A trigger that fired: rule `rule` matched line `line` first from

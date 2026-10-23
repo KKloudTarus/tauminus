@@ -7,6 +7,8 @@
   "permissions": [
     "allow-session-open",
     "allow-session-write",
+    "allow-session-fill-offer",
+    "allow-session-fill-password",
     "allow-session-write-bytes",
     "allow-session-resize",
     "allow-session-probe",

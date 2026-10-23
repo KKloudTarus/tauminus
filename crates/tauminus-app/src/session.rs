@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tauminus_domain::{
-    FlowControl, FlowSignal, OutputBatcher, SessionId, SessionMeta, TerminalSize, Watermarks,
+    FlowControl, FlowSignal, OutputBatcher, PROMPT_TAIL, SessionId, SessionMeta, TerminalSize,
+    Watermarks,
 };
 use thiserror::Error;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -16,7 +17,8 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::ports::{
-    LaunchError, OutputSink, OutputTap, TerminalEvent, TerminalInput, TerminalStream, Terminator,
+    LaunchError, OutputSink, OutputTap, Secret, TerminalEvent, TerminalInput, TerminalStream,
+    Terminator,
 };
 
 /// Limits and timings for terminal sessions.
@@ -108,6 +110,13 @@ struct SessionControl {
     probe: Notify,
     /// A recording listening to the output, if any.
     tap: TapSlot,
+    /// Bytes of output the session has shown.
+    received: AtomicU64,
+    /// The last of it, where a prompt would be.
+    tail: Mutex<Vec<u8>>,
+    /// `received` when a password was last filled. 0 at first, which no
+    /// fill sees: a fill needs a prompt, so output.
+    filled_at: AtomicU64,
 }
 
 /// The tap, and whether the pump has ended: a tap put on after that would
@@ -214,6 +223,32 @@ impl SessionManager {
     /// shell's character set. Waits as [`Self::write`] does.
     pub async fn write_text(&self, id: SessionId, text: String) -> Result<(), SessionError> {
         self.send(id, TerminalInput::Text(text)).await
+    }
+
+    /// Sends a secret as typed text; the stream wipes it once sent.
+    pub async fn write_secret(&self, id: SessionId, secret: Secret) -> Result<(), SessionError> {
+        self.send(id, TerminalInput::Secret(secret)).await
+    }
+
+    /// Bytes of output the session has shown so far, counted as they come,
+    /// before they are batched for the view: a view that has parsed fewer
+    /// has not seen all of it.
+    pub fn received(&self, id: SessionId) -> Result<u64, SessionError> {
+        Ok(self.control(id)?.received.load(Ordering::Relaxed))
+    }
+
+    /// The last [`PROMPT_TAIL`] bytes of output, and how many came in all.
+    pub fn tail(&self, id: SessionId) -> Result<(Vec<u8>, u64), SessionError> {
+        let control = self.control(id)?;
+        let tail = lock(&control.tail);
+        Ok((tail.clone(), control.received.load(Ordering::Relaxed)))
+    }
+
+    /// Marks the output so far as filled at: `false` when it was already,
+    /// with nothing shown since, so one prompt is filled once.
+    pub fn mark_filled(&self, id: SessionId, at: u64) -> Result<bool, SessionError> {
+        let control = self.control(id)?;
+        Ok(control.filled_at.swap(at, Ordering::Relaxed) != at)
     }
 
     pub async fn resize(&self, id: SessionId, size: TerminalSize) -> Result<(), SessionError> {
@@ -444,6 +479,16 @@ impl<S: OutputSink> Pump<S> {
         // ignores hang-up must not flood the webview during the grace period.
         if self.closing && self.flow.is_paused() {
             return Step::Continue;
+        }
+        self.control
+            .received
+            .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        {
+            // O(PROMPT_TAIL) per chunk.
+            let mut tail = lock(&self.control.tail);
+            tail.extend_from_slice(&chunk[chunk.len().saturating_sub(PROMPT_TAIL)..]);
+            let over = tail.len().saturating_sub(PROMPT_TAIL);
+            tail.drain(..over);
         }
         for batch in self.batcher.push(chunk) {
             if matches!(self.deliver(batch), Step::Stop) {

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::hosts::{HostId, IdentityId};
+use crate::ssh::Endpoint;
 use std::fmt;
 use std::path::PathBuf;
 
@@ -42,13 +44,32 @@ pub enum SessionKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionMeta {
     pub kind: SessionKind,
+    /// The saved host the session logs in to, when it was opened from one:
+    /// what may be typed into it from the vault depends on it.
+    pub host: Option<SavedHost>,
+}
+
+/// A saved host as a session opened from it logged in: its id, the vault
+/// identity, and the user and address. The host may be edited while the
+/// session stays open; these say what the session is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedHost {
+    pub id: HostId,
+    pub identity: Option<IdentityId>,
+    pub login: Endpoint,
 }
 
 impl SessionMeta {
     pub const fn local() -> Self {
         Self {
             kind: SessionKind::Local,
+            host: None,
         }
+    }
+
+    /// A session of `kind` that is not a saved host's.
+    pub const fn of(kind: SessionKind) -> Self {
+        Self { kind, host: None }
     }
 }
 

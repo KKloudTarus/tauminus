@@ -758,3 +758,25 @@ async fn a_tap_taken_off_hears_nothing_more_and_is_not_ended() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(tap.ended.load(Ordering::Relaxed), 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_tail_keeps_the_last_output_across_chunks_and_counts_it_all() {
+    let h = Harness::new(config());
+    let (id, remote) = h.open_ok();
+    // More than the tail in one chunk, then a little: the tail rolls.
+    let big = vec![b'x'; PROMPT_TAIL + 100];
+    output(&remote, &big).await;
+    output(&remote, b"[sudo] password for ops: ").await;
+    settle().await;
+    let (tail, received) = h.sessions.tail(id).unwrap();
+    assert_eq!(tail.len(), PROMPT_TAIL);
+    assert!(tail.ends_with(b"[sudo] password for ops: "));
+    assert_eq!(received, (big.len() + 25) as u64);
+    // One fill per output count.
+    assert!(h.sessions.mark_filled(id, received).unwrap());
+    assert!(!h.sessions.mark_filled(id, received).unwrap());
+    output(&remote, b"\r\n").await;
+    settle().await;
+    let (_, after) = h.sessions.tail(id).unwrap();
+    assert!(h.sessions.mark_filled(id, after).unwrap());
+}

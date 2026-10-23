@@ -12,6 +12,7 @@ mod connections;
 #[cfg(test)]
 mod fakes;
 mod files;
+mod fill;
 mod forwards;
 pub mod history;
 mod hosts;
@@ -32,6 +33,7 @@ pub use files::{
     Direction, Files, FilesError, MAX_RUNNING, MAX_SESSIONS, PER_SESSION, TransferState,
     TransferStatus,
 };
+pub use fill::{Fill, FillError, Offer};
 pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
 pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
 pub use local::LocalShells;

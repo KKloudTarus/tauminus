@@ -213,6 +213,14 @@ fn write_loop(
     while let Some(message) = input.blocking_recv() {
         let bytes = match message {
             TerminalInput::Text(text) => codec.encode(&text),
+            TerminalInput::Secret(secret) => {
+                let bytes = zeroize::Zeroizing::new(codec.encode(&secret));
+                if let Err(e) = write_held(&mut *port, &bytes, closed) {
+                    debug!(error = %e, "serial write failed");
+                    return;
+                }
+                continue;
+            }
             TerminalInput::Data(bytes) => bytes,
             // A serial line carries no window size.
             TerminalInput::Resize(_) => continue,

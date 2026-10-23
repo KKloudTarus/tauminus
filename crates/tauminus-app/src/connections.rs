@@ -17,7 +17,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use tauminus_domain::{Endpoint, HostId, HostsError, IdentityId, NameError, SshTarget, UserName};
+use tauminus_domain::{
+    Endpoint, HostId, HostsError, IdentityId, NameError, SavedHost, SshTarget, UserName,
+};
 use thiserror::Error;
 
 use crate::hosts::HostBook;
@@ -31,6 +33,17 @@ pub struct Login {
     pub target: SshTarget,
     pub identity: Option<IdentityId>,
     pub credentials: Arc<Credentials>,
+}
+
+impl Login {
+    /// What a session opened with this login records of it.
+    pub fn saved(&self) -> SavedHost {
+        SavedHost {
+            id: self.host.clone(),
+            identity: self.identity.clone(),
+            login: self.target.destination.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
