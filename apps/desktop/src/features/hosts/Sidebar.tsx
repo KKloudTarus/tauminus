@@ -89,7 +89,7 @@ export function Sidebar({
       groupLabel={groupLabel}
       onConnect={onConnect}
       onEdit={() => setEditing({ kind: "host", host })}
-      {...(onFiles ? { onFiles: () => onFiles(host) } : {})}
+      {...(onFiles && host.protocol !== "telnet" ? { onFiles: () => onFiles(host) } : {})}
     />
   );
 

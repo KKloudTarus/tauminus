@@ -20,6 +20,7 @@ use crate::ssh::{
     AuthMethod, AuthOptions, Encoding, Endpoint, HostName, Route, SshTarget, UserName,
 };
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
+use crate::telnet::{TELNET_PORT, TelnetTarget};
 
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
 /// bound the cost of resolving a host.
@@ -289,6 +290,15 @@ pub struct Group {
     pub settings: Settings,
 }
 
+/// How a saved host is reached.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    #[default]
+    Ssh,
+    /// Clear text; for devices and old systems that speak nothing else.
+    Telnet,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Host {
     pub id: HostId,
@@ -303,6 +313,7 @@ pub struct Host {
     /// Snippets typed into each new shell on this host, in order. A
     /// snippet deleted since is skipped.
     pub startup: Vec<SnippetId>,
+    pub protocol: Protocol,
 }
 
 impl Host {
@@ -316,6 +327,7 @@ impl Host {
             settings: Settings::default(),
             forwards: Vec::new(),
             startup: Vec::new(),
+            protocol: Protocol::Ssh,
         }
     }
 
@@ -483,6 +495,41 @@ impl Inventory {
     /// is `local_user` and an unset port 22. Jump hosts and the route are
     /// one choice, how to reach the server, so both come from the nearest
     /// level that sets either. O(d) for d ≤ `MAX_GROUP_DEPTH`.
+    /// Where a Telnet host connects: its address, the nearest port set or
+    /// 23, and the nearest character set. O(d).
+    pub fn telnet_target(&self, id: &HostId) -> Result<TelnetTarget, HostsError> {
+        let host = self
+            .hosts
+            .get(id)
+            .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        if host.protocol != Protocol::Telnet {
+            return Err(HostsError::Target(format!(
+                "{} is not a Telnet host",
+                host.label.as_str()
+            )));
+        }
+        let chain = self.chain(id)?;
+        // Telnet goes straight to the address. A group that reaches its
+        // network through a jump host or a proxy would be bypassed without
+        // a word, so that refuses instead.
+        let routed = chain.iter().any(|s| {
+            s.jumps.as_ref().is_some_and(|j| !j.is_empty())
+                || s.route.as_ref().is_some_and(|r| *r != Route::Direct)
+        });
+        if routed {
+            return Err(HostsError::Target(format!(
+                "{} is reached through a jump host or a proxy, which Telnet cannot use",
+                host.label.as_str()
+            )));
+        }
+        Ok(TelnetTarget {
+            host: host.address.clone(),
+            // The host's own port only: a group's is an SSH port.
+            port: host.settings.port.unwrap_or(TELNET_PORT),
+            encoding: chain.iter().find_map(|s| s.encoding).unwrap_or_default(),
+        })
+    }
+
     pub fn resolve(&self, id: &HostId, local_user: &UserName) -> Result<SshTarget, HostsError> {
         let mut target = self.resolve_route(id, local_user)?;
         target.session = self.session(id)?;
@@ -500,6 +547,14 @@ impl Inventory {
             .hosts
             .get(id)
             .ok_or_else(|| HostsError::NoSuchHost(id.clone()))?;
+        // SSH, and with it files, forwards, and key installs, never
+        // reaches a Telnet host, whatever asks.
+        if host.protocol != Protocol::Ssh {
+            return Err(HostsError::Target(format!(
+                "{} is a Telnet host",
+                host.label.as_str()
+            )));
+        }
         let chain: Vec<&Settings> = std::iter::once(&host.settings)
             .chain(self.ancestry(host.group.as_ref()).map(|g| &g.settings))
             .collect();

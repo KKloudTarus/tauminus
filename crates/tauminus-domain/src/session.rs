@@ -32,6 +32,7 @@ impl fmt::Display for SessionId {
 pub enum SessionKind {
     Local,
     Ssh,
+    Telnet,
 }
 
 /// Facts about a session that policies need, independent of its transport.

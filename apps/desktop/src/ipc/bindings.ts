@@ -57,6 +57,12 @@ export const commands = {
 	/**  What to type into a new shell on a saved host. */
 	hostStartup: (host: string) => typedError<StartupView, CommandError>(__TAURI_INVOKE("host_startup", { host })),
 	/**
+	 *  Connects to a saved Telnet host and streams it to the view. Nothing
+	 *  is asked: Telnet has no host key, and a login, if any, is the
+	 *  remote shell's own prompt.
+	 */
+	telnetConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("telnet_connect", { id, size, onOutput, onExit })),
+	/**
 	 *  Imports `~/.ssh/config` into the "SSH config" group. Hosts already saved
 	 *  are skipped, so importing again adds only new ones.
 	 */
@@ -389,6 +395,8 @@ export type HostInput = {
 	forwards?: ForwardSpec[] | null,
 	/**  Absent keeps the startup snippets saved now. */
 	startup?: string[] | null,
+	/**  Absent is SSH. */
+	protocol?: ProtocolSpec,
 };
 
 export type HostView = {
@@ -411,6 +419,7 @@ export type HostView = {
 	forwards: ForwardSpec[],
 	/**  Ids of the snippets typed into each new shell, in order. */
 	startup: string[],
+	protocol: ProtocolSpec,
 };
 
 export type HostsView = {
@@ -481,6 +490,11 @@ export type PromptRequest = {
 	id: number,
 	prompt: PromptKind,
 };
+
+/**  How a saved host is reached. */
+export type ProtocolSpec = "ssh" | 
+/**  Clear text, for devices and old systems. */
+"telnet";
 
 export type RecordedSpec = "stored" | "sealed" | "dropped";
 

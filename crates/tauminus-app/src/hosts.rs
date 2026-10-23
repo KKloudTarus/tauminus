@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use tauminus_domain::{
     EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
-    IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget, UserName,
-    env_list,
+    IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget, TelnetTarget,
+    UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -118,6 +118,11 @@ impl HostBook {
         local_user: &UserName,
     ) -> Result<SshTarget, HostsError> {
         self.inventory.lock().await.resolve(id, local_user)
+    }
+
+    /// Where a saved Telnet host connects. O(d).
+    pub async fn telnet_target(&self, id: &HostId) -> Result<TelnetTarget, HostsError> {
+        self.inventory.lock().await.telnet_target(id)
     }
 
     /// Whether a host's commands go into the history. O(d).

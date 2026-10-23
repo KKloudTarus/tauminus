@@ -397,6 +397,16 @@ pub enum StoreError {
     Conflict,
 }
 
+/// Opens Telnet sessions: a TCP connection and the Telnet protocol over
+/// it, converting the host's character set.
+pub trait TelnetConnector: Send + Sync + 'static {
+    fn connect<'a>(
+        &'a self,
+        target: &'a tauminus_domain::TelnetTarget,
+        size: TerminalSize,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+}
+
 /// Keeps the saved hosts. `save` replaces everything at once, so a crash
 /// leaves either the old list or the new one, never a mix.
 pub trait HostStore: Send + Sync + 'static {

@@ -12,8 +12,8 @@ use specta::Type;
 use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
-    HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Route, Settings,
-    SnippetId, Tag, UserName, env_list,
+    HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Protocol, Route,
+    Settings, SnippetId, Tag, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -213,6 +213,35 @@ pub(crate) struct HostView {
     pub(crate) forwards: Vec<ForwardSpec>,
     /// Ids of the snippets typed into each new shell, in order.
     pub(crate) startup: Vec<String>,
+    pub(crate) protocol: ProtocolSpec,
+}
+
+/// How a saved host is reached.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ProtocolSpec {
+    #[default]
+    Ssh,
+    /// Clear text, for devices and old systems.
+    Telnet,
+}
+
+impl From<ProtocolSpec> for Protocol {
+    fn from(spec: ProtocolSpec) -> Self {
+        match spec {
+            ProtocolSpec::Ssh => Self::Ssh,
+            ProtocolSpec::Telnet => Self::Telnet,
+        }
+    }
+}
+
+impl From<Protocol> for ProtocolSpec {
+    fn from(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::Ssh => Self::Ssh,
+            Protocol::Telnet => Self::Telnet,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -241,6 +270,9 @@ pub(crate) struct HostInput {
     /// Absent keeps the startup snippets saved now.
     #[serde(default)]
     pub(crate) startup: Option<Vec<String>>,
+    /// Absent is SSH.
+    #[serde(default)]
+    pub(crate) protocol: ProtocolSpec,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -306,9 +338,14 @@ fn view(inventory: &Inventory) -> HostsView {
                             .map_err(|e| e.to_string())
                     });
                 let forwards_agent = inventory.forwards_agent(&h.id).unwrap_or(false);
-                let (target, problem) = match resolved {
-                    Ok(target) => (Some(SshTargetSpec::from(&target)), None),
-                    Err(problem) => (None, Some(problem)),
+                let (target, problem) = if h.protocol == Protocol::Telnet {
+                    let problem = inventory.telnet_target(&h.id).err();
+                    (None, problem.map(|e| e.to_string()))
+                } else {
+                    match resolved {
+                        Ok(target) => (Some(SshTargetSpec::from(&target)), None),
+                        Err(problem) => (None, Some(problem)),
+                    }
                 };
                 HostView {
                     id: h.id.to_string(),
@@ -323,6 +360,7 @@ fn view(inventory: &Inventory) -> HostsView {
                     forwards_agent,
                     forwards: h.forwards.iter().map(ForwardSpec::from).collect(),
                     startup: h.startup.iter().map(ToString::to_string).collect(),
+                    protocol: h.protocol.into(),
                 }
             })
             .collect(),
@@ -550,6 +588,7 @@ fn parse_host(book: &HostBook, input: HostInput) -> Result<Host, CommandError> {
             .map(|spec| parse_rule(spec, || book.new_forward_id().map_err(invalid)))
             .collect::<Result<_, _>>()?;
     }
+    host.protocol = input.protocol.into();
     if let Some(startup) = input.startup {
         if startup.len() > tauminus_domain::MAX_STARTUP {
             return Err(invalid(HostsError::Startup));

@@ -28,6 +28,7 @@ function host(label: string, address: string, tags: string[] = [], user = "me"):
     forwardsAgent: false,
     forwards: [],
     startup: [],
+    protocol: "ssh",
   };
 }
 

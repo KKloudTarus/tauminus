@@ -567,11 +567,13 @@ const PublicKey = memo(function PublicKey({
           className={`${FIELD} flex-1`}
         >
           <option value="">Choose a saved host…</option>
-          {tools.hosts.map((h) => (
-            <option key={h.id} value={h.id}>
-              {h.label}
-            </option>
-          ))}
+          {tools.hosts
+            .filter((h) => h.protocol === "ssh")
+            .map((h) => (
+              <option key={h.id} value={h.id}>
+                {h.label}
+              </option>
+            ))}
         </select>
         <button
           type="button"

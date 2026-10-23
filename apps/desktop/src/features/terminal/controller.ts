@@ -433,6 +433,7 @@ export class TerminalController {
   get defaultTitle(): string {
     switch (this.spec.kind) {
       case "host":
+      case "telnet":
         return this.spec.label;
       case "ssh":
         return formatEndpoint(this.spec.target.destination);
