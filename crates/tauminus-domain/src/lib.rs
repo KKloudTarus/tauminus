@@ -15,6 +15,7 @@ mod hosts;
 mod keys;
 mod output;
 mod session;
+mod sftp;
 mod ssh;
 mod terminal;
 
@@ -37,6 +38,10 @@ pub use hosts::{
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use output::{OutputBatcher, ReadyBatches};
 pub use session::{LocalShell, SessionId, SessionKind, SessionMeta};
+pub use sftp::{
+    LocalOs, MAX_NAME, NameError as SftpNameError, Source, Start, TAIL_CHECK, local_name, plan,
+    remote_join, remote_parent, tail_start,
+};
 pub use ssh::{
     AuthMethod, AuthOptions, Endpoint, EnvError, EnvVar, HostName, MAX_ENV, NameError,
     ProxyCommandError, Route, SessionOptions, SshTarget, TargetError, UserName, env_list,
