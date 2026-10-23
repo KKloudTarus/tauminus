@@ -14,6 +14,8 @@ interface SidebarProps {
   store: HostsStore;
   onConnect: (host: HostView) => void;
   onOpenVault?: () => void;
+  /** Opens the host's files; without it there is no files button. */
+  onFiles?: (host: HostView) => void;
   /** Identities to pick from in the editors; empty while the vault is locked. */
   identities?: readonly IdentityView[];
 }
@@ -54,6 +56,7 @@ export function Sidebar({
   store,
   onConnect,
   onOpenVault,
+  onFiles,
   identities = NO_IDENTITIES,
 }: SidebarProps) {
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -83,6 +86,7 @@ export function Sidebar({
       groupLabel={groupLabel}
       onConnect={onConnect}
       onEdit={() => setEditing({ kind: "host", host })}
+      {...(onFiles ? { onFiles: () => onFiles(host) } : {})}
     />
   );
 
@@ -232,12 +236,14 @@ function HostRow({
   groupLabel,
   onConnect,
   onEdit,
+  onFiles,
 }: {
   host: HostView;
   depth: number;
   groupLabel: string | undefined;
   onConnect: (host: HostView) => void;
   onEdit: () => void;
+  onFiles?: () => void;
 }) {
   const where = host.target ? formatEndpoint(host.target.destination) : host.address;
   return (
@@ -263,13 +269,22 @@ function HostRow({
             {host.tags.length > 0 ? ` · ${host.tags.join(" ")}` : ""}
           </span>
         </button>
+        {onFiles && <IconButton label={`Files on ${host.label}`} glyph="▤" onClick={onFiles} />}
         <IconButton label={`Edit ${host.label}`} onClick={onEdit} />
       </div>
     </li>
   );
 }
 
-function IconButton({ label, onClick }: { label: string; onClick: () => void }) {
+function IconButton({
+  label,
+  onClick,
+  glyph = "✎",
+}: {
+  label: string;
+  onClick: () => void;
+  glyph?: string;
+}) {
   return (
     <button
       type="button"
@@ -278,7 +293,7 @@ function IconButton({ label, onClick }: { label: string; onClick: () => void }) 
       onClick={onClick}
       className="rounded px-2 py-1 opacity-0 group-hover:opacity-60 hover:bg-current/10 focus-visible:opacity-100"
     >
-      ✎
+      {glyph}
     </button>
   );
 }

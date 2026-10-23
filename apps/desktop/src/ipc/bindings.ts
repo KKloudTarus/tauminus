@@ -61,6 +61,34 @@ export const commands = {
 	/**  Every rule that ran or failed since the app started. */
 	forwardsStatus: () => __TAURI_INVOKE<ForwardState[]>("forwards_status"),
 	/**
+	 *  Opens SFTP to a saved host, on the connection its forwards share, with
+	 *  any question on `on_prompt`.
+	 */
+	sftpOpen: (host: string, onPrompt: Channel<PromptRequest>) => typedError<SftpHandle, CommandError>(__TAURI_INVOKE("sftp_open", { host, onPrompt })),
+	sftpClose: (id: number) => __TAURI_INVOKE<void>("sftp_close", { id }),
+	/**  A remote folder's entries, at most 100 000. */
+	sftpList: (id: number, path: string) => typedError<Listing, CommandError>(__TAURI_INVOKE("sftp_list", { id, path })),
+	/**  One change to the server's files. */
+	sftpChange: (id: number, change: ChangeSpec) => typedError<null, CommandError>(__TAURI_INVOKE("sftp_change", { id, change })),
+	/**  A folder on this machine. Links are listed as links, not followed. */
+	localList: (path: string) => typedError<Listing, CommandError>(__TAURI_INVOKE("local_list", { path })),
+	/**  The user's home folder, where the local side starts. */
+	localHome: () => typedError<string, CommandError>(__TAURI_INVOKE("local_home")),
+	/**  Copies a remote file into a local folder under its checked name. */
+	transferDownload: (id: number, remote: string, into: string, overwrite: boolean) => typedError<number, CommandError>(__TAURI_INVOKE("transfer_download", { id, remote, into, overwrite })),
+	/**  Copies a local file into a remote folder under its name. */
+	transferUpload: (id: number, local: string, into: string, overwrite: boolean) => typedError<number, CommandError>(__TAURI_INVOKE("transfer_upload", { id, local, into, overwrite })),
+	transfersStatus: () => __TAURI_INVOKE<TransferView[]>("transfers_status"),
+	/**  Stops a transfer; a later one of the same file resumes it. */
+	transferCancel: (id: number) => __TAURI_INVOKE<boolean>("transfer_cancel", { id }),
+	/**  Sends each later drop of files on the window to `on_drop`. */
+	fileDrops: (onDrop: Channel<DroppedFiles>) => __TAURI_INVOKE<void>("file_drops", { onDrop }),
+	/**  Opens a remote file in a local text editor and uploads each save. */
+	sftpEdit: (id: number, remote: string) => typedError<number, CommandError>(__TAURI_INVOKE("sftp_edit", { id, remote })),
+	/**  Ends an edit: a last save goes up, then its folder is removed. */
+	editDone: (id: number) => __TAURI_INVOKE<boolean>("edit_done", { id }),
+	editsStatus: () => __TAURI_INVOKE<EditView[]>("edits_status"),
+	/**
 	 *  Checks the readings of a command line about to run on a saved host
 	 *  against its prod guard. Lines are never logged: they may hold a secret
 	 *  typed on the command line.
@@ -130,9 +158,37 @@ export type ChallengeFieldSpec = {
 	echo: boolean,
 };
 
+export type ChangeSpec = { kind: "mkdir"; path: string } | { kind: "removeFile"; path: string } | { kind: "removeDir"; path: string } | { kind: "rename"; from: string; to: string } | { kind: "chmod"; path: string; mode: number };
+
 export type CommandError = {
 	code: ErrorCode,
 	message: string,
+};
+
+export type DirectionSpec = "download" | "upload";
+
+export type DroppedFiles = {
+	paths: string[],
+	/**  Where they were dropped, in CSS pixels from the window's top left. */
+	x: number | null,
+	y: number | null,
+};
+
+export type EditState = 
+/**  Open in the editor; nothing saved since it opened. */
+{ kind: "watching" } | 
+/**  The last save went to the server. */
+{ kind: "saved" } | { kind: "uploading" } | 
+/**  Someone changed the server's copy; uploads stopped so it is not lost. */
+{ kind: "conflict" } | { kind: "failed"; reason: string };
+
+export type EditView = {
+	id: number,
+	session: number,
+	remote: string,
+	/**  The copy being edited, for taking changes from after a conflict. */
+	local: string,
+	state: EditState,
 };
 
 /**  `user@host:port` as the view sends it. */
@@ -141,6 +197,20 @@ export type EndpointSpec = {
 	user: string,
 	host: string,
 	port: number,
+};
+
+export type EntryKindSpec = "file" | "dir" | "link" | "other";
+
+/**  One entry of a folder, here or on the server. */
+export type EntryView = {
+	/**  As the system or the server named it; shown as text only. */
+	name: string,
+	kind: EntryKindSpec,
+	/**  Bytes; a JS number is exact up to 8 PiB. */
+	size: number | null,
+	/**  Seconds since the epoch. */
+	modified: number | null,
+	mode: number | null,
 };
 
 /**  One environment variable, as OpenSSH `SetEnv NAME=value`. */
@@ -369,6 +439,13 @@ export type KeychainSpec = { kind: "unavailable"; reason: string } | { kind: "of
  */
 { kind: "on"; presence: boolean };
 
+/**  A folder's entries and where it is, so the view can go up. */
+export type Listing = {
+	path: string,
+	parent: string | null,
+	entries: EntryView[],
+};
+
 /**
  *  The OS's presence check: what it is called, and why it cannot run
  *  here, when it cannot.
@@ -429,6 +506,12 @@ export type SettingsSpec = {
 	identity?: string | null,
 };
 
+export type SftpHandle = {
+	id: number,
+	/**  The login folder, where browsing starts. */
+	home: string,
+};
+
 export type SkippedHost = {
 	alias: string,
 	reason: string,
@@ -445,6 +528,19 @@ export type SshTargetSpec = {
 	methods?: AuthMethodSpec[] | null,
 	identityFiles?: string[],
 	identitiesOnly?: boolean,
+};
+
+export type TransferStatusSpec = { kind: "waiting" } | { kind: "running" } | { kind: "done" } | { kind: "cancelled" } | { kind: "failed"; reason: string };
+
+export type TransferView = {
+	id: number,
+	session: number,
+	direction: DirectionSpec,
+	name: string,
+	done: number | null,
+	total: number | null,
+	resumedFrom: number | null,
+	status: TransferStatusSpec,
 };
 
 export type VaultStatusSpec = {

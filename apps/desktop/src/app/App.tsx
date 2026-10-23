@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { displayChord } from "@/features/keymap/keymap.ts";
 import { Sidebar } from "@/features/hosts/Sidebar.tsx";
 import { ConnectDialog } from "@/features/ssh/ConnectDialog.tsx";
+import { FilesView } from "@/features/files/FilesView.tsx";
 import { ForwardsDialog } from "@/features/forwards/ForwardsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
@@ -21,7 +22,7 @@ export function App({ shell }: { shell: AppShell }) {
   const { workspace } = shell;
   const { tabs, activeTabId } = useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const active = tabs.find((tab) => tab.id === activeTabId);
-  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen } = useSyncExternalStore(
+  const { sidebarOpen, vaultOpen, historyOpen, forwardsOpen, files } = useSyncExternalStore(
     shell.subscribe,
     shell.getState,
   );
@@ -35,6 +36,7 @@ export function App({ shell }: { shell: AppShell }) {
   // Stable, so a vault change does not rebuild the host tree. O(hosts) each.
   const connectHost = useCallback((host: HostView) => shell.connectHost(host), [shell]);
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
+  const openFiles = useCallback((host: HostView) => shell.openFiles(host), [shell]);
 
   // Typing and clicking keep an open vault from locking. Capture phase: the
   // terminal handles its keys before they would bubble here.
@@ -64,7 +66,8 @@ export function App({ shell }: { shell: AppShell }) {
         state.connectOpen ||
         state.vaultOpen ||
         state.historyOpen ||
-        state.forwardsOpen;
+        state.forwardsOpen ||
+        state.files !== undefined;
       if (!event.defaultPrevented && !modal) {
         shell.handleKey(event);
       }
@@ -92,6 +95,7 @@ export function App({ shell }: { shell: AppShell }) {
             store={shell.hosts}
             onConnect={connectHost}
             onOpenVault={openVault}
+            {...(shell.files ? { onFiles: openFiles } : {})}
             identities={vault.identities}
           />
         )}
@@ -141,6 +145,14 @@ export function App({ shell }: { shell: AppShell }) {
           onInsert={(command) => shell.insertText(command)}
           onCopy={(text) => shell.copyText(text)}
           onUnlock={(retry) => shell.unlockVaultThen(retry)}
+        />
+      )}
+      {files && shell.files && (
+        <FilesView
+          store={files.store}
+          client={shell.files}
+          hostLabel={files.host.label}
+          onClose={() => shell.closeFiles()}
         />
       )}
       {forwardsOpen && shell.forwards && (
