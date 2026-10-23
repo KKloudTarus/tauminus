@@ -284,7 +284,7 @@ async fn a_forward_keeps_the_connection_after_its_shell_and_owner_are_gone() {
     let handle = setup.connection.start_forward(&forward).await.unwrap();
     shell
         .input
-        .send(TerminalInput::Data(b"exit\n".to_vec()))
+        .send(TerminalInput::Data(b"exit 0\n".to_vec()))
         .await
         .unwrap();
     let (_, code) = collect(&mut shell).await;
