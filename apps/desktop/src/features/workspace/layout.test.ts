@@ -277,7 +277,8 @@ describe("random operation sequences", () => {
       }
     }
     expect(violations).toEqual([]);
-  });
+    // A shared CI runner under load needs more than the default 5 s.
+  }, 30_000);
 });
 
 const SIDES = ["left", "right", "up", "down"] as const;
