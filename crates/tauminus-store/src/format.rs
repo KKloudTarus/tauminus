@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The file format, versions 1 to 7. Domain types stay free of serde; these types
+//! The file format, versions 1 to 8. Domain types stay free of serde; these types
 //! translate at the boundary and validate everything they read.
 
 use std::path::PathBuf;
@@ -10,17 +10,18 @@ use serde::{Deserialize, Serialize};
 use tauminus_domain::{
     AuthMethod, Bind, BindAddress, Destination, Encoding, EnvVar, Forward, ForwardId, ForwardRule,
     Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label,
-    Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession, UserName,
+    Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession, TriggerSetId, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
 /// build refuses a newer file instead of dropping fields it does not know.
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
-/// encodings, version 5 Telnet hosts, version 6 tmux sessions, and
-/// version 7 Mosh hosts; a file is written as the lowest version that
+/// encodings, version 5 Telnet hosts, version 6 tmux sessions, version 7
+/// Mosh hosts, and version 8 highlight sets; a file is written as the lowest version that
 /// holds what it has, so a build from before a feature keeps reading files
 /// that do not use it.
-const VERSION: u32 = 7;
+const VERSION: u32 = 8;
+const VERSION_WITHOUT_TRIGGERS: u32 = 7;
 const VERSION_WITHOUT_MOSH: u32 = 6;
 const VERSION_WITHOUT_TMUX: u32 = 5;
 const VERSION_WITHOUT_TELNET: u32 = 4;
@@ -136,6 +137,9 @@ struct SettingsRecord {
     /// A tmux session name, or "" for none even where a group sets one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tmux: Option<String>,
+    /// Highlight and trigger set ids, nearest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    triggers: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -171,6 +175,7 @@ impl SettingsRecord {
             && self.history.is_none()
             && self.encoding.is_none()
             && self.tmux.is_none()
+            && self.triggers.is_empty()
             && self.env.is_empty()
             && self.user.is_none()
             && self.port.is_none()
@@ -201,6 +206,8 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let triggers = inventory.hosts().any(|h| !h.settings.triggers.is_empty())
+        || inventory.groups().any(|g| !g.settings.triggers.is_empty());
     let mosh = inventory.hosts().any(|h| h.protocol == Protocol::Mosh);
     let tmux = inventory.hosts().any(|h| h.settings.tmux.is_some())
         || inventory.groups().any(|g| g.settings.tmux.is_some());
@@ -210,8 +217,10 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if mosh {
+        version: if triggers {
             VERSION
+        } else if mosh {
+            VERSION_WITHOUT_TRIGGERS
         } else if tmux {
             VERSION_WITHOUT_MOSH
         } else if telnet {
@@ -381,6 +390,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
             t.session()
                 .map_or_else(String::new, |session| session.as_str().to_owned())
         }),
+        triggers: s.triggers.iter().map(ToString::to_string).collect(),
         env: s
             .env
             .iter()
@@ -496,6 +506,12 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
             .transpose()
             .map_err(|e| format!("identity: {e}"))?,
         env: env(&r.env)?,
+        triggers: r
+            .triggers
+            .iter()
+            .map(|id| TriggerSetId::parse(id))
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("highlight set: {e}"))?,
     })
 }
 

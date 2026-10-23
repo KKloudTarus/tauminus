@@ -13,7 +13,7 @@ use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
     HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Protocol, Route,
-    Settings, SnippetId, Tag, Tmux, TmuxSession, UserName, env_list,
+    Settings, SnippetId, Tag, Tmux, TmuxSession, TriggerSetId, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -85,6 +85,10 @@ pub(crate) struct SettingsSpec {
     /// group sets one, and `null` inherits.
     #[serde(default)]
     pub(crate) tmux: Option<String>,
+    /// Highlight set ids, in precedence order; they add up with the
+    /// groups', this level's first.
+    #[serde(default)]
+    pub(crate) triggers: Option<Vec<String>>,
 }
 
 /// A character set a host's shell may speak, by its WHATWG name.
@@ -418,6 +422,8 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
                 .map_or_else(String::new, |session| session.as_str().to_owned())
         }),
         identity: s.identity.as_ref().map(ToString::to_string),
+        triggers: (!s.triggers.is_empty())
+            .then(|| s.triggers.iter().map(ToString::to_string).collect()),
         env: (!s.env.is_empty()).then(|| {
             s.env
                 .iter()
@@ -571,6 +577,13 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         history: spec.history,
         encoding: spec.encoding.map(Encoding::from),
         tmux: tmux(spec.tmux)?,
+        triggers: spec
+            .triggers
+            .unwrap_or_default()
+            .iter()
+            .map(|id| TriggerSetId::parse(id))
+            .collect::<Result<_, _>>()
+            .map_err(invalid)?,
         env: env_vars(spec.env)?,
         identity: spec
             .identity

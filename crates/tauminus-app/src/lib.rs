@@ -24,6 +24,7 @@ mod session;
 mod snippets;
 mod ssh;
 mod telnet;
+mod triggers;
 pub mod vault;
 
 pub use connections::{Connections, Login, LoginError};
@@ -40,3 +41,4 @@ pub use session::{SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
 pub use telnet::TelnetSessions;
+pub use triggers::{Prepared, TriggerBook, TriggerBookError};

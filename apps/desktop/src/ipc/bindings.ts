@@ -61,6 +61,34 @@ export const commands = {
 	snippetCommand: (id: string, values: { [key in string]: string }) => typedError<string, CommandError>(__TAURI_INVOKE("snippet_command", { id, values })),
 	/**  What to type into a new shell on a saved host. */
 	hostStartup: (host: string) => typedError<StartupView, CommandError>(__TAURI_INVOKE("host_startup", { host })),
+	triggerSetsList: () => typedError<TriggerSetView[], CommandError>(__TAURI_INVOKE("trigger_sets_list")),
+	/**
+	 *  Adds a set with a new id, or replaces the saved one `id` names. An id
+	 *  the caller names must be saved already: a deleted set that hosts still
+	 *  list does not come back under its old id.
+	 */
+	triggerSetSave: (set: TriggerSetInput) => typedError<TriggerSetView[], CommandError>(__TAURI_INVOKE("trigger_set_save", { set })),
+	/**  Removes a set. Hosts and groups that name it skip it from then on. */
+	triggerSetDelete: (id: string) => typedError<TriggerSetView[], CommandError>(__TAURI_INVOKE("trigger_set_delete", { id })),
+	/**  The sets every session gets, in precedence order. */
+	triggerDefaultsSave: (ids: string[]) => typedError<TriggerSetView[], CommandError>(__TAURI_INVOKE("trigger_defaults_save", { ids })),
+	/**
+	 *  Why `pattern` cannot be a rule's, or `null` when it can; for the editor
+	 *  to say as it is typed.
+	 */
+	triggerPatternCheck: (pattern: string) => __TAURI_INVOKE<string | null>("trigger_pattern_check", { pattern }),
+	/**
+	 *  Compiles the rules for a pane: those of saved host `host` and its
+	 *  groups, then the defaults; only the defaults for a pane with no saved
+	 *  host.
+	 */
+	triggerPrepare: (host: string | null) => typedError<PreparedView, CommandError>(__TAURI_INVOKE("trigger_prepare", { host })),
+	/**
+	 *  Matches `lines` with the rules prepared as `handle`; `null` when the
+	 *  rules changed since, and the pane should prepare again. At most
+	 *  [`MAX_SCAN_LINES`] lines; the matcher reads [`MAX_SCAN_BYTES`] of them.
+	 */
+	triggerScan: (handle: number, lines: string[]) => typedError<HitView[] | null, CommandError>(__TAURI_INVOKE("trigger_scan", { handle, lines })),
 	/**
 	 *  Connects to a saved Telnet host and streams it to the view. Nothing
 	 *  is asked: Telnet has no host key, and a login, if any, is the
@@ -464,6 +492,17 @@ export type HistoryRecordSpec = {
 	started?: number | null,
 };
 
+/**
+ *  Where a rule matched: line `line` of the scan, code points `start` to
+ *  `end`, coloured as style `style`.
+ */
+export type HitView = {
+	line: number,
+	style: number,
+	start: number,
+	end: number,
+};
+
 export type HostInput = {
 	/**  Absent for a new host. */
 	id?: string | null,
@@ -559,6 +598,15 @@ export type Listing = {
 
 export type ParitySpec = "none" | "odd" | "even";
 
+export type PreparedView = {
+	handle: number,
+	/**
+	 *  By the index hits carry; empty when no rule applies, and the pane
+	 *  need not scan.
+	 */
+	styles: StyleSpec[],
+};
+
 /**
  *  The OS's presence check: what it is called, and why it cannot run
  *  here, when it cannot.
@@ -610,6 +658,13 @@ export type RecordingView = {
 };
 
 export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
+
+export type RuleSpec = {
+	name: string,
+	pattern: string,
+	enabled: boolean,
+	style: StyleSpec,
+};
 
 export type SerialPortView = {
 	path: string,
@@ -684,6 +739,11 @@ export type SettingsSpec = {
 	 *  group sets one, and `null` inherits.
 	 */
 	tmux?: string | null,
+	/**
+	 *  Highlight set ids, in precedence order; they add up with the
+	 *  groups', this level's first.
+	 */
+	triggers?: string[] | null,
 };
 
 export type SftpHandle = {
@@ -738,6 +798,17 @@ export type StartupView = {
 	skipped: SkippedView[],
 };
 
+/**
+ *  How a rule colours. Colours are `"0"` to `"15"` for the theme's
+ *  palette, or `"#rrggbb"`.
+ */
+export type StyleSpec = {
+	fg?: string | null,
+	bg?: string | null,
+	/**  The whole line, not only the match. */
+	line?: boolean,
+};
+
 export type TransferStatusSpec = { kind: "waiting" } | { kind: "running" } | { kind: "done" } | { kind: "cancelled" } | { kind: "failed"; reason: string };
 
 export type TransferView = {
@@ -749,6 +820,24 @@ export type TransferView = {
 	total: number | null,
 	resumedFrom: number | null,
 	status: TransferStatusSpec,
+};
+
+export type TriggerSetInput = {
+	/**  Absent for a new set. */
+	id?: string | null,
+	name: string,
+	rules: RuleSpec[],
+};
+
+export type TriggerSetView = {
+	id: string,
+	name: string,
+	rules: RuleSpec[],
+	/**
+	 *  Where it stands among the sets every session gets, below what hosts
+	 *  and groups name, 0 first; `null` when it is not one of them.
+	 */
+	rank: number | null,
 };
 
 export type VariableView = {

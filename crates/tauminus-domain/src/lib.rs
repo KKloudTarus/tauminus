@@ -23,6 +23,7 @@ mod snippet;
 mod ssh;
 mod telnet;
 mod terminal;
+mod trigger;
 
 pub use flow::{FlowControl, FlowSignal, Watermarks};
 pub use forward::{
@@ -39,7 +40,7 @@ pub use history::{
 pub use hosts::{
     ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory, Label,
     MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_STARTUP, MAX_TAGS, PROD_TAG, Protocol, Settings,
-    SnippetId, Tag,
+    SnippetId, Tag, TriggerSetId,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
 pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
@@ -67,3 +68,8 @@ pub use ssh::{
 };
 pub use telnet::{TELNET_PORT, TelnetTarget};
 pub use terminal::{TerminalSize, TerminalSizeError};
+pub use trigger::{
+    Action, Colour, Highlight, Hit, MAX_APPLIED_RULES, MAX_APPLIED_SETS, MAX_HITS, MAX_LEVEL_SETS,
+    MAX_RULE_PATTERN, MAX_SCAN_BYTES, MAX_SCAN_LINE, MAX_SCAN_LINES, MAX_SET_RULES, MAX_SETS,
+    Matcher, RulePattern, TriggerError, TriggerLibrary, TriggerRule, TriggerSet,
+};

@@ -20,19 +20,21 @@ mod serial;
 mod snippets;
 mod ssh;
 mod telnet;
+mod triggers;
 mod vault;
 
 use std::sync::Arc;
 
 use tauminus_app::vault::Vault;
 use tauminus_app::{
-    HostBook, LocalShells, SessionConfig, SessionManager, SnippetBook, SshSessions,
+    HostBook, LocalShells, SessionConfig, SessionManager, SnippetBook, SshSessions, TriggerBook,
 };
 use tauminus_pty::NativePtyLauncher;
 use tauminus_ssh::{AgentSource, HostKeyStore, OpenSshConfig, RusshConnector};
 use tauminus_store::vault::VaultFile;
 use tauminus_store::{
-    FileHistoryBackend, FileVaultBackend, JsonHostStore, JsonSnippetStore, OsKeychain,
+    FileHistoryBackend, FileVaultBackend, JsonHostStore, JsonSnippetStore, JsonTriggerStore,
+    OsKeychain,
 };
 use tauri::Manager;
 use tauri::webview::PageLoadEvent;
@@ -63,6 +65,13 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         snippets::snippet_delete,
         snippets::snippet_command,
         snippets::host_startup,
+        triggers::trigger_sets_list,
+        triggers::trigger_set_save,
+        triggers::trigger_set_delete,
+        triggers::trigger_defaults_save,
+        triggers::trigger_pattern_check,
+        triggers::trigger_prepare,
+        triggers::trigger_scan,
         telnet::telnet_connect,
         mosh::mosh_connect,
         recordings::recording_start,
@@ -127,6 +136,31 @@ pub(crate) struct Paths {
     pub(crate) home: Option<std::path::PathBuf>,
 }
 
+/// The snippet and highlight libraries, each kept as it is and reported
+/// when its file cannot be read.
+fn manage_libraries<R: tauri::Runtime>(app: &tauri::App<R>, config_dir: &std::path::Path) {
+    let store = Arc::new(JsonSnippetStore::new(config_dir.join("snippets.json")));
+    let library = tauri::async_runtime::block_on(SnippetBook::open(store));
+    app.manage(match library {
+        Ok(book) => snippets::Snippets::Ready(Arc::new(book)),
+        Err(e) => {
+            // Keep the file as it is; saving now would destroy it.
+            tracing::error!(error = %e, "saved snippets unavailable");
+            snippets::Snippets::Unavailable(e.to_string())
+        }
+    });
+    let store = Arc::new(JsonTriggerStore::new(config_dir.join("triggers.json")));
+    let library = tauri::async_runtime::block_on(TriggerBook::open(store));
+    app.manage(match library {
+        Ok(book) => triggers::Triggers::Ready(Arc::new(book)),
+        Err(e) => {
+            // Keep the file as it is; saving now would destroy it.
+            tracing::error!(error = %e, "saved highlight sets unavailable");
+            triggers::Triggers::Unavailable(e.to_string())
+        }
+    });
+}
+
 /// Builds every adapter and use case and hands them to Tauri as state. The
 /// app and the IPC tests share it, so a command never asks for state the
 /// app does not manage.
@@ -185,16 +219,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
             hosts::Hosts::Unavailable(e.to_string())
         }
     });
-    let store = Arc::new(JsonSnippetStore::new(config_dir.join("snippets.json")));
-    let library = tauri::async_runtime::block_on(SnippetBook::open(store));
-    app.manage(match library {
-        Ok(book) => snippets::Snippets::Ready(Arc::new(book)),
-        Err(e) => {
-            // Keep the file as it is; saving now would destroy it.
-            tracing::error!(error = %e, "saved snippets unavailable");
-            snippets::Snippets::Unavailable(e.to_string())
-        }
-    });
+    manage_libraries(app, &config_dir);
     let backend = FileVaultBackend::new(
         VaultFile::new(config_dir.join("vault.json")),
         Arc::new(OsKeychain::new()),

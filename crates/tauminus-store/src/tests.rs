@@ -270,6 +270,29 @@ async fn a_tmux_session_and_one_turned_off_load_back_at_version_6() {
 }
 
 #[tokio::test]
+async fn highlight_sets_load_back_in_order_at_version_8() {
+    use tauminus_domain::TriggerSetId;
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut prod = inventory
+        .groups()
+        .find(|g| g.id.as_str() == "prod")
+        .unwrap()
+        .clone();
+    prod.settings.triggers = vec![
+        TriggerSetId::parse("errors").unwrap(),
+        TriggerSetId::parse("logs").unwrap(),
+    ];
+    inventory.put_group(prod).unwrap();
+    store.save(&inventory).await.unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.0.join("hosts.json")).unwrap()).unwrap();
+    assert_eq!(json["version"], 8);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -282,7 +305,15 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 8, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 9, "hosts": []}"#.to_owned()),
+        (
+            "highlight set id",
+            r#"{"version": 8, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"triggers": ["no spaces"]}}]}"#.to_owned(),
+        ),
+        (
+            "a highlight set twice",
+            r#"{"version": 8, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"triggers": ["x", "x"]}}]}"#.to_owned(),
+        ),
         (
             "tmux name",
             r#"{"version": 6, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"tmux": "a b"}}]}"#.to_owned(),

@@ -5192,6 +5192,8 @@ dependencies = [
 name = "tauminus-domain"
 version = "0.0.0"
 dependencies = [
+ "regex",
+ "regex-syntax",
  "thiserror 2.0.21",
 ]
 

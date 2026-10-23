@@ -22,6 +22,7 @@ use crate::ssh::{
 };
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 use crate::telnet::{TELNET_PORT, TelnetTarget};
+use crate::trigger::MAX_LEVEL_SETS;
 
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
 /// bound the cost of resolving a host.
@@ -70,6 +71,8 @@ pub enum HostsError {
     Forward(#[from] ForwardError),
     #[error("at most {MAX_STARTUP} startup snippets per host, each once")]
     Startup,
+    #[error("at most {MAX_LEVEL_SETS} highlight sets per host or group, each once")]
+    Triggers,
 }
 
 /// Most startup snippets one host runs.
@@ -125,6 +128,7 @@ id_type!(HostId, "saved host");
 id_type!(GroupId, "group of hosts");
 id_type!(ForwardId, "port forwarding rule");
 id_type!(SnippetId, "saved command");
+id_type!(TriggerSetId, "set of highlight and trigger rules");
 id_type!(
     IdentityId,
     "vault identity: a reusable user, password, and key"
@@ -283,6 +287,9 @@ pub struct Settings {
     pub encoding: Option<Encoding>,
     /// A tmux session to join on every connect; `None` inherits.
     pub tmux: Option<Tmux>,
+    /// Highlight and trigger sets, nearest first; they add up from the
+    /// host through every group, the host's taking precedence.
+    pub triggers: Vec<TriggerSetId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -668,6 +675,20 @@ impl Inventory {
             .unwrap_or(true))
     }
 
+    /// The highlight and trigger sets a host names, its own first, then
+    /// each group's from the nearest up, each once. O(d·k).
+    pub fn triggers(&self, id: &HostId) -> Result<Vec<TriggerSetId>, HostsError> {
+        let mut out: Vec<TriggerSetId> = Vec::new();
+        for settings in self.chain(id)? {
+            for set in &settings.triggers {
+                if !out.contains(set) {
+                    out.push(set.clone());
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// A host's settings, then each group's up to the root.
     fn chain(&self, id: &HostId) -> Result<Vec<&Settings>, HostsError> {
         let host = self
@@ -778,6 +799,7 @@ impl Inventory {
 /// hosts, more jumps than a connect allows, or an environment list that is
 /// unsorted, repeats a name, or is too long.
 fn check_settings(settings: &Settings) -> Result<(), HostsError> {
+    check_triggers(&settings.triggers)?;
     if settings.env.len() > MAX_ENV {
         return Err(EnvError::TooMany.into());
     }
@@ -797,6 +819,18 @@ fn check_settings(settings: &Settings) -> Result<(), HostsError> {
     }
     if jumps > 0 && matches!(settings.route, Some(Route::ProxyCommand(_))) {
         return invalid("ProxyCommand and jump hosts cannot be combined");
+    }
+    Ok(())
+}
+
+/// O(k²), k ≤ [`MAX_LEVEL_SETS`].
+fn check_triggers(triggers: &[TriggerSetId]) -> Result<(), HostsError> {
+    let repeated = triggers
+        .iter()
+        .enumerate()
+        .any(|(i, id)| triggers[..i].contains(id));
+    if triggers.len() > MAX_LEVEL_SETS || repeated {
+        return Err(HostsError::Triggers);
     }
     Ok(())
 }
@@ -832,6 +866,13 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         child.route.clone_from(&parent.route);
     }
     child.guard.inherit(&parent.guard)?;
+    // The child's sets first, then the parent's it does not already name.
+    for id in &parent.triggers {
+        if !child.triggers.contains(id) {
+            child.triggers.push(id.clone());
+        }
+    }
+    check_triggers(&child.triggers)?;
     Ok(())
 }
 

@@ -840,3 +840,53 @@ fn a_mosh_host_signs_in_over_ssh_and_has_no_telnet_target() {
     // A Mosh host does not join tmux: only an SSH terminal runs it.
     assert_eq!(inventory.tmux(&id).unwrap(), None);
 }
+
+fn sets(ids: &[&str]) -> Vec<TriggerSetId> {
+    ids.iter()
+        .map(|id| TriggerSetId::parse(id).unwrap())
+        .collect()
+}
+
+#[test]
+fn highlight_sets_add_up_from_the_host_through_every_group_nearest_first() {
+    let mut root = group("root", None);
+    root.settings.triggers = sets(&["logs", "base"]);
+    let mut team = group("team", Some("root"));
+    team.settings.triggers = sets(&["db", "logs"]);
+    let mut db = host("db", Some("team"));
+    db.settings.triggers = sets(&["mine"]);
+    let mut inventory = Inventory::new(vec![root, team], vec![db, host("web", None)]).unwrap();
+    assert_eq!(
+        inventory.triggers(&hid("db")).unwrap(),
+        sets(&["mine", "db", "logs", "base"])
+    );
+    assert_eq!(inventory.triggers(&hid("web")).unwrap(), vec![]);
+    // A removed group's sets move to what it held, so nothing changes.
+    inventory.remove_group(&gid("team")).unwrap();
+    assert_eq!(
+        inventory.triggers(&hid("db")).unwrap(),
+        sets(&["mine", "db", "logs", "base"])
+    );
+}
+
+#[test]
+fn a_level_names_a_few_sets_each_once() {
+    let mut db = host("db", None);
+    db.settings.triggers = sets(&["a", "a"]);
+    assert_eq!(Inventory::new(vec![], vec![db]), Err(HostsError::Triggers));
+    let mut db = host("db", None);
+    db.settings.triggers = sets(&["a", "b", "c", "d", "e", "f", "g", "h", "i"]);
+    assert_eq!(Inventory::new(vec![], vec![db]), Err(HostsError::Triggers));
+    // Removing a group would put more than the limit on its host: refused.
+    let mut team = group("team", None);
+    team.settings.triggers = sets(&["a", "b", "c", "d", "e"]);
+    let mut db = host("db", Some("team"));
+    db.settings.triggers = sets(&["f", "g", "h", "i"]);
+    let mut inventory = Inventory::new(vec![team], vec![db]).unwrap();
+    let before = inventory.clone();
+    assert_eq!(
+        inventory.remove_group(&gid("team")),
+        Err(HostsError::Triggers)
+    );
+    assert_eq!(inventory, before);
+}
