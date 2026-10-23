@@ -157,7 +157,7 @@ Goal: beat Termius Pro.
 - [x] Session recording to asciicast v2, replay player with seek and search
 - [x] Bookmarks and comments on recordings
 - [ ] Triggers: regex match runs highlight, notify, send text, or capture
-- [ ] Highlight sets per host and group
+- [x] Highlight sets per host and group
 - [ ] Autocomplete from forked Fig specs for bash and zsh hosts
 - [ ] Password suggestion at detected prompts from identities
 - [ ] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
