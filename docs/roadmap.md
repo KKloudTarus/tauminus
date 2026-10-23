@@ -154,8 +154,8 @@ Goal: beat Termius Pro.
 
 ### Scope
 
-- [ ] Session recording to asciicast v2, replay player with seek and search
-- [ ] Bookmarks and comments on recordings
+- [x] Session recording to asciicast v2, replay player with seek and search
+- [x] Bookmarks and comments on recordings
 - [ ] Triggers: regex match runs highlight, notify, send text, or capture
 - [ ] Highlight sets per host and group
 - [ ] Autocomplete from forked Fig specs for bash and zsh hosts
@@ -168,7 +168,7 @@ Goal: beat Termius Pro.
 
 ### Exit criteria
 
-- [ ] Recording of a 1 hour session replays with seek under 200 ms
+- [x] Recording of a 1 hour session replays with seek under 200 ms
 - [ ] AI never sends terminal output off the machine without a per-host opt-in (test)
 - [ ] FIDO2 login tested with a YubiKey on all three operating systems
 
