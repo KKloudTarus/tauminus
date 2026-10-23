@@ -11,13 +11,13 @@
 
 use std::sync::Arc;
 
-use russh::client::{Handle, Msg};
-use russh::{Channel, ChannelMsg, ChannelWriteHalf, Disconnect};
+use russh::client::Msg;
+use russh::{Channel, ChannelMsg, ChannelWriteHalf};
 use tauminus_app::ports::{TerminalEvent, TerminalInput, TerminalStream, Terminator};
 use tokio::sync::{Notify, mpsc};
 use tracing::debug;
 
-use crate::Client;
+use crate::connection::Connection;
 
 /// Output chunks queued toward the session pump before the bridge stops
 /// reading the channel. russh then stops reading the socket, and TCP flow
@@ -25,15 +25,15 @@ use crate::Client;
 const EVENT_QUEUE: usize = 4;
 const INPUT_QUEUE: usize = 64;
 
-/// Starts the bridge. `connections` holds every hop, innermost last; it lives
-/// as long as the session, and dropping it closes the tunnels.
-pub(crate) fn spawn(channel: Channel<Msg>, connections: Vec<Handle<Client>>) -> TerminalStream {
+/// Starts the bridge. It holds `connection` until the shell ends; the
+/// connection closes when nothing else holds it either.
+pub(crate) fn spawn(channel: Channel<Msg>, connection: Arc<Connection>) -> TerminalStream {
     let (events_tx, events_rx) = mpsc::channel(EVENT_QUEUE);
     let (input_tx, input_rx) = mpsc::channel(INPUT_QUEUE);
     let close = Arc::new(Notify::new());
     tokio::spawn(run(
         channel,
-        connections,
+        connection,
         input_rx,
         events_tx,
         Arc::clone(&close),
@@ -45,8 +45,9 @@ pub(crate) fn spawn(channel: Channel<Msg>, connections: Vec<Handle<Client>>) -> 
     }
 }
 
-/// Closes the channel and the connections. A network peer cannot ignore a
-/// closed connection, so `kill` is the same as `terminate`.
+/// Closes the channel, and the connection unless something else holds it. A
+/// network peer cannot ignore a closed channel, so `kill` is the same as
+/// `terminate`.
 struct SshTerminator(Arc<Notify>);
 
 impl Terminator for SshTerminator {
@@ -63,7 +64,7 @@ impl Drop for SshTerminator {
 
 async fn run(
     channel: Channel<Msg>,
-    connections: Vec<Handle<Client>>,
+    connection: Arc<Connection>,
     input: mpsc::Receiver<TerminalInput>,
     events: mpsc::Sender<TerminalEvent>,
     close: Arc<Notify>,
@@ -103,12 +104,7 @@ async fn run(
     }
     writing.abort();
     let _ = writer.close().await;
-    // Innermost first, so each tunnel closes before the hop carrying it.
-    for connection in connections.iter().rev() {
-        let _ = connection
-            .disconnect(Disconnect::ByApplication, "", "en")
-            .await;
-    }
+    drop(connection);
     let _ = events.send(TerminalEvent::Exited { code }).await;
 }
 

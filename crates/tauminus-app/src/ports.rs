@@ -13,9 +13,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tauminus_domain::{LocalShell, SshTarget, TerminalSize};
+use tauminus_domain::{Forward, LocalShell, SessionOptions, SshTarget, TerminalSize};
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use zeroize::Zeroizing;
 
 pub use crate::vault::Credentials;
@@ -217,17 +217,143 @@ pub struct ScriptOutcome {
     pub output: String,
 }
 
+/// How a running forward is doing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForwardStatus {
+    /// Connections it carries now.
+    pub open: usize,
+    /// Connections it has carried since it started.
+    pub total: u64,
+    /// Of those, how many were reset because their client fell too far
+    /// behind or stopped reading.
+    pub resets: u64,
+    /// Why it stopped on its own, such as the connection dropping. `None`
+    /// while it runs.
+    pub ended: Option<String>,
+}
+
+/// A running forward. Dropping it stops the listener and closes every
+/// connection it carries.
+#[derive(Debug)]
+pub struct ForwardHandle {
+    port: u16,
+    status: watch::Receiver<ForwardStatus>,
+    stop: watch::Sender<()>,
+    finished: watch::Receiver<()>,
+}
+
+impl ForwardHandle {
+    /// `stop` is dropped with the handle, which the adapter's tasks watch.
+    /// The senders of `finished` live in the tasks that hold the listener
+    /// (or, for a remote rule, until the server cancelled it), so it closes
+    /// once the port is free again.
+    pub fn new(
+        port: u16,
+        status: watch::Receiver<ForwardStatus>,
+        stop: watch::Sender<()>,
+        finished: watch::Receiver<()>,
+    ) -> Self {
+        Self {
+            port,
+            status,
+            stop,
+            finished,
+        }
+    }
+
+    /// Stops the forward and waits, at most `limit`, until its port is
+    /// free, so the same rule can listen there again at once.
+    pub async fn stop(self, limit: std::time::Duration) {
+        let Self {
+            stop, mut finished, ..
+        } = self;
+        drop(stop);
+        let _ =
+            tokio::time::timeout(limit, async { while finished.changed().await.is_ok() {} }).await;
+    }
+
+    /// The port listening: the rule's, or the one the OS or the server
+    /// picked when the rule asked for 0.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    pub fn status(&self) -> ForwardStatus {
+        self.status.borrow().clone()
+    }
+
+    /// A receiver that sees every change, for the view.
+    pub fn watch(&self) -> watch::Receiver<ForwardStatus> {
+        self.status.clone()
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum TunnelError {
+    #[error("could not listen on {address}: {source}")]
+    Bind {
+        address: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the server refused to listen on {0}")]
+    Denied(String),
+    #[error("the connection is closed")]
+    Closed,
+}
+
+/// One login to a host, shared by the shell, SFTP, and forwards that use
+/// it. It closes when the last of them drops it.
+pub trait SshConnection: Send + Sync + 'static {
+    /// Opens a shell with a PTY. Agent forwarding is decided when the
+    /// connection is made, not here.
+    fn open_shell<'a>(
+        &'a self,
+        size: TerminalSize,
+        options: &'a SessionOptions,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+
+    fn start_forward<'a>(
+        &'a self,
+        forward: &'a Forward,
+    ) -> BoxFuture<'a, Result<ForwardHandle, TunnelError>>;
+
+    /// False once the session has ended.
+    fn is_open(&self) -> bool;
+
+    /// Resolves when the session ends, at once if it already has.
+    fn closed(&self) -> BoxFuture<'_, ()>;
+}
+
 /// Opens SSH shell sessions.
 pub trait SshConnector: Send + Sync + 'static {
+    /// Signs in on every hop and returns the connection, with agent
+    /// forwarding served on it when `forward_agent` is set.
+    fn connection<'a>(
+        &'a self,
+        target: &'a SshTarget,
+        prompter: Arc<dyn Prompter>,
+        credentials: Arc<Credentials>,
+        forward_agent: bool,
+    ) -> BoxFuture<'a, Result<Arc<dyn SshConnection>, ConnectError>>;
+
     /// Connects with `credentials` from a vault identity, used on the last
-    /// hop before any key file or prompt.
+    /// hop before any key file or prompt, and opens a shell on a connection
+    /// of its own.
     fn connect_with<'a>(
         &'a self,
         target: &'a SshTarget,
         size: TerminalSize,
         prompter: Arc<dyn Prompter>,
         credentials: Arc<Credentials>,
-    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
+        Box::pin(async move {
+            let connection = self
+                .connection(target, prompter, credentials, target.session.forward_agent)
+                .await?;
+            connection.open_shell(size, &target.session).await
+        })
+    }
 
     /// Runs `script` with `sh -s` on the target, without a PTY or agent
     /// forwarding, signing in as a connect would.
