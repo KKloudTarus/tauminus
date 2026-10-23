@@ -130,7 +130,9 @@ describe("Workspace specs", () => {
     workspace.newTab();
     workspace.newTab("ssh:db");
     workspace.split("row");
-    expect(opened.map(([, spec]) => spec)).toEqual([undefined, "ssh:db", "ssh:db"]);
+    workspace.split("column", "ssh:web");
+    expect(opened.map(([, spec]) => spec)).toEqual([undefined, "ssh:db", "ssh:db", "ssh:web"]);
+    expect(workspace.focusedSpec()).toBe("ssh:web");
   });
 });
 

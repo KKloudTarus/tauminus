@@ -8,6 +8,7 @@ import {
   type LayoutNode,
   type Side,
   assertValid,
+  balanced,
   closePane,
   neighbor,
   pane,
@@ -320,3 +321,19 @@ function neighborViolations(root: LayoutNode): string[] {
   }
   return found;
 }
+
+describe("balanced", () => {
+  it("gives every child of every split the same share", () => {
+    let root = pane("a");
+    root = splitPane(root, "a", "row", "b", "s1");
+    root = splitPane(root, "b", "row", "c", "s2");
+    root = splitPane(root, "a", "column", "d", "s3");
+    const even = balanced(root);
+    assertValid(even);
+    const rects = paneRects(even);
+    expect(rects.get("b")?.width).toBeCloseTo(rects.get("c")?.width ?? 0);
+    expect(rects.get("a")?.height).toBeCloseTo(0.5);
+    expect(rects.get("b")?.width).toBeCloseTo(1 / 3);
+    expect(paneIds(even)).toEqual(paneIds(root));
+  });
+});

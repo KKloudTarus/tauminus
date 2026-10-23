@@ -58,7 +58,7 @@ test("one without placeholders runs at once, and edits and deletes stick", async
   await dialog.getByRole("button", { name: "Edit stamp" }).click();
   await dialog.getByLabel("Command").fill("echo restamped");
   await dialog.getByRole("button", { name: "Save" }).click();
-  await dialog.getByRole("button", { name: "Run stamp" }).click();
+  await dialog.getByRole("button", { name: "Run stamp", exact: true }).click();
   await expect(focusedScreen(page)).toContainText("restamped");
 
   await palette(page, "Snippets");

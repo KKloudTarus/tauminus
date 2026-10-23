@@ -9,26 +9,44 @@ import type { TerminalController } from "@/features/terminal/controller.ts";
 import { TerminalView } from "@/features/terminal/TerminalView.tsx";
 
 import type { LayoutNode, PaneId } from "./layout.ts";
+import type { Broadcast } from "./broadcast.ts";
 import type { Tab, Workspace } from "./workspace.ts";
 
 interface PaneTreeProps {
   workspace: Workspace<TerminalController, SessionSpec>;
   tab: Tab;
+  /** The panes that type together; without it none are marked. */
+  broadcast?: Broadcast | undefined;
   onUnlockVault?: ((retry: () => void) => void) | undefined;
 }
 
 /** Renders one tab's layout: nested resizable groups with a terminal in each leaf. */
-export function PaneTree({ workspace, tab, onUnlockVault }: PaneTreeProps) {
-  return <Node workspace={workspace} tab={tab} node={tab.root} onUnlockVault={onUnlockVault} />;
+export function PaneTree({ workspace, tab, broadcast, onUnlockVault }: PaneTreeProps) {
+  return (
+    <Node
+      workspace={workspace}
+      tab={tab}
+      node={tab.root}
+      broadcast={broadcast}
+      onUnlockVault={onUnlockVault}
+    />
+  );
 }
 
-function Node({ workspace, tab, node, onUnlockVault }: PaneTreeProps & { node: LayoutNode }) {
+function Node({
+  workspace,
+  tab,
+  node,
+  broadcast,
+  onUnlockVault,
+}: PaneTreeProps & { node: LayoutNode }) {
   if (node.kind === "pane") {
     return (
       <TerminalPane
         workspace={workspace}
         paneId={node.id}
         focused={tab.focused === node.id}
+        broadcast={broadcast}
         onUnlockVault={onUnlockVault}
       />
     );
@@ -49,7 +67,13 @@ function Node({ workspace, tab, node, onUnlockVault }: PaneTreeProps & { node: L
       {node.children.map((child, index) => (
         <ChildPanel key={child.id} index={index}>
           <Panel id={child.id} defaultSize={`${node.sizes[index] ?? 0}%`} minSize="8%">
-            <Node workspace={workspace} tab={tab} node={child} onUnlockVault={onUnlockVault} />
+            <Node
+              workspace={workspace}
+              tab={tab}
+              node={child}
+              broadcast={broadcast}
+              onUnlockVault={onUnlockVault}
+            />
           </Panel>
         </ChildPanel>
       ))}
@@ -73,11 +97,13 @@ function TerminalPane({
   workspace,
   paneId,
   focused,
+  broadcast,
   onUnlockVault,
 }: {
   workspace: Workspace<TerminalController, SessionSpec>;
   paneId: PaneId;
   focused: boolean;
+  broadcast: Broadcast | undefined;
   onUnlockVault: ((retry: () => void) => void) | undefined;
 }) {
   const controller = workspace.terminal(paneId);
@@ -89,6 +115,11 @@ function TerminalPane({
   const guarded = useSyncExternalStore(
     (listener) => controller?.subscribeGuard(listener) ?? (() => {}),
     () => controller?.guarded ?? false,
+  );
+
+  const broadcasting = useSyncExternalStore(
+    broadcast?.subscribe ?? noSubscribe,
+    () => broadcast?.has(paneId) ?? false,
   );
 
   useEffect(() => {
@@ -104,18 +135,29 @@ function TerminalPane({
       data-pane-id={paneId}
       data-focused={focused}
       data-guarded={guarded}
-      className={`flex h-full min-h-0 min-w-0 flex-col ${
+      data-broadcast={broadcasting}
+      className={`relative flex h-full min-h-0 min-w-0 flex-col ${
         guarded
           ? `ring-inset ring-[var(--prod)] ${focused ? "ring-2" : "ring-1"}`
-          : focused
-            ? "ring-1 ring-inset ring-[var(--accent)]"
-            : ""
+          : broadcasting
+            ? `ring-inset ring-amber-500 ${focused ? "ring-2" : "ring-1"}`
+            : focused
+              ? "ring-1 ring-inset ring-[var(--accent)]"
+              : ""
       }`}
       onPointerDown={() => workspace.focusPane(paneId)}
       onFocusCapture={() => {
         if (!focused) workspace.focusPane(paneId);
       }}
     >
+      {broadcasting && (
+        <span
+          data-testid="broadcast-badge"
+          className="pointer-events-none absolute top-1 right-2 z-10 rounded bg-amber-500/90 px-1.5 text-xs text-black"
+        >
+          Broadcast
+        </span>
+      )}
       <TerminalView
         controller={controller}
         className="min-h-0 flex-1"
@@ -124,3 +166,5 @@ function TerminalPane({
     </section>
   );
 }
+
+const noSubscribe = (): (() => void) => () => {};

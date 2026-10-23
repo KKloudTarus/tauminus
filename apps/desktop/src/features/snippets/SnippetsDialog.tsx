@@ -27,10 +27,13 @@ type Editing = { kind: "new" } | { kind: "edit"; snippet: SnippetView };
 export function SnippetsDialog({
   store,
   onRun,
+  onRunOnHosts,
   onClose,
 }: {
   store: SnippetsStore;
   onRun: (id: string) => void;
+  /** Asks for saved hosts to run it on; without it there is no such button. */
+  onRunOnHosts?: (id: string) => void;
   onClose: () => void;
 }) {
   const titleId = useId();
@@ -112,6 +115,7 @@ export function SnippetsDialog({
                   name={snippet.name}
                   preview={preview(snippet.body)}
                   onRun={onRun}
+                  onRunOnHosts={onRunOnHosts}
                   onEdit={edit}
                   onDelete={remove}
                 />
@@ -137,6 +141,7 @@ const SnippetRow = memo(function SnippetRow({
   name,
   preview: text,
   onRun,
+  onRunOnHosts,
   onEdit,
   onDelete,
 }: {
@@ -144,6 +149,7 @@ const SnippetRow = memo(function SnippetRow({
   name: string;
   preview: string;
   onRun: (id: string) => void;
+  onRunOnHosts: ((id: string) => void) | undefined;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -154,6 +160,16 @@ const SnippetRow = memo(function SnippetRow({
       <button type="button" className={BUTTON} aria-label={`Run ${name}`} onClick={() => onRun(id)}>
         Run
       </button>
+      {onRunOnHosts && (
+        <button
+          type="button"
+          className={BUTTON}
+          aria-label={`Run ${name} on hosts`}
+          onClick={() => onRunOnHosts(id)}
+        >
+          On hosts…
+        </button>
+      )}
       <button
         type="button"
         className={BUTTON}

@@ -17,3 +17,15 @@ export function defusePaste(data: string): string {
   if (!inner.includes("\u001b") && !inner.includes("\u009b")) return data;
   return PASTE_START + inner.replaceAll("\u001b", "").replaceAll("\u009b", "") + PASTE_END;
 }
+
+/** The text of a bracketed paste, or undefined when `data` is not one. */
+export function pastedText(data: string): string | undefined {
+  return data.startsWith(PASTE_START) && data.endsWith(PASTE_END)
+    ? data.slice(PASTE_START.length, -PASTE_END.length)
+    : undefined;
+}
+
+/** `text` as a terminal sends a paste: bracketed when the shell asked for it. */
+export function asPaste(text: string, bracketed: boolean): string {
+  return bracketed ? PASTE_START + text + PASTE_END : text;
+}

@@ -156,6 +156,35 @@ describe("TerminalController with TerminalView", () => {
       .toBe("ls -la");
   });
 
+  it("sends Ctrl+C at once and tells a listener what the user typed", async () => {
+    const { sessions, controller } = setup();
+    const view = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const heard: string[] = [];
+    controller.setInputListener((data) => heard.push(data));
+    await view.getByTestId("terminal-host").click();
+    await userEvent.keyboard("ab{Control>}c{/Control}");
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data).join(""))
+      .toBe("ab\u0003");
+    expect(heard.join("")).toBe("ab\u0003");
+  });
+
+  it("brackets a shared paste only when its own shell asked for it", async () => {
+    const { sessions, controller } = setup();
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const written = () => sessions.session.write.mock.calls.map(([data]) => data).join("");
+    controller.typeShared("\u001b[200~a\u001b[201~");
+    await expect.poll(written).toBe("a");
+    controller.terminal.write("\u001b[?2004h");
+    await vi.waitFor(() => expect(controller.terminal.modes.bracketedPasteMode).toBe(true));
+    controller.typeShared("\u001b[200~b\u001b[201~");
+    await expect.poll(written).toBe("a\u001b[200~b\u001b[201~");
+  });
+
   it("types a snippet as keys on a host without a guard", async () => {
     const { sessions, controller } = setup();
     await mount(controller);
@@ -602,6 +631,21 @@ describe("TerminalController with the prod guard", () => {
     await expect
       .poll(() => sessions.session.write.mock.calls.map(([data]) => data))
       .toContain("systemctl restart nginx\r");
+  });
+
+  it("sends Ctrl+C at once while a check holds input", async () => {
+    const { sessions, controller, source } = guarded();
+    source.check = () => new Promise(() => {});
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    // A pasted line waits on its check; what follows waits behind it.
+    controller.type("ls\r");
+    controller.type("pwd");
+    controller.interrupt();
+    await expect
+      .poll(() => sessions.session.write.mock.calls.map(([data]) => data).join(""))
+      .toBe("\u0003");
   });
 
   it("answers no to a pending question when disposed", async () => {
