@@ -156,7 +156,7 @@ Goal: beat Termius Pro.
 
 - [x] Session recording to asciicast v2, replay player with seek and search
 - [x] Bookmarks and comments on recordings
-- [ ] Triggers: regex match runs highlight, notify, send text, or capture
+- [x] Triggers: regex match runs highlight, notify, send text, or capture
 - [x] Highlight sets per host and group
 - [ ] Autocomplete from forked Fig specs for bash and zsh hosts
 - [ ] Password suggestion at detected prompts from identities
