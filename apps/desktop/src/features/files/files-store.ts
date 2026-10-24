@@ -133,7 +133,7 @@ export class FilesStore {
     this.#set({ ...this.#state, status: "opening", error: undefined });
     try {
       const [handle, home] = await Promise.all([
-        this.#client.open(this.#host, (prompt) => this.#ask(prompt)),
+        this.#client.open(this.#host, (prompt, withdrawn) => this.#ask(prompt, withdrawn)),
         this.#client.localHome(),
       ]);
       if (this.#state.status === "closed") {
@@ -398,7 +398,7 @@ export class FilesStore {
     setTimeout(reload, wait);
   }
 
-  #ask(prompt: PromptKind): Promise<AnswerSpec> {
+  #ask(prompt: PromptKind, withdrawn?: AbortSignal): Promise<AnswerSpec> {
     this.#state.prompt?.answer(CANCEL);
     return new Promise((resolve) => {
       const pending: PendingPrompt = {
@@ -408,6 +408,8 @@ export class FilesStore {
           resolve(reply);
         },
       };
+      // No longer asked, as when a security key answered: it goes away.
+      withdrawn?.addEventListener("abort", () => pending.answer(CANCEL), { once: true });
       this.#set({ ...this.#state, prompt: pending });
     });
   }

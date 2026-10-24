@@ -4,18 +4,16 @@
 import { Channel } from "@tauri-apps/api/core";
 
 import {
-  type AnswerSpec,
   type ChangeSpec,
   type DroppedFiles,
   type EditView,
   type EntryView,
   type Listing,
-  type PromptRequest,
   type SftpHandle,
   type TransferView,
   commands,
 } from "./bindings.ts";
-import { type PromptHandler, SessionCommandError } from "./sessions.ts";
+import { type PromptHandler, SessionCommandError, promptChannel } from "./sessions.ts";
 
 export type { ChangeSpec, DroppedFiles, EditView, EntryView, Listing, SftpHandle, TransferView };
 
@@ -40,8 +38,6 @@ export interface FilesClient {
   onDrop(onDrop: (files: DroppedFiles) => void): Promise<void>;
 }
 
-const CANCEL: AnswerSpec = { kind: "cancel" };
-
 type Result<T> = Promise<
   | { status: "ok"; data: T }
   | { status: "error"; error: { code: SessionCommandError["code"]; message: string } }
@@ -55,13 +51,7 @@ async function unwrap<T>(result: Result<T>): Promise<T> {
 
 export const tauriFiles: FilesClient = {
   open: (host, onPrompt) => {
-    const prompts = new Channel<PromptRequest>();
-    prompts.onmessage = ({ id, prompt }) => {
-      onPrompt(prompt)
-        .catch(() => CANCEL)
-        .then((answer) => commands.sshPromptReply(id, answer))
-        .catch((error: unknown) => console.warn("prompt reply failed", error));
-    };
+    const prompts = promptChannel(onPrompt);
     return unwrap(commands.sftpOpen(host, prompts));
   },
   close: (id) => commands.sftpClose(id).then(() => {}),

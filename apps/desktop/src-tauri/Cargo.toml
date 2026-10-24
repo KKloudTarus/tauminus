@@ -52,6 +52,11 @@ zeroize.workspace = true
 # files sent to `rz` (through its `libc`).
 nix = { version = "0.28", default-features = false, features = ["signal", "user"] }
 
+# USB security keys sign for FIDO2 key files (ADR 0027). Windows reaches
+# keys only through webauthn.dll; there, an agent signs.
+[target.'cfg(not(windows))'.dependencies]
+tauminus-fido.workspace = true
+
 # Wayland sessions need the data-control protocol; X11 works without it.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }

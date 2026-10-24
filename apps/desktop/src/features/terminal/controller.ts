@@ -1464,7 +1464,7 @@ export class TerminalController {
     this.#sessions
       .open(this.spec, this.#sentSize, {
         ...(this.#tmux ? { tmux: this.#tmux } : {}),
-        onPrompt: (prompt) => this.#ask(prompt),
+        onPrompt: (prompt, withdrawn) => this.#ask(prompt, withdrawn),
         onOutput: (data) => this.#write(data),
         onExit: (code, lost) => {
           ended = true;
@@ -1584,11 +1584,30 @@ export class TerminalController {
     if (asksToOpen(event, this.#mac) && isOpenableLink(url)) this.#openLink?.(url);
   }
 
-  #ask(prompt: PromptKind): Promise<AnswerSpec> {
-    if (this.#disposed) return Promise.resolve(CANCEL);
+  #ask(prompt: PromptKind, withdrawn?: AbortSignal): Promise<AnswerSpec> {
+    if (this.#disposed || withdrawn?.aborted) return Promise.resolve(CANCEL);
     return new Promise((resolve) => {
-      this.#prompts.push({ prompt, resolve });
+      const pending = { prompt, resolve };
+      this.#prompts.push(pending);
+      // The backend no longer asks it, as when a security key answered.
+      withdrawn?.addEventListener(
+        "abort",
+        () => {
+          const at = this.#prompts.indexOf(pending);
+          if (at < 0) return;
+          this.#prompts.splice(at, 1);
+          resolve(CANCEL);
+          // Nothing waits on the user now: the tab shows what it showed
+          // before this question raised it.
+          if (this.#prompts.length === 0 && this.#activity === "waiting") {
+            this.#activity = before;
+          }
+          this.#notify();
+        },
+        { once: true },
+      );
       // A connect waiting on a password or a host key waits on the user.
+      const before = this.#activity;
       this.#mark("waiting");
       this.#notify();
     });

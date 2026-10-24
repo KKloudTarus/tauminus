@@ -84,6 +84,20 @@ function PromptBody({ prompt, titleId, onAnswer }: PromptDialogProps & { titleId
           onCancel={() => onAnswer(CANCEL)}
         />
       );
+    case "securityKeyPin":
+      return (
+        <SecretsForm
+          key={`security-key-pin-${prompt.keyPath}`}
+          title="PIN for the security key"
+          titleId={titleId}
+          detail={<code className="break-all">{prompt.keyPath}</code>}
+          fields={[{ text: "PIN", echo: false }]}
+          onAnswer={(values) => onAnswer({ kind: "secret", value: values[0] ?? "" })}
+          onCancel={() => onAnswer(CANCEL)}
+        />
+      );
+    case "securityKeyTouch":
+      return <TouchPrompt prompt={prompt} titleId={titleId} onCancel={() => onAnswer(CANCEL)} />;
     case "keyboardInteractive": {
       const name = serverText(prompt.name);
       const instructions = serverText(prompt.instructions);
@@ -113,6 +127,39 @@ function PromptBody({ prompt, titleId, onAnswer }: PromptDialogProps & { titleId
     default:
       return null;
   }
+}
+
+/**
+ * Touch the security key: the key ends this one, and it goes away by
+ * itself; the user can only cancel.
+ */
+function TouchPrompt({
+  prompt,
+  titleId,
+  onCancel,
+}: {
+  prompt: { keyPath: string };
+  titleId: string;
+  onCancel: () => void;
+}) {
+  const cancel = useRef<HTMLButtonElement>(null);
+  useInitialFocus(cancel);
+  return (
+    <div data-testid="security-key-touch">
+      <h2 id={titleId} className="text-sm font-semibold">
+        Touch your security key
+      </h2>
+      <p className="mt-2 text-sm text-muted">
+        It blinks while it waits, to sign in with{" "}
+        <code className="break-all">{prompt.keyPath}</code>.
+      </p>
+      <div className={`mt-4 ${ACTIONS}`}>
+        <button ref={cancel} type="button" className="btn" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function HostKeyPrompt({

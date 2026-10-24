@@ -165,6 +165,15 @@ pub enum Prompt {
     Passphrase {
         key_path: String,
     },
+    /// The PIN of the FIDO2 security key the key file names.
+    SecurityKeyPin {
+        key_path: String,
+    },
+    /// Touch the FIDO2 security key: the key, not the user, ends this one,
+    /// so it is withdrawn once the key answers; the user can only cancel.
+    SecurityKeyTouch {
+        key_path: String,
+    },
     KeyboardInteractive {
         endpoint: String,
         name: String,
@@ -186,7 +195,8 @@ pub enum Answer {
 }
 
 /// Asks the user. Implementations must answer `Cancel` rather than wait
-/// forever.
+/// forever. Dropping the future withdraws the question: the user no
+/// longer sees it.
 pub trait Prompter: Send + Sync + 'static {
     fn ask(&self, prompt: Prompt) -> BoxFuture<'_, Answer>;
 }

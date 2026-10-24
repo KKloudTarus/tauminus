@@ -513,17 +513,19 @@ const PublicKey = memo(function PublicKey({
       .installKey(
         identity.id,
         target.id,
-        (asked) =>
+        (asked, withdrawn) =>
           new Promise<AnswerSpec>((resolve) => {
             pending.current = resolve;
-            setPrompt({
-              prompt: asked,
-              answer: (answer) => {
-                pending.current = undefined;
-                setPrompt(undefined);
-                resolve(answer);
-              },
+            const answer = (reply: AnswerSpec) => {
+              pending.current = undefined;
+              setPrompt(undefined);
+              resolve(reply);
+            };
+            // No longer asked, as when a security key answered.
+            withdrawn?.addEventListener("abort", () => answer({ kind: "cancel" }), {
+              once: true,
             });
+            setPrompt({ prompt: asked, answer });
           }),
       )
       .then(() => setState({ kind: "done", label: target.label }))

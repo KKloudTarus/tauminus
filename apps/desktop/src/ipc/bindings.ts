@@ -800,7 +800,13 @@ export type PresenceSpec = {
 	unavailable: string | null,
 };
 
-export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
+export type PromptKind = { kind: "unknownHostKey"; host: string; port: number; algorithm: string; fingerprint: string; certificateExpected: boolean } | { kind: "password"; endpoint: string } | { kind: "passphrase"; keyPath: string } | 
+/**  The PIN of the FIDO2 security key the key file names. */
+{ kind: "securityKeyPin"; keyPath: string } | 
+/**  Touch the security key; withdrawn once it answers. */
+{ kind: "securityKeyTouch"; keyPath: string } | 
+/**  The question with this id is no longer asked: hide it. */
+{ kind: "withdrawn" } | { kind: "keyboardInteractive"; endpoint: string; name: string; instructions: string; fields: ChallengeFieldSpec[] };
 
 /**  A question for the user, sent on the connect's prompt channel. */
 export type PromptRequest = {
