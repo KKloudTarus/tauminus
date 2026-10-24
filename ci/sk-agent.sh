@@ -10,7 +10,9 @@
 # pinned by hash: each tarball's signature was checked against the
 # OpenSSH release key, 7168B983815A5EEF59A4ADFD2A3F414E736060BA, before
 # its hash went here. Run after ci/password-sshd.sh, which made the
-# user; the sshd part runs as root through sudo, on a throwaway machine.
+# user; the sshd part runs as root through sudo. CI or a container only:
+# sk-dummy's key handle is the private key itself, and the agent and the
+# server keep running.
 #
 # Prints, and appends to $GITHUB_ENV when set:
 #   TAUMINUS_SK_SSHD=<port> <user> <agent socket> <key dir>
@@ -34,14 +36,17 @@ work=$(mktemp -d)
 keys="$work/keys"
 mkdir -m 700 "$keys"
 
-curl -fsSL -o "$work/$version.tar.gz" \
+curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 10 --max-time 120 \
+  -o "$work/$version.tar.gz" \
   "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/$version.tar.gz"
 echo "$sha256  $work/$version.tar.gz" | sha256sum -c - > /dev/null
 tar -xzf "$work/$version.tar.gz" -C "$work"
 (
   cd "$work/$version"
-  ./configure --quiet > /dev/null
-  make -s libssh.a openbsd-compat/libopenbsd-compat.a > /dev/null
+  # Warnings (OpenSSL 3 deprecations) would fill the log; errors still
+  # show.
+  ./configure --quiet CFLAGS=-w > /dev/null
+  make -s -j"$(nproc)" libssh.a openbsd-compat/libopenbsd-compat.a > /dev/null
   make -s regress/misc/sk-dummy/sk-dummy.so > /dev/null
 )
 cp "$work/$version/regress/misc/sk-dummy/sk-dummy.so" "$keys/"
@@ -62,10 +67,9 @@ sudo bash -s "$port" "$user" "$keys" << 'ROOT'
 set -euo pipefail
 port=$1 user=$2 keys=$3
 home=$(getent passwd "$user" | cut -d: -f6)
-install -d -m 700 -o "$user" "$home/.ssh"
-cat "$keys"/id_*-sk.pub > "$home/.ssh/authorized_keys"
-chown "$user" "$home/.ssh/authorized_keys"
-chmod 600 "$home/.ssh/authorized_keys"
+# Written as the user, so no link in that home leads root elsewhere.
+cat "$keys"/id_*-sk.pub | sudo -u "$user" sh -c \
+  'umask 077 && mkdir -p ~/.ssh && cat > ~/.ssh/authorized_keys' 
 dir=$(mktemp -d)
 ssh-keygen -q -t ed25519 -N '' -f "$dir/host"
 cat > "$dir/sshd_config" << EOF
@@ -74,12 +78,16 @@ ListenAddress 127.0.0.1
 HostKey $dir/host
 PidFile $dir/sshd.pid
 PubkeyAuthentication yes
+AuthenticationMethods publickey
 PasswordAuthentication no
 KbdInteractiveAuthentication no
+UsePAM no
+PermitRootLogin no
 AllowUsers $user
 EOF
 mkdir -p /run/sshd
 /usr/sbin/sshd -f "$dir/sshd_config" -E "$dir/sshd.log"
+echo "sk-agent.sh: sshd log in $dir/sshd.log" >&2
 ROOT
 
 line="TAUMINUS_SK_SSHD=$port $user $keys/agent.sock $keys"

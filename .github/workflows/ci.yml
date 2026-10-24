@@ -119,7 +119,8 @@ jobs:
       # v0.4: FIDO2 keys through the agent log in (ci/sk-agent.sh).
       - name: FIDO2 keys through ssh-agent
         if: runner.os == 'Linux'
-        run: cargo test -p tauminus-ssh --locked --test sk_agent -- --ignored
+        # --workspace: the Test step's build, not a feature set of its own.
+        run: cargo test --workspace --locked --test sk_agent -- --ignored
 
       # v0.3 exit criterion: 1 GiB up and down over SFTP with matching
       # checksums. Release build, since debug crypto takes minutes; Unix
