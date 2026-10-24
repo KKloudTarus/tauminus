@@ -33,6 +33,36 @@ test.describe("on a phone", () => {
     await expect(focusedScreen(page)).toContainText("$");
   });
 
+  test("stacks a host key prompt that sits in half a phone", async ({ page }) => {
+    await hostsButton(page).click();
+    await importConfig(page);
+    await sidebar(page)
+      .getByRole("button", { name: /^prompt alice@prompt\.test/ })
+      .click();
+    await page.getByRole("button", { name: "Trust once" }).click();
+    const password = page.getByRole("dialog", { name: "Password for alice@prompt.test" });
+    await password.getByLabel("Password", { exact: true }).fill("secret");
+    await password.getByLabel("Password", { exact: true }).press("Enter");
+    await expect(focusedScreen(page)).toContainText("Welcome to prompt.test");
+    await page.keyboard.press("Control+Shift+D");
+    const fingerprint = page.getByTestId("host-key-fingerprint");
+    await expect(fingerprint).toBeVisible();
+    const label = page.getByText("Fingerprint", { exact: true });
+    const [code, term] = await Promise.all([fingerprint.boundingBox(), label.boundingBox()]);
+    if (!code || !term) throw new Error("no fingerprint on screen");
+    // Label above value, so the 50-character fingerprint gets the whole width.
+    expect(code.y).toBeGreaterThan(term.y + term.height - 1);
+    expect(Math.abs(code.x - term.x)).toBeLessThan(1.5);
+    const widths = await Promise.all(
+      ["Cancel", "Trust once", "Trust and remember"].map(async (name) => {
+        const box = await page.getByRole("button", { name, exact: true }).boundingBox();
+        return Math.round(box?.width ?? 0);
+      }),
+    );
+    expect(new Set(widths).size).toBe(1);
+    await noSideScroll(page);
+  });
+
   test("starts on the terminal and opens the hosts as a drawer", async ({ page }) => {
     await expect(sidebar(page)).toHaveCount(0);
     await expect(hostsButton(page)).toHaveAttribute("aria-pressed", "false");

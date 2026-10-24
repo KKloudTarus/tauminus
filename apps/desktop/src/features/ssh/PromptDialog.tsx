@@ -15,6 +15,9 @@ import type { AnswerSpec, PromptKind } from "@/ipc/index.ts";
 
 import { serverText } from "./server-text.ts";
 
+/** Side by side where the pane has room; one full-width column in a narrow pane. */
+const ACTIONS = "flex flex-col-reverse gap-2 @xs:flex-row @xs:flex-wrap @xs:justify-end";
+
 interface PromptDialogProps {
   prompt: PromptKind;
   onAnswer: (answer: AnswerSpec) => void;
@@ -29,7 +32,7 @@ const CANCEL: AnswerSpec = { kind: "cancel" };
 export function PromptDialog({ prompt, onAnswer }: PromptDialogProps) {
   const titleId = useId();
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-terminal/80 p-4">
+    <div className="@container absolute inset-0 z-10 flex items-center justify-center bg-terminal/80 p-2 @xs:p-4">
       <dialog
         open
         aria-labelledby={titleId}
@@ -39,7 +42,7 @@ export function PromptDialog({ prompt, onAnswer }: PromptDialogProps) {
             onAnswer(CANCEL);
           }
         }}
-        className="panel static m-0 w-[min(520px,100%)] p-4"
+        className="panel static m-0 max-h-full w-[min(520px,100%)] overflow-y-auto p-3 @xs:p-4"
       >
         <PromptBody prompt={prompt} titleId={titleId} onAnswer={onAnswer} />
       </dialog>
@@ -144,7 +147,7 @@ function HostKeyPrompt({
           why.
         </p>
       )}
-      <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-lg border border-line bg-terminal p-3 text-[13px]">
+      <dl className="mb-4 grid grid-cols-1 gap-x-4 gap-y-1.5 rounded-lg @xs:grid-cols-[auto_1fr] border border-line bg-terminal p-3 text-[13px]">
         <dt className="text-faint">Key type</dt>
         <dd>{prompt.algorithm}</dd>
         <dt className="text-faint">Fingerprint</dt>
@@ -157,7 +160,7 @@ function HostKeyPrompt({
           </code>
         </dd>
       </dl>
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className={ACTIONS}>
         <Button buttonRef={cancelRef} onClick={() => onAnswer(CANCEL)}>
           Cancel
         </Button>
@@ -228,7 +231,7 @@ function SecretsForm({
           />
         </label>
       ))}
-      <div className="flex justify-end gap-2">
+      <div className={ACTIONS}>
         <Button onClick={onCancel}>Cancel</Button>
         <Button primary type="submit">
           Continue
