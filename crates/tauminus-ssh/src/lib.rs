@@ -137,6 +137,16 @@ impl RusshConnector {
             .iter()
             .chain(std::iter::once(&target.destination))
             .collect();
+        // The agent signs on every hop, as the key files do, and is the one
+        // forwarded.
+        let agent = AgentSource::for_target(
+            target.auth.identity_agent.as_ref(),
+            &self.agent,
+            self.home.as_deref(),
+        );
+        // With no agent, forwarding is not asked for: the server would make
+        // a socket that answers nothing.
+        let forward_agent = forward_agent && agent != AgentSource::None;
         let mut connections: Vec<Handle<Client>> = Vec::with_capacity(hops.len());
         let (alarm, closed) = watch::channel(false);
         let alarm = Arc::new(alarm);
@@ -175,8 +185,7 @@ impl RusshConnector {
             let reached = Arc::new(Notify::new());
             let last = index + 1 == hops.len();
             let handler = Client {
-                forward: (last && forward_agent)
-                    .then(|| forward::AgentForward::new(self.agent.clone())),
+                forward: (last && forward_agent).then(|| forward::AgentForward::new(agent.clone())),
                 routes: last.then(|| Arc::clone(&routes)),
                 _alarm: Alarm(Arc::clone(&alarm)),
                 host: hop.host.to_string(),
@@ -196,7 +205,7 @@ impl RusshConnector {
                 options: &target.auth,
                 prompter: &prompter,
                 home: self.home.as_deref(),
-                agent: &self.agent,
+                agent: &agent,
                 security_key: self.security_key.as_ref(),
                 // A jump host is another login; the identity is for the target.
                 credentials: if last { &credentials } else { &none },

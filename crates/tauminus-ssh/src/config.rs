@@ -219,6 +219,7 @@ fn parse_ssh_g(alias: &str, output: &str) -> ConfigHost {
             }
             "identityfile" => host.identity_files.push(PathBuf::from(value)),
             "identitiesonly" => host.identities_only = value.eq_ignore_ascii_case("yes"),
+            "identityagent" => host.identity_agent = Some(value.to_owned()),
             // Only `yes`: a socket path names a restricted agent, and
             // forwarding the default one instead would expose every key.
             // `no` is also what `ssh -G` prints when nothing sets it.

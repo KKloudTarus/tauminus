@@ -31,7 +31,7 @@ use russh::keys::{
 use tauminus_app::ports::{
     Answer, ChallengeField, ConnectError, Credentials, Prompt, Prompter, Secret,
 };
-use tauminus_domain::{AuthMethod, AuthOptions, Endpoint};
+use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, IdentityAgent};
 use tauminus_fido::SecurityKey;
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -307,6 +307,13 @@ impl Authenticator<'_> {
             let Some(text) = read_key_file(&path).await else {
                 continue;
             };
+            // A public key names a key only an agent holds: nothing here
+            // signs for it, and offering it would spend one of the
+            // server's tries.
+            if PublicKey::from_openssh(text.trim()).is_ok() {
+                debug!(path = %path.display(), "skipping a public key: an agent signs for it");
+                continue;
+            }
             let Some(public) = public_key_of(&path, &text).await else {
                 debug!(path = %path.display(), "skipping unreadable key");
                 continue;
@@ -682,9 +689,14 @@ fn needs_security_key(key: &PublicKey) -> bool {
 
 /// The public half of a key file without decrypting it: OpenSSH-format keys
 /// store it in the clear; older PEM keys need the `.pub` file next to them.
+/// The file may be the public key itself, as OpenSSH allows for a key only
+/// an agent holds (Secretive's Secure Enclave keys are named this way).
 async fn public_key_of(path: &Path, text: &str) -> Option<PublicKey> {
     if let Ok(key) = PrivateKey::from_openssh(text) {
         return Some(key.public_key().clone());
+    }
+    if let Ok(key) = PublicKey::from_openssh(text.trim()) {
+        return Some(key);
     }
     if let Some(public) = read_key_file(&with_suffix(path, ".pub")).await
         && let Ok(key) = PublicKey::from_openssh(public.trim())
@@ -1042,7 +1054,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 }
 
 /// `~/x` and `~` become paths under `home`, as in `ssh_config`.
-fn expand_home(path: &Path, home: Option<&Path>) -> PathBuf {
+pub(crate) fn expand_home(path: &Path, home: Option<&Path>) -> PathBuf {
     match (path.strip_prefix("~"), home) {
         (Ok(rest), Some(home)) => home.join(rest),
         _ => path.to_path_buf(),
@@ -1080,6 +1092,29 @@ async fn read_key_file(path: &Path) -> Option<Zeroizing<String>> {
     String::from_utf8(bytes).ok().map(Zeroizing::new)
 }
 
+impl AgentSource {
+    /// The agent a target names (`IdentityAgent`), else `default`. `~` in
+    /// a path is `home`.
+    pub(crate) fn for_target(
+        named: Option<&IdentityAgent>,
+        default: &Self,
+        home: Option<&Path>,
+    ) -> Self {
+        match named {
+            None => default.clone(),
+            Some(IdentityAgent::None) => Self::None,
+            Some(IdentityAgent::Environment) => Self::Environment,
+            Some(IdentityAgent::Path(path)) => Self::Path(expand_home(path, home)),
+            // Unset or empty, no agent, as ssh does: falling back to the
+            // default one would offer and forward keys the config kept out.
+            Some(IdentityAgent::Variable(name)) => match std::env::var_os(name) {
+                Some(path) if !path.is_empty() => Self::Path(PathBuf::from(path)),
+                _ => Self::None,
+            },
+        }
+    }
+}
+
 /// Where to find ssh-agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AgentSource {
@@ -1098,10 +1133,38 @@ pub enum AgentSource {
 async fn connect_agent(
     source: &AgentSource,
 ) -> Option<AgentClient<impl AgentStream + Send + Unpin + use<>>> {
-    match source {
-        AgentSource::Environment => AgentClient::connect_env().await.ok(),
-        AgentSource::Path(path) => AgentClient::connect_uds(path).await.ok(),
-        AgentSource::Pageant | AgentSource::None => None,
+    let stream = match source {
+        AgentSource::Environment => {
+            tokio::net::UnixStream::connect(std::env::var_os("SSH_AUTH_SOCK")?)
+                .await
+                .ok()?
+        }
+        AgentSource::Path(path) => own_socket(path).await?,
+        AgentSource::Pageant | AgentSource::None => return None,
+    };
+    Some(AgentClient::connect(stream))
+}
+
+/// Connects to the socket at `path` if a process of this user listens on
+/// it. A host's `IdentityAgent` may name any path, and what answers there
+/// gets the sign-in's data and, with forwarding, the server's bytes: a
+/// socket of root's (`docker.sock`) or another user's is refused. The
+/// peer's credentials are those of the listener, checked after connecting,
+/// so a path swapped in between does not pass.
+#[cfg(unix)]
+pub(crate) async fn own_socket(path: &Path) -> Option<tokio::net::UnixStream> {
+    let stream = tokio::net::UnixStream::connect(path).await.ok()?;
+    let me = nix::unistd::geteuid().as_raw();
+    match stream.peer_cred() {
+        Ok(peer) if peer.uid() == me => Some(stream),
+        Ok(peer) => {
+            debug!(path = %path.display(), uid = peer.uid(), "refusing an agent of another user");
+            None
+        }
+        Err(error) => {
+            debug!(path = %path.display(), %error, "cannot tell who listens on the agent socket");
+            None
+        }
     }
 }
 
@@ -1148,6 +1211,36 @@ fn asks_for_password(text: &str, echo: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_host_s_identity_agent_picks_the_agent() {
+        let default = AgentSource::Pageant;
+        let home = Path::new("/home/me");
+        let pick = |named: Option<IdentityAgent>| {
+            AgentSource::for_target(named.as_ref(), &default, Some(home))
+        };
+        assert_eq!(pick(None), default);
+        assert_eq!(pick(Some(IdentityAgent::None)), AgentSource::None);
+        assert_eq!(
+            pick(Some(IdentityAgent::Environment)),
+            AgentSource::Environment
+        );
+        assert_eq!(
+            pick(Some(IdentityAgent::Path("~/s.sock".into()))),
+            AgentSource::Path("/home/me/s.sock".into())
+        );
+        // A variable is read now; unset, no agent rather than the default.
+        assert_eq!(
+            pick(Some(IdentityAgent::Variable("HOME".into()))),
+            AgentSource::Path(std::env::var_os("HOME").unwrap().into())
+        );
+        assert_eq!(
+            pick(Some(IdentityAgent::Variable(
+                "TAUMINUS_NEVER_SET_IN_A_TEST".into()
+            ))),
+            AgentSource::None
+        );
+    }
 
     #[test]
     fn only_a_plain_password_prompt_gets_the_stored_password() {

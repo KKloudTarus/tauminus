@@ -9,8 +9,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{
     AuthMethod, Bind, BindAddress, Destination, Encoding, EnvVar, Forward, ForwardId, ForwardRule,
-    Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityId, Inventory, Label,
-    Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession, TriggerSetId, UserName,
+    Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityAgent, IdentityId,
+    Inventory, Label, Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession,
+    TriggerSetId, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
@@ -18,10 +19,12 @@ use tauminus_domain::{
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
 /// encodings, version 5 Telnet hosts, version 6 tmux sessions, version 7
 /// Mosh hosts, version 8 highlight sets, version 9 the AI's leave
-/// to read output, and version 10 tmux windows as tabs; a file is written as the lowest version that
+/// to read output, version 10 tmux windows as tabs, and version 11 the
+/// agent a host signs with; a file is written as the lowest version that
 /// holds what it has, so a build from before a feature keeps reading files
 /// that do not use it.
-const VERSION: u32 = 10;
+const VERSION: u32 = 11;
+const VERSION_WITHOUT_IDENTITY_AGENT: u32 = 10;
 const VERSION_WITHOUT_TMUX_TABS: u32 = 9;
 const VERSION_WITHOUT_AI: u32 = 8;
 const VERSION_WITHOUT_TRIGGERS: u32 = 7;
@@ -124,6 +127,9 @@ struct SettingsRecord {
     identity_files: Option<Vec<PathBuf>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     identities_only: Option<bool>,
+    /// As `IdentityAgent` writes it: `none`, `SSH_AUTH_SOCK` or a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity_agent: Option<String>,
     #[serde(default, skip_serializing_if = "GuardRecord::is_empty")]
     guard: GuardRecord,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +199,7 @@ impl SettingsRecord {
             && self.methods.is_none()
             && self.identity_files.is_none()
             && self.identities_only.is_none()
+            && self.identity_agent.is_none()
     }
 }
 
@@ -215,6 +222,12 @@ enum MethodRecord {
 }
 
 pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Error> {
+    let identity_agent = inventory
+        .hosts()
+        .any(|h| h.settings.identity_agent.is_some())
+        || inventory
+            .groups()
+            .any(|g| g.settings.identity_agent.is_some());
     let tmux_tabs = inventory.hosts().any(|h| h.settings.tmux_tabs.is_some())
         || inventory.groups().any(|g| g.settings.tmux_tabs.is_some());
     let ai = inventory.hosts().any(|h| h.settings.ai_output.is_some())
@@ -230,8 +243,10 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
     let file = File {
-        version: if tmux_tabs {
+        version: if identity_agent {
             VERSION
+        } else if tmux_tabs {
+            VERSION_WITHOUT_IDENTITY_AGENT
         } else if ai {
             VERSION_WITHOUT_TMUX_TABS
         } else if triggers {
@@ -384,6 +399,7 @@ fn settings_record(s: &Settings) -> SettingsRecord {
         }),
         identity_files: s.identity_files.clone(),
         identities_only: s.identities_only,
+        identity_agent: s.identity_agent.as_ref().map(IdentityAgent::to_config),
         guard: GuardRecord {
             enabled: s.guard.enabled,
             allow: s
@@ -498,6 +514,12 @@ fn settings(r: SettingsRecord) -> Result<Settings, String> {
         }),
         identity_files: r.identity_files,
         identities_only: r.identities_only,
+        identity_agent: r
+            .identity_agent
+            .as_deref()
+            .map(IdentityAgent::parse)
+            .transpose()
+            .map_err(|e| err("identity agent", &e))?,
         guard: guard(r.guard)?,
         forward_agent: r.forward_agent,
         history: r.history,

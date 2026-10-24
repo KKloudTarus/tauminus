@@ -23,6 +23,41 @@ fn spec(route: RouteSpec) -> SshTargetSpec {
         methods: None,
         identity_files: vec![],
         identities_only: false,
+        identity_agent: None,
+    }
+}
+
+#[test]
+fn the_identity_agent_reads_as_ssh_config_writes_it() {
+    for (text, expected) in [
+        ("none", Some(IdentityAgent::None)),
+        ("SSH_AUTH_SOCK", Some(IdentityAgent::Environment)),
+        (
+            "~/secretive/socket.ssh",
+            Some(IdentityAgent::Path("~/secretive/socket.ssh".into())),
+        ),
+    ] {
+        let target = SshTarget::try_from(SshTargetSpec {
+            identity_agent: Some(text.into()),
+            ..spec(RouteSpec::Direct)
+        })
+        .unwrap();
+        assert_eq!(target.auth.identity_agent, expected, "{text}");
+        // And back, as the view gets it.
+        assert_eq!(
+            SshTargetSpec::from(&target).identity_agent.as_deref(),
+            Some(text)
+        );
+    }
+    for bad in ["", "a\nb"] {
+        assert!(
+            SshTarget::try_from(SshTargetSpec {
+                identity_agent: Some(bad.into()),
+                ..spec(RouteSpec::Direct)
+            })
+            .is_err(),
+            "{bad:?}"
+        );
     }
 }
 

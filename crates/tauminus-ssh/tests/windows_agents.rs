@@ -88,7 +88,19 @@ impl server::Handler for Server {
 
 /// A fresh Ed25519 key made by ssh-keygen in the scratch directory.
 fn user_key(scratch: &Scratch, name: &str) -> PrivateKey {
-    keygen(&scratch.0, &["-q", "-t", "ed25519", "-N", "", "-f", name]);
+    key_of(scratch, name, ED25519)
+}
+
+const ED25519: &[&str] = &["-t", "ed25519"];
+/// What agents holding hardware keys serve, as Secretive's Secure Enclave
+/// keys are.
+const P256: &[&str] = &["-t", "ecdsa", "-b", "256"];
+
+/// A fresh key of `kind` made by ssh-keygen in the scratch directory.
+fn key_of(scratch: &Scratch, name: &str, kind: &[&str]) -> PrivateKey {
+    let mut args = vec!["-q", "-N", "", "-f", name];
+    args.extend_from_slice(kind);
+    keygen(&scratch.0, &args);
     decode_secret_key(&std::fs::read_to_string(scratch.path(name)).unwrap(), None).unwrap()
 }
 
@@ -132,6 +144,7 @@ async fn log_in(scratch: &Scratch, port: u16, agent: AgentSource) -> Option<u32>
         methods: vec![AuthMethod::Agent],
         identity_files: vec![],
         identities_only: false,
+        identity_agent: None,
     };
     let target = SshTarget::new(destination, vec![], Route::Direct, auth).unwrap();
     let prompter = ScriptedPrompter::trust();
@@ -153,19 +166,22 @@ async fn the_openssh_agent_service_signs_the_login() {
     if !enabled() {
         return;
     }
-    let scratch = Scratch::new("win-openssh-agent");
-    let key = user_key(&scratch, "id");
-    let mut agent = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
-        .await
-        .expect("the ssh-agent service is running");
-    agent.add_identity(&key, &[]).await.unwrap();
-    let port = start(&scratch, key.public_key().clone()).await;
-    // SSH_AUTH_SOCK is unset in CI: the default pipe comes first.
-    assert_eq!(
-        log_in(&scratch, port, AgentSource::Environment).await,
-        Some(0)
-    );
-    agent.remove_identity(key.public_key()).await.unwrap();
+    for kind in [ED25519, P256] {
+        let scratch = Scratch::new("win-openssh-agent");
+        let key = key_of(&scratch, "id", kind);
+        let mut agent = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent")
+            .await
+            .expect("the ssh-agent service is running");
+        agent.add_identity(&key, &[]).await.unwrap();
+        let port = start(&scratch, key.public_key().clone()).await;
+        // SSH_AUTH_SOCK is unset in CI: the default pipe comes first.
+        assert_eq!(
+            log_in(&scratch, port, AgentSource::Environment).await,
+            Some(0),
+            "{kind:?}"
+        );
+        agent.remove_identity(key.public_key()).await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -173,13 +189,19 @@ async fn pageant_signs_the_login() {
     if !enabled() {
         return;
     }
-    let scratch = Scratch::new("win-pageant");
-    let key = user_key(&scratch, "id");
-    let mut agent = AgentClient::connect_pageant()
-        .await
-        .expect("Pageant is running");
-    agent.add_identity(&key, &[]).await.unwrap();
-    let port = start(&scratch, key.public_key().clone()).await;
-    assert_eq!(log_in(&scratch, port, AgentSource::Pageant).await, Some(0));
-    agent.remove_identity(key.public_key()).await.unwrap();
+    for kind in [ED25519, P256] {
+        let scratch = Scratch::new("win-pageant");
+        let key = key_of(&scratch, "id", kind);
+        let mut agent = AgentClient::connect_pageant()
+            .await
+            .expect("Pageant is running");
+        agent.add_identity(&key, &[]).await.unwrap();
+        let port = start(&scratch, key.public_key().clone()).await;
+        assert_eq!(
+            log_in(&scratch, port, AgentSource::Pageant).await,
+            Some(0),
+            "{kind:?}"
+        );
+        agent.remove_identity(key.public_key()).await.unwrap();
+    }
 }

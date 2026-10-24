@@ -231,6 +231,16 @@ fn ssh_g_output_is_read() {
         parse_ssh_g("x", "forwardagent /run/a.sock\n").forward_agent,
         None
     );
+    // IdentityAgent as `ssh -G` prints it; a variable stays one, read when
+    // connecting, as ssh reads it.
+    let agent = |line: &str| parse_ssh_g("x", line).identity_agent;
+    assert_eq!(agent(""), None);
+    assert_eq!(agent("identityagent none\n").as_deref(), Some("none"));
+    assert_eq!(
+        agent("identityagent /Users/me/secretive.ssh\n").as_deref(),
+        Some("/Users/me/secretive.ssh")
+    );
+    assert_eq!(agent("identityagent $HOME\n").as_deref(), Some("$HOME"));
 }
 
 /// The built-in resolver against `ssh -G -F`, the reference, on a corpus of
@@ -344,6 +354,13 @@ mod corpus {
             ("forward agent true", "Host ftrue\n  ForwardAgent true\n".into()),
             ("forward agent false", "Host ffalse\n  ForwardAgent false\n".into()),
             ("setenv repeats a name", "Host serep\n  SetEnv A=1 A=2\n".into()),
+            (
+                "identity agent, first wins",
+                "Host ia\n  IdentityAgent /run/secretive.ssh\nHost *\n  IdentityAgent none\nHost ib\n"
+                    .into(),
+            ),
+            ("identity agent from the environment", "Host ie\n  IdentityAgent SSH_AUTH_SOCK\n".into()),
+            ("identity agent variable", "Host iv\n  IdentityAgent $HOME\n".into()),
             (
                 "setenv, first line wins",
                 "Host se\n  SetEnv LANG=C \"TEAM=db ops\"\n  SetEnv LATER=x\n".into(),

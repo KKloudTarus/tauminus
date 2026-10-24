@@ -278,6 +278,7 @@ pub(crate) fn key_auth(files: &[PathBuf]) -> AuthOptions {
         methods: vec![AuthMethod::PublicKey],
         identity_files: files.to_vec(),
         identities_only: true,
+        identity_agent: None,
     }
 }
 

@@ -910,6 +910,11 @@ export type SettingsSpec = {
 	methods?: AuthMethodSpec[] | null,
 	identityFiles?: string[] | null,
 	identitiesOnly?: boolean | null,
+	/**
+	 *  `IdentityAgent`: `none`, `SSH_AUTH_SOCK` or a socket path; `null`
+	 *  or empty inherits.
+	 */
+	identityAgent?: string | null,
 	guard?: GuardSpec | null,
 	/**  `ssh -A`; `null` inherits. */
 	forwardAgent?: boolean | null,
@@ -990,6 +995,11 @@ export type SshTargetSpec = {
 	methods?: AuthMethodSpec[] | null,
 	identityFiles?: string[],
 	identitiesOnly?: boolean,
+	/**
+	 *  `IdentityAgent`: `none`, `SSH_AUTH_SOCK` or a socket path; absent
+	 *  is the app's default agent.
+	 */
+	identityAgent?: string | null,
 };
 
 /**  What a host's startup snippets type, and those skipped with why. */

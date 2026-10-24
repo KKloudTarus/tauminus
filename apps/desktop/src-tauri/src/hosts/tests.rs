@@ -177,6 +177,7 @@ async fn settings_survive_a_round_trip_through_the_view() {
         methods: Some(vec![AuthMethodSpec::Agent, AuthMethodSpec::Password]),
         identity_files: Some(vec!["~/.ssh/id_work".into()]),
         identities_only: Some(true),
+        identity_agent: Some("~/secretive/socket.ssh".into()),
         guard: Some(GuardSpec {
             enabled: Some(true),
             allow: vec!["rm -rf /tmp/*".into()],

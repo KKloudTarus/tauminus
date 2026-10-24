@@ -4,8 +4,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tauminus_domain::{
-    AuthMethod, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, Label, Pattern, Route,
-    Settings, Tag, UserName,
+    AuthMethod, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityAgent, Label,
+    Pattern, Route, Settings, Tag, UserName,
 };
 
 use super::*;
@@ -338,6 +338,38 @@ async fn tmux_tabs_load_back_at_version_10() {
 }
 
 #[tokio::test]
+async fn an_identity_agent_loads_back_at_version_11() {
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut prod = inventory
+        .groups()
+        .find(|g| g.id.as_str() == "prod")
+        .unwrap()
+        .clone();
+    prod.settings.identity_agent = Some(IdentityAgent::Path("~/secretive.ssh".into()));
+    inventory.put_group(prod).unwrap();
+    store.save(&inventory).await.unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.0.join("hosts.json")).unwrap()).unwrap();
+    assert_eq!(json["version"], 11);
+    assert_eq!(store.load().await.unwrap(), inventory);
+    // `none` and `SSH_AUTH_SOCK` keep their meaning.
+    for agent in [IdentityAgent::None, IdentityAgent::Environment] {
+        let mut inventory = rich();
+        let mut prod = inventory
+            .groups()
+            .find(|g| g.id.as_str() == "prod")
+            .unwrap()
+            .clone();
+        prod.settings.identity_agent = Some(agent);
+        inventory.put_group(prod).unwrap();
+        store.save(&inventory).await.unwrap();
+        assert_eq!(store.load().await.unwrap(), inventory);
+    }
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -350,7 +382,7 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 11, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 12, "hosts": []}"#.to_owned()),
         (
             "highlight set id",
             r#"{"version": 8, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"triggers": ["no spaces"]}}]}"#.to_owned(),
@@ -441,6 +473,18 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
             "{label}: untouched"
         );
     }
+}
+
+#[tokio::test]
+async fn a_relative_identity_agent_is_reported_and_kept() {
+    let dir = Dir::new();
+    std::fs::create_dir_all(&dir.0).unwrap();
+    let path = dir.0.join("hosts.json");
+    let contents = r#"{"version": 11, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"identityAgent": "agent.sock"}}]}"#;
+    std::fs::write(&path, contents).unwrap();
+    let result = dir.store().load().await;
+    assert!(matches!(result, Err(StoreError::Corrupt(_))), "{result:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
 }
 
 #[tokio::test]

@@ -127,6 +127,7 @@ async fn import_maps_settings_into_one_group_and_skips_repeats() {
     web.proxy_jump = Some("ops@bastion:2200".into());
     web.identity_files = vec!["/home/me/.ssh/id_work".into()];
     web.identities_only = true;
+    web.identity_agent = Some("/Users/me/secretive/socket.ssh".into());
     let mut legacy = entry("legacy", "legacy.internal");
     legacy.proxy_command = Some("nc %h %p".into());
     legacy.port = Some(22);
@@ -164,6 +165,10 @@ async fn import_maps_settings_into_one_group_and_skips_repeats() {
     assert_eq!(target.destination.to_string(), "deploy@web.internal:2222");
     assert_eq!(target.jumps[0].to_string(), "ops@bastion:2200");
     assert!(target.auth.identities_only);
+    assert_eq!(
+        target.auth.identity_agent,
+        Some(IdentityAgent::Path("/Users/me/secretive/socket.ssh".into()))
+    );
     let legacy = inventory
         .hosts()
         .find(|h| h.label.as_str() == "legacy")

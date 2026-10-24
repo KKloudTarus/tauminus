@@ -110,6 +110,7 @@ async fn logs_in(key: &str, methods: Vec<AuthMethod>) {
             methods,
             identity_files: vec![setup.keys.join(key)],
             identities_only: true,
+            identity_agent: None,
         },
     )
     .unwrap();
@@ -167,6 +168,7 @@ async fn a_default_sk_key_in_home_lets_the_agent_sign_with_identities_only() {
             methods: vec![AuthMethod::Agent],
             identity_files: vec![],
             identities_only: true,
+            identity_agent: None,
         },
         Credentials::default(),
     )
@@ -187,6 +189,7 @@ async fn a_vault_identity_s_sk_key_leaves_the_agent_to_sign() {
             methods: vec![AuthMethod::Agent],
             identity_files: vec![],
             identities_only: false,
+            identity_agent: None,
         },
         Credentials {
             private_key: Some(pem.into()),
@@ -209,6 +212,7 @@ async fn with_no_agent_the_failure_names_the_fido2_key() {
             methods: vec![AuthMethod::PublicKey],
             identity_files: vec![setup.keys.join("id_ed25519-sk")],
             identities_only: true,
+            identity_agent: None,
         },
         Credentials::default(),
     )

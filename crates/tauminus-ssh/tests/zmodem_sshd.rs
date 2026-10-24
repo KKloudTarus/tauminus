@@ -134,6 +134,7 @@ async fn shell(scratch: &Scratch) -> (SessionManager, SessionId, Arc<Host>, Scre
             methods: vec![AuthMethod::Password],
             identity_files: vec![],
             identities_only: true,
+            identity_agent: None,
         },
     )
     .unwrap();

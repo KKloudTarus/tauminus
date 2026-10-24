@@ -64,6 +64,7 @@ fn target(server: &Server, methods: Vec<AuthMethod>) -> SshTarget {
         methods,
         identity_files: vec![],
         identities_only: true,
+        identity_agent: None,
     };
     SshTarget::new(destination, vec![], Route::Direct, auth).unwrap()
 }

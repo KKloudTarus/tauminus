@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use tauminus_domain::{
     EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
-    IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget, TelnetTarget,
-    TriggerSetId, UserName, env_list,
+    IdentityAgent, IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget,
+    TelnetTarget, TriggerSetId, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -260,6 +260,12 @@ fn host_from_config(id: HostId, entry: ConfigHost, group: &GroupId) -> Result<Ho
         settings.identities_only = Some(true);
     }
     settings.forward_agent = entry.forward_agent;
+    settings.identity_agent = entry
+        .identity_agent
+        .as_deref()
+        .map(IdentityAgent::parse)
+        .transpose()
+        .map_err(|e| HostsError::Target(format!("IdentityAgent: {e}")))?;
     let vars = entry
         .set_env
         .iter()

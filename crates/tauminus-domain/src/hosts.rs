@@ -17,8 +17,8 @@ use thiserror::Error;
 use crate::forward::{ForwardError, ForwardRule, check_rules};
 use crate::guard::{GuardSettings, PatternError, Policy};
 use crate::ssh::{
-    AuthMethod, AuthOptions, Encoding, Endpoint, HostName, Route, SshTarget, Tmux, TmuxSession,
-    UserName,
+    AuthMethod, AuthOptions, Encoding, Endpoint, HostName, IdentityAgent, Route, SshTarget, Tmux,
+    TmuxSession, UserName,
 };
 use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 use crate::telnet::{TELNET_PORT, TelnetTarget};
@@ -269,6 +269,8 @@ pub struct Settings {
     pub methods: Option<Vec<AuthMethod>>,
     pub identity_files: Option<Vec<PathBuf>>,
     pub identities_only: Option<bool>,
+    /// `IdentityAgent`; `None` inherits, and the root default is the app's.
+    pub identity_agent: Option<IdentityAgent>,
     /// Patterns add up from the host through every group; `enabled` is
     /// the nearest one set.
     pub guard: GuardSettings,
@@ -612,6 +614,7 @@ impl Inventory {
             identities_only: nearest!(identities_only)
                 .copied()
                 .unwrap_or(defaults.identities_only),
+            identity_agent: nearest!(identity_agent).cloned(),
         };
         SshTarget::new(destination, jumps, route, auth).map_err(|e| invalid(&e))
     }
@@ -877,6 +880,7 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         methods,
         identity_files,
         identities_only,
+        identity_agent,
         forward_agent,
         identity,
         history,

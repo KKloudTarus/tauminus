@@ -12,8 +12,8 @@ use specta::Type;
 use tauminus_app::{Forwards, HostBook, HostBookError};
 use tauminus_domain::{
     Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
-    HostsError, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern, Protocol, Route,
-    Settings, SnippetId, Tag, Tmux, TmuxSession, TriggerSetId, UserName, env_list,
+    HostsError, IdentityAgent, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern,
+    Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession, TriggerSetId, UserName, env_list,
 };
 use tauminus_ssh::OpenSshConfig;
 use tauri::State;
@@ -63,6 +63,10 @@ pub(crate) struct SettingsSpec {
     pub(crate) identity_files: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) identities_only: Option<bool>,
+    /// `IdentityAgent`: `none`, `SSH_AUTH_SOCK` or a socket path; `null`
+    /// or empty inherits.
+    #[serde(default)]
+    pub(crate) identity_agent: Option<String>,
     #[serde(default)]
     pub(crate) guard: Option<GuardSpec>,
     /// `ssh -A`; `null` inherits.
@@ -432,6 +436,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
                 .collect()
         }),
         identities_only: s.identities_only,
+        identity_agent: s.identity_agent.as_ref().map(IdentityAgent::to_config),
         forward_agent: s.forward_agent,
         history: s.history,
         ai_output: s.ai_output,
@@ -596,6 +601,12 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
             .identity_files
             .map(|files| files.into_iter().map(PathBuf::from).collect()),
         identities_only: spec.identities_only,
+        identity_agent: spec
+            .identity_agent
+            .filter(|a| !a.trim().is_empty())
+            .map(|a| IdentityAgent::parse(&a))
+            .transpose()
+            .map_err(invalid)?,
         guard: guard_settings(spec.guard)?,
         forward_agent: spec.forward_agent,
         history: spec.history,
