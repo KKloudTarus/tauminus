@@ -1,6 +1,6 @@
 # ADR 0028: Keys bound to hardware through agents; native binding after signed builds
 
-- Status: accepted
+- Status: accepted (the narrowed v0.4 scope approved by the maintainer)
 - Date: 2026-10-24
 
 ## Context
