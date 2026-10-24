@@ -990,3 +990,72 @@ fn a_level_names_a_few_sets_each_once() {
     );
     assert_eq!(inventory, before);
 }
+
+fn parented(id: &str, parent: Option<&str>) -> Group {
+    group(id, parent)
+}
+
+#[test]
+fn two_moves_that_close_a_cycle_are_repaired_alike_in_any_order() {
+    // Device A put g1 under g2 while device B put g2 under g1.
+    let groups = vec![parented("g1", Some("g2")), parented("g2", Some("g1"))];
+    let hosts = vec![host("h", Some("g2"))];
+    let (one, repairs) = Inventory::repaired(groups.clone(), hosts.clone()).unwrap();
+    let mut reversed = groups;
+    reversed.reverse();
+    let (two, _) = Inventory::repaired(reversed, hosts).unwrap();
+    assert_eq!(one, two, "the same lists repair the same way");
+    // The lowest id in the cycle loses its parent.
+    assert_eq!(
+        repairs,
+        [Repair::GroupToRoot(GroupId::parse("g1").unwrap())]
+    );
+    assert_eq!(
+        one.group(&GroupId::parse("g2").unwrap()).unwrap().parent,
+        Some(GroupId::parse("g1").unwrap())
+    );
+}
+
+#[test]
+fn gone_parents_and_groups_move_to_the_root() {
+    let (inventory, repairs) = Inventory::repaired(
+        vec![parented("g1", Some("gone"))],
+        vec![host("h", Some("deleted"))],
+    )
+    .unwrap();
+    assert_eq!(
+        inventory
+            .group(&GroupId::parse("g1").unwrap())
+            .unwrap()
+            .parent,
+        None
+    );
+    assert_eq!(inventory.hosts().next().unwrap().group, None);
+    assert_eq!(repairs.len(), 2);
+}
+
+#[test]
+fn a_chain_too_deep_is_cut_where_it_passes_the_limit() {
+    // g0 <- g1 <- ... <- g19, each under the one before.
+    let groups: Vec<Group> = (0..20)
+        .map(|i| {
+            let parent = (i > 0).then(|| format!("g{:02}", i - 1));
+            parented(&format!("g{i:02}"), parent.as_deref())
+        })
+        .collect();
+    let (inventory, repairs) = Inventory::repaired(groups, vec![]).unwrap();
+    // g16, the 17th level, moves to the root; g17 to g19 stay under it.
+    assert_eq!(repairs, [Repair::GroupToRoot(gid("g16"))]);
+    assert_eq!(inventory.groups().count(), 20);
+}
+
+#[test]
+fn a_merge_past_the_limits_is_refused_not_cut() {
+    let hosts: Vec<Host> = (0..=MAX_HOSTS)
+        .map(|i| host(&format!("h{i}"), None))
+        .collect();
+    assert_eq!(
+        Inventory::repaired(vec![], hosts).err(),
+        Some(HostsError::TooMany)
+    );
+}
