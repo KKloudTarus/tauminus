@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use tauminus_domain::{Label, Library, Snippet, SnippetId};
 
-const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
