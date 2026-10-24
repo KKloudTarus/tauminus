@@ -1518,6 +1518,7 @@ mod transfers {
         events: mpsc::Sender<TerminalEvent>,
         got: Got,
         skip: &'static str,
+        last: &'static [u8],
     ) {
         tokio::spawn(async move {
             let mut host = zmodem2::Receiver::new().unwrap();
@@ -1529,6 +1530,7 @@ mod transfers {
                 let mut at = 0;
                 loop {
                     let mut reply = Vec::new();
+                    let mut ended = false;
                     loop {
                         match host.poll() {
                             Wire::WriteWire(out) => {
@@ -1550,9 +1552,15 @@ mod transfers {
                                 lock(&got).last_mut().unwrap().1.extend_from_slice(data);
                                 host.file_written(n).unwrap();
                             }
+                            // `rz` exits; the shell's prompt comes in the
+                            // same read, after its last reply.
+                            Wire::Event(WireEvent::SessionCompleted) => ended = true,
                             Wire::Idle => break,
                             _ => {}
                         }
+                    }
+                    if ended {
+                        reply.extend_from_slice(last);
                     }
                     if !reply.is_empty() && events.send(TerminalEvent::Output(reply)).await.is_err()
                     {
@@ -1572,6 +1580,11 @@ mod transfers {
 
     /// A session whose host runs `rz`: the files it got.
     fn with_rz(skip: &'static str) -> (World, Got) {
+        with_rz_then(skip, b"")
+    }
+
+    /// `rz` that prints `last` with its last reply.
+    fn with_rz_then(skip: &'static str, last: &'static [u8]) -> (World, Got) {
         let w = world();
         let (input_tx, input) = mpsc::channel(64);
         // The test's world reads input itself; this one gives it to `rz`.
@@ -1581,7 +1594,7 @@ mod transfers {
         let (events_tx, events) = mpsc::channel(64);
         let id = attach(&sessions, input_tx, events, &sink);
         let got = Arc::default();
-        rz(input, events_tx.clone(), Arc::clone(&got), skip);
+        rz(input, events_tx.clone(), Arc::clone(&got), skip, last);
         let (_, dummy) = mpsc::channel(1);
         (
             World {
@@ -1814,6 +1827,28 @@ mod transfers {
             w.sessions.waiting_offer(w.id).unwrap(),
             Some((1, Wants::Receive))
         );
+    }
+
+    #[tokio::test]
+    async fn the_prompt_in_rz_s_last_reply_is_shown() {
+        let (w, _) = with_rz_then("", b"\r\n$ ");
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Send(vec![Box::new(MemFile("a", b"x".to_vec()))]),
+            )
+            .unwrap();
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert!(matches!(
+            w.host.events().last(),
+            Some(TransferEvent::Finished { .. })
+        ));
     }
 
     #[tokio::test]
