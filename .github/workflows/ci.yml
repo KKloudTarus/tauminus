@@ -41,11 +41,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev openssh-server busybox-static socat tmux mosh
+            libayatana-appindicator3-dev librsvg2-dev openssh-server busybox-static socat tmux mosh \
+            zlib1g-dev
           # The Telnet tests run BusyBox's telnetd, which the static build has;
           # the serial tests join two pseudo-terminals with socat; the
           # reconnect test joins a tmux session again; the Mosh test runs
-          # mosh-server and mosh-client.
+          # mosh-server and mosh-client; zlib is for building OpenSSH's test
+          # security key (ci/sk-agent.sh).
           echo "TAUMINUS_BUSYBOX=/bin/busybox" >> "$GITHUB_ENV"
 
       # Mosh is for macOS and Linux; the macOS job runs its test too.
@@ -58,6 +60,12 @@ jobs:
       - name: Start a password-checking sshd
         if: runner.os == 'Linux'
         run: sudo --preserve-env=GITHUB_ENV,GITHUB_ACTIONS bash ci/password-sshd.sh > /dev/null
+
+      # FIDO2 (`sk-`) keys through ssh-agent: OpenSSH's test provider stands
+      # in for a security key, with a server that takes public keys only.
+      - name: Start an agent with sk- keys
+        if: runner.os == 'Linux'
+        run: bash ci/sk-agent.sh > /dev/null
 
       # The Windows agent tests need the ssh-agent service of OpenSSH for
       # Windows and PuTTY's Pageant, pinned by the hash PuTTY publishes.
@@ -107,6 +115,11 @@ jobs:
       - name: History search benchmark
         if: runner.os == 'Linux'
         run: cargo test -p tauminus-store --release --locked -- --ignored a_million_lines --nocapture
+
+      # v0.4: FIDO2 keys through the agent log in (ci/sk-agent.sh).
+      - name: FIDO2 keys through ssh-agent
+        if: runner.os == 'Linux'
+        run: cargo test -p tauminus-ssh --locked --test sk_agent -- --ignored
 
       # v0.3 exit criterion: 1 GiB up and down over SFTP with matching
       # checksums. Release build, since debug crypto takes minutes; Unix
