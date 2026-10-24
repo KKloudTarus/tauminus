@@ -68,15 +68,21 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
-      - name: Build the benchmark app
+      - name: Build the benchmark frontend
         shell: bash
         env:
           VITE_TAUMINUS_BENCH: "1"
           VITE_TAUMINUS_RENDERER: ${{ matrix.renderer }}
-        run: |
-          (cd apps/desktop && pnpm install --frozen-lockfile && pnpm exec vite build)
+        run: cd apps/desktop && pnpm install --frozen-lockfile && pnpm exec vite build
+
+      # The default shell: on Windows that is pwsh, whose Strawberry Perl
+      # has the modules OpenSSL's Configure needs when SQLCipher's OpenSSL
+      # builds from source; Git Bash's perl lacks them. `&&`: pwsh checks only
+      # the last command's exit code.
+      - name: Build the benchmark binaries
+        run: >-
           cargo build --release --locked -p tauminus-desktop --features tauri/custom-protocol
-          cargo build --release --locked -p xtask
+          && cargo build --release --locked -p xtask
 
       # A desktop session has a D-Bus session bus; without one, WebKitGTK
       # waits out a 25 s D-Bus timeout before the first page loads.
