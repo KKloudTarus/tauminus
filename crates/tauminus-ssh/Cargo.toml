@@ -41,7 +41,7 @@ zeroize.workspace = true
 [target.'cfg(unix)'.dependencies]
 # killpg for `ssh -G` children that outlive their timeout. Same version as
 # the PTY adapter.
-nix = { version = "0.28", default-features = false, features = ["signal", "user"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "user"] }
 
 [target.'cfg(windows)'.dependencies]
 # Already in the tree through tokio and russh.

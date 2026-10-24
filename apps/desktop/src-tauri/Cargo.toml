@@ -51,7 +51,7 @@ zeroize.workspace = true
 # Already in the tree; the uid that owns a private edit folder, whether
 # the instance that left an edit folder still runs, and the open flags of
 # files sent to `rz` (through its `libc`).
-nix = { version = "0.28", default-features = false, features = ["fs", "signal", "user"] }
+nix = { version = "0.31", default-features = false, features = ["fs", "signal", "user"] }
 
 # USB security keys sign for FIDO2 key files (ADR 0027). Windows reaches
 # keys only through webauthn.dll; there, an agent signs.
