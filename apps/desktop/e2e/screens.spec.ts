@@ -47,6 +47,18 @@ async function seedHosts(page: Page) {
   }
 }
 
+/** Runs a palette command; retried, because a shortcut sent as a dialog closes can be lost under load. */
+async function command(page: Page, text: string) {
+  const input = page.getByPlaceholder("Type a command");
+  await expect(page.locator("dialog[open], [role=dialog]")).toHaveCount(0);
+  await expect(async () => {
+    if (!(await input.isVisible())) await page.locator("body").press("Control+Shift+P");
+    await expect(input).toBeVisible({ timeout: 1000 });
+  }).toPass();
+  await input.fill(text);
+  await page.keyboard.press("Enter");
+}
+
 async function shot(page: Page, name: string) {
   // Let transitions settle so the image shows the resting state.
   await page.waitForTimeout(250);
@@ -64,6 +76,15 @@ for (const size of SIZES) {
       const prefix = `${size.name}-${theme}`;
       if (await sidebar(page).isVisible()) await shot(page, `${prefix}-01-first-run`);
       else await shot(page, `${prefix}-01-terminal`);
+
+      await page.keyboard.type("integrate\n");
+      await page.keyboard.type("git checkou");
+      await expect(focusedScreen(page)).toContainText("$ git checkou");
+      await page.keyboard.press("Control+Shift+Space");
+      await expect(page.getByTestId("completion")).toBeVisible();
+      await shot(page, `${prefix}-14-completion`);
+      await page.keyboard.press("Escape");
+      await page.keyboard.press("Control+C");
 
       if (!(await sidebar(page).isVisible())) {
         await page.getByRole("button", { name: "Hosts", exact: true }).click();
@@ -91,46 +112,38 @@ for (const size of SIZES) {
       await expect(focusedScreen(page)).toContainText("Welcome to prompt.test");
       await shot(page, `${prefix}-06-connected`);
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("split pane right");
-      await page.keyboard.press("Enter");
+      await command(page, "split pane right");
       await shot(page, `${prefix}-07-split`);
+      // The new pane asks for the host key and password; answer so later shots stay clean.
+      await page.getByRole("button", { name: "Trust once" }).click();
+      const again = page.getByRole("dialog", { name: "Password for alice@prompt.test" });
+      await again.getByLabel("Password", { exact: true }).fill("secret");
+      await again.getByLabel("Password", { exact: true }).press("Enter");
+      await expect(again).toHaveCount(0);
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("open the vault");
-      await page.keyboard.press("Enter");
+      await command(page, "open the vault");
       await shot(page, `${prefix}-08-vault`);
       await page.keyboard.press("Escape");
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("snippets");
-      await page.keyboard.press("Enter");
+      await command(page, "snippets");
       await shot(page, `${prefix}-09-snippets`);
       await page.keyboard.press("Escape");
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("recordings: play back");
-      await page.keyboard.press("Enter");
+      await command(page, "recordings: play back");
       await shot(page, `${prefix}-11-recordings`);
       await page.keyboard.press("Escape");
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("Highlight sets and triggers");
-      await page.keyboard.press("Enter");
+      await command(page, "Highlight sets and triggers");
       await page.getByRole("button", { name: "New set" }).click();
       await shot(page, `${prefix}-12-highlights`);
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("Ask AI for a command");
-      await page.keyboard.press("Enter");
+      await command(page, "Ask AI for a command");
       await shot(page, `${prefix}-13-ai`);
       await page.keyboard.press("Escape");
 
-      await page.locator("body").press("Control+Shift+P");
-      await page.getByPlaceholder("Type a command").fill("connect to ssh host");
-      await page.keyboard.press("Enter");
+      await command(page, "connect to ssh host");
       await shot(page, `${prefix}-10-connect`);
       await page.keyboard.press("Escape");
     });
