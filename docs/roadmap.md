@@ -164,7 +164,7 @@ Goal: beat Termius Pro.
 - [x] `tmux` control mode: `tmux` windows as native tabs (tmux 3.2+, one pane per window)
 - [x] FIDO2 `sk-` keys through the agent: `ed25519-sk` and `ecdsa-sk` log in, tested in CI with OpenSSH's test provider (`ci/sk-agent.sh`)
 - [x] Direct FIDO2 signing with `ctap-hid-fido2`, with no agent, on Linux and macOS; Windows signs through the agent (ADR 0027)
-- [ ] Keys bound to Secure Enclave (macOS) and Windows Hello
+- [x] Keys bound to hardware through agents: Secure Enclave keys from Secretive, FIDO2 keys through the OpenSSH agent on Windows; a public key as `IdentityFile` picks the agent key (ADR 0028)
 - [x] Zmodem receive: files a host sends with `sz`, asked first (ADR 0025)
 - [x] Zmodem send: files chosen in the system dialog go to `rz` (ADR 0026)
 
@@ -188,6 +188,7 @@ Goal: Termius Pro sync without a Termius account.
 - [ ] Import CSV, PuTTY, MobaXterm, SecureCRT
 - [ ] Runbooks: snippets with variables shared through the git sync target
 - [ ] Code signing for macOS (Developer ID, notarization)
+- [ ] Native keys bound to the Secure Enclave (signed builds, data protection keychain) and to Windows Hello (NCrypt, Passport provider), each after a spike on real hardware (moved from v0.4: ADR 0028)
 - [ ] Auto-update with `tauri-plugin-updater`, signing key in CI secrets
 
 ### Exit criteria
