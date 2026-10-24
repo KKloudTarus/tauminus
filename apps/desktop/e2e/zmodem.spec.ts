@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Files a host sends with `sz`, against the fake in `src/ipc/fake.ts`:
-// `sz NAME` offers NAME, which comes in a moment once accepted.
+// Zmodem against the fake in `src/ipc/fake.ts`: `sz NAME` offers NAME,
+// which comes in a moment once accepted; `rz` waits for files, and the
+// fake dialog picks `notes.txt`.
 
 import { type Page, expect, test } from "@playwright/test";
 
@@ -42,4 +43,15 @@ test("declining sends nothing and gives the prompt back", async ({ page }) => {
   await expect(banner(page)).toHaveCount(0);
   await run(page, "echo after");
   await expect(screen(page)).toContainText("after");
+});
+
+test("sends what the user chose to rz, and says what went", async ({ page }) => {
+  await run(page, "rz");
+  await expect(banner(page)).toContainText("waits for files (rz)");
+  await banner(page).getByRole("button", { name: "Choose files…" }).click();
+  await expect(banner(page)).toContainText("Sent notes.txt");
+  await expect(banner(page).getByRole("button", { name: "Show folder" })).toHaveCount(0);
+  await banner(page).getByRole("button", { name: "Close" }).click();
+  await run(page, "echo done");
+  await expect(screen(page)).toContainText("done");
 });

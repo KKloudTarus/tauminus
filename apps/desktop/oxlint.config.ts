@@ -34,6 +34,9 @@ export default defineConfig({
     // React 17+ JSX transform: no React import needed.
     "react/react-in-jsx-scope": "off",
     "no-console": ["error", { allow: ["error", "warn"] }],
+    // tauri-plugin-dialog replaces alert/confirm/prompt with async ones the
+    // view may not call: `if (confirm(...))` would always pass.
+    "no-alert": "error",
     "typescript/no-floating-promises": "error",
     "typescript/no-misused-promises": "error",
     "typescript/consistent-type-imports": "error",

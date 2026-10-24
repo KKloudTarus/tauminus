@@ -713,13 +713,15 @@ pub trait AiTransport: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<String, AiTransportError>>;
 }
 
-/// Where a session's file transfers ask the user and keep files (ADR 0025).
+/// Where a session's file transfers ask the user and keep files (ADRs
+/// 0025, 0026).
 pub trait TransferHost: Send + Sync + fmt::Debug + 'static {
-    /// The host behind session `id` offers files, its offer number
-    /// `offer`. The answer comes back through
-    /// `SessionManager::answer_transfer` with that number; until then the
-    /// session shows nothing more and takes no keys.
-    fn offered(&self, id: tauminus_domain::SessionId, offer: u64);
+    /// The host behind session `id` offers a transfer, its offer number
+    /// `offer`: to send files (`sz`) or to take them (`rz`). The answer
+    /// comes back through `SessionManager::answer_transfer` with that
+    /// number; until then the session shows nothing more and takes no
+    /// keys.
+    fn offered(&self, id: tauminus_domain::SessionId, offer: u64, wants: tauminus_domain::Wants);
     fn event(&self, id: tauminus_domain::SessionId, event: TransferEvent);
 }
 
@@ -743,11 +745,32 @@ pub trait PartFile: Send + 'static {
     fn discard(self: Box<Self>);
 }
 
+/// A local file the user chose to send, opened: what it is was checked
+/// on the open handle, and it is read through that handle only.
+pub trait OutgoingFile: Send + fmt::Debug + 'static {
+    /// One path component, as the host is to see it.
+    fn name(&self) -> &str;
+    fn size(&self) -> u64;
+    /// Up to `buf.len()` bytes from `offset`; 0 only past the end.
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize>;
+}
+
+/// The user's answer to an offer.
+#[derive(Debug)]
+pub enum TransferAnswer {
+    /// To `sz`: receive into this folder.
+    Receive(Box<dyn ReceiveFolder>),
+    /// To `rz`: send these files.
+    Send(Vec<Box<dyn OutgoingFile>>),
+    Decline,
+}
+
 /// What a transfer tells the view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransferEvent {
+    /// Files come into `folder`, or, with none, go to the host.
     Started {
-        folder: String,
+        folder: Option<String>,
     },
     File {
         name: String,
@@ -757,10 +780,10 @@ pub enum TransferEvent {
         bytes: u64,
         size: Option<u64>,
     },
-    /// The first 100 names of what came and what was skipped, and how
-    /// many more.
+    /// The first 100 names of what came (or went) and what was skipped,
+    /// and how many more.
     Finished {
-        folder: String,
+        folder: Option<String>,
         files: Vec<String>,
         more_files: u64,
         skipped: Vec<String>,

@@ -87,4 +87,7 @@ pub use trigger::{
     MAX_SCAN_LINES, MAX_SEND, MAX_SET_RULES, MAX_SETS, Matcher, RulePattern, SendText,
     TriggerError, TriggerLibrary, TriggerMatcher, TriggerRule, TriggerSet,
 };
-pub use zmodem::{OFFER_KEEP, Output as ZmodemOutput, Receive, Received, find_offer};
+pub use zmodem::{
+    MAX_SEND_NAME, Need, OFFER_KEEP, Offer, Output as ZmodemOutput, Receive, Received, Sent,
+    Transmit, TransmitError, TransmitOutput, Wants, find_offer,
+};

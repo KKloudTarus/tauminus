@@ -167,14 +167,33 @@ fn what_follows_the_transfer_is_the_terminal_s() {
 #[test]
 fn an_offer_is_found_whole_and_only_whole() {
     let offer = b"rz\r**\x18B00000000000000\r\x8a\x11";
-    assert_eq!(find_offer(offer), Some(3));
+    let receive = |at| {
+        Some(Offer {
+            at,
+            wants: Wants::Receive,
+        })
+    };
+    assert_eq!(find_offer(offer), receive(3));
+    // `rz` waiting: a ZRINIT.
+    assert_eq!(
+        find_offer(b"rz waiting\r\n**\x18B0100000023be50\r\x8a"),
+        Some(Offer {
+            at: 12,
+            wants: Wants::Send
+        })
+    );
+    // Other header types are not offers.
+    assert_eq!(find_offer(b"**\x18B0200000000000000\r"), None);
     assert_eq!(find_offer(b"plain text"), None);
     // Cut before its flags and CRC: not yet.
     assert_eq!(find_offer(b"rz\r**\x18B0000"), None);
     // Not hex: text that only looks like it.
     assert_eq!(find_offer(b"**\x18B00zzzzzzzzzzzz\r"), None);
     // A second, whole one after a broken one.
-    assert_eq!(find_offer(b"**\x18B00zz**\x18B00000000000000\r"), Some(8));
+    assert_eq!(
+        find_offer(b"**\x18B00zz**\x18B00000000000000\r"),
+        receive(8)
+    );
     assert_eq!(OFFER_KEEP, 17);
 }
 

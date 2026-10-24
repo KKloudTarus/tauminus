@@ -36,7 +36,7 @@ import {
   isPasswordPrompt,
 } from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
-import type { ReceiveHub, ReceiveState } from "./receive.ts";
+import type { ZmodemHub, ZmodemState } from "./zmodem.ts";
 import { ShellMarks } from "./shell-marks.ts";
 import { type Suggestion, suggest } from "@/features/complete/match.ts";
 import { COMMANDS, loadSpec } from "@/features/complete/specs.ts";
@@ -375,13 +375,13 @@ export class TerminalController {
       triggers?: { source: TriggerSource; fired: (batch: FiredBatch) => void };
       /** For a pane that starts a tmux session's tabs. */
       tmux?: TmuxEvents;
-      /** Files hosts send with `sz`. */
-      receive?: ReceiveHub;
+      /** Files hosts send with `sz`, or take with `rz`. */
+      zmodem?: ZmodemHub;
     } = {},
   ) {
     this.#sessions = sessions;
-    this.#receive = options.receive;
-    this.#stopReceive = options.receive?.subscribe(() => this.#notify());
+    this.#zmodem = options.zmodem;
+    this.#stopZmodem = options.zmodem?.subscribe(() => this.#notify());
     this.spec = options.spec ?? LOCAL;
     this.#tmux = options.tmux;
     this.#openLink = options.openLink;
@@ -520,8 +520,8 @@ export class TerminalController {
       if (this.spec.kind === "tmux" && this.#isReply(raw)) return;
       // While files come, keys would go into the protocol; the backend
       // refuses them too. Ctrl+C stops the transfer.
-      if (this.#receiving()) {
-        if (raw.includes("\u0003")) this.cancelReceive();
+      if (this.#transferring()) {
+        if (raw.includes("\u0003")) this.cancelZmodem();
         return;
       }
       this.#closeCompletion();
@@ -992,40 +992,40 @@ export class TerminalController {
   getFill = (): FillState | undefined => this.#fill;
 
   /** Files the host sends: an offer, progress, or how it ended. For `useSyncExternalStore`. */
-  getReceive = (): ReceiveState | undefined => this.#receive?.state(this.#session?.id);
+  getZmodem = (): ZmodemState | undefined => this.#zmodem?.state(this.#session?.id);
 
-  #receiving(): boolean {
-    const state = this.getReceive();
-    return state?.kind === "offered" || state?.kind === "receiving";
+  #transferring(): boolean {
+    const state = this.getZmodem();
+    return state?.kind === "offered" || state?.kind === "moving";
   }
 
   /** The user's answer to the host's offer. */
-  answerReceive(accept: boolean): void {
+  answerZmodem(accept: boolean): void {
     const id = this.#session?.id;
-    if (id === undefined || !this.#receive) return;
-    this.#receive.answer(id, accept).catch(ignoreEndedSession);
+    if (id === undefined || !this.#zmodem) return;
+    this.#zmodem.answer(id, accept).catch(ignoreEndedSession);
     this.focus();
   }
 
-  cancelReceive(): void {
+  cancelZmodem(): void {
     const id = this.#session?.id;
-    if (id === undefined || !this.#receive) return;
-    this.#receive.client.cancel(id).catch(ignoreEndedSession);
+    if (id === undefined || !this.#zmodem) return;
+    this.#zmodem.client.cancel(id).catch(ignoreEndedSession);
   }
 
   revealReceived(): void {
-    this.#receive?.client.reveal().catch(ignoreEndedSession);
+    this.#zmodem?.client.reveal().catch(ignoreEndedSession);
   }
 
   /** Hides how the last transfer ended. */
-  dismissReceive(): void {
+  dismissZmodem(): void {
     const id = this.#session?.id;
-    if (id !== undefined) this.#receive?.dismiss(id);
+    if (id !== undefined) this.#zmodem?.dismiss(id);
     this.focus();
   }
 
-  readonly #receive: ReceiveHub | undefined;
-  readonly #stopReceive: (() => void) | undefined;
+  readonly #zmodem: ZmodemHub | undefined;
+  readonly #stopZmodem: (() => void) | undefined;
 
   /**
    * Types the saved host's login password at the prompt the pane shows,
@@ -1404,7 +1404,7 @@ export class TerminalController {
     }
     this.#disposed = true;
     this.#marks.dispose();
-    this.#stopReceive?.();
+    this.#stopZmodem?.();
     this.detach();
     clearTimeout(this.#ackRetry);
     clearTimeout(this.#reconnectTimer);
@@ -1426,7 +1426,7 @@ export class TerminalController {
     this.#pin?.dispose();
     this.#output.close();
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
-    if (this.#session) this.#receive?.dismiss(this.#session.id);
+    if (this.#session) this.#zmodem?.dismiss(this.#session.id);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
     this.#settleOpened?.(undefined);

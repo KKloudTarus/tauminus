@@ -39,6 +39,7 @@ tauminus-telnet.workspace = true
 tauminus-mosh.workspace = true
 tauri = { workspace = true, features = ["specta"] }
 tauri-specta.workspace = true
+tauri-plugin-dialog.workspace = true
 tauri-plugin-notification.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread", "time"] }
 tracing.workspace = true
@@ -46,8 +47,9 @@ tracing-subscriber.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-# Already in the tree; the uid that owns a private edit folder, and whether
-# the instance that left an edit folder still runs.
+# Already in the tree; the uid that owns a private edit folder, whether
+# the instance that left an edit folder still runs, and the open flags of
+# files sent to `rz` (through its `libc`).
 nix = { version = "0.28", default-features = false, features = ["signal", "user"] }
 
 # Wayland sessions need the data-control protocol; X11 works without it.

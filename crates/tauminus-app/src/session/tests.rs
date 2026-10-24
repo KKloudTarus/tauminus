@@ -828,16 +828,20 @@ mod transfers {
     use zmodem2::{Action as Wire, Event as WireEvent, FileInfo, Position, Sender};
 
     use super::*;
-    use crate::ports::{PartFile, ReceiveFolder, TransferEvent, TransferHost};
+    use tauminus_domain::Wants;
+
+    use crate::ports::{PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost};
 
     #[derive(Debug, Default)]
     pub(super) struct Host {
         pub(super) offers: AtomicUsize,
+        pub(super) wants: Mutex<Option<Wants>>,
         events: Mutex<Vec<TransferEvent>>,
     }
 
     impl TransferHost for Host {
-        fn offered(&self, _id: SessionId, offer: u64) {
+        fn offered(&self, _id: SessionId, offer: u64, wants: Wants) {
+            *lock(&self.wants) = Some(wants);
             let before = self.offers.fetch_add(1, Ordering::Relaxed);
             assert_eq!(offer, before as u64 + 1, "offers are numbered from 1");
         }
@@ -1013,7 +1017,9 @@ mod transfers {
             .send(TerminalEvent::Output(b" more".to_vec()))
             .await
             .unwrap();
-        w.sessions.answer_transfer(w.id, 1, None).unwrap();
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Decline)
+            .unwrap();
         let mut whole = b"$ cat notes\r\n".to_vec();
         whole.extend_from_slice(OFFER);
         whole.extend_from_slice(b" more");
@@ -1039,7 +1045,11 @@ mod transfers {
             .unwrap();
         until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
         w.sessions
-            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Receive(Box::new(Folder::default())),
+            )
             .unwrap();
         until("the start", || !w.host.events().is_empty()).await;
         let shown = w.sink.output().len();
@@ -1095,7 +1105,11 @@ mod transfers {
             .unwrap();
         until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
         w.sessions
-            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Receive(Box::new(Folder::default())),
+            )
             .unwrap();
         until("the start", || !w.host.events().is_empty()).await;
         let shown = w.sink.output().len();
@@ -1133,7 +1147,9 @@ mod transfers {
                     .unwrap();
             }
             until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
-            w.sessions.answer_transfer(w.id, 1, None).unwrap();
+            w.sessions
+                .answer_transfer(w.id, 1, TransferAnswer::Decline)
+                .unwrap();
             until("the held output", || w.sink.output() == printed).await;
         }
     }
@@ -1176,7 +1192,11 @@ mod transfers {
             .unwrap();
         until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
         w.sessions
-            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Receive(Box::new(Folder::default())),
+            )
             .unwrap();
         // Headers that each get a reply, and the test reads none of them.
         let header = &OFFER[3..];
@@ -1284,7 +1304,7 @@ mod transfers {
         move |w: &World| {
             if w.host.offers.load(Ordering::Relaxed) == 1 && w.host.events().is_empty() {
                 w.sessions
-                    .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+                    .answer_transfer(w.id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
                     .unwrap();
             }
         }
@@ -1313,7 +1333,7 @@ mod transfers {
             |w| {
                 if w.host.offers.load(Ordering::Relaxed) == 1 {
                     w.sessions
-                        .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+                        .answer_transfer(w.id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
                         .unwrap();
                 }
             },
@@ -1354,7 +1374,7 @@ mod transfers {
         // it waits for the user.
         w.sessions.cancel_transfer(w.id).unwrap();
         w.sessions
-            .answer_transfer(w.id, 2, Some(Box::new(folder.clone())))
+            .answer_transfer(w.id, 2, TransferAnswer::Receive(Box::new(folder.clone())))
             .unwrap();
         w.events
             .send(TerminalEvent::Output(OFFER.to_vec()))
@@ -1384,7 +1404,9 @@ mod transfers {
             Some(TransferEvent::Finished { .. })
         ));
         // Its own number answers it.
-        w.sessions.answer_transfer(w.id, 2, None).unwrap();
+        w.sessions
+            .answer_transfer(w.id, 2, TransferAnswer::Decline)
+            .unwrap();
         until("the decline", || {
             matches!(w.host.events().last(), Some(TransferEvent::Declined))
         })
@@ -1461,6 +1483,420 @@ mod transfers {
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(w.sink.output().len(), shown);
     }
+
+    /// A local file in memory.
+    #[derive(Debug)]
+    struct MemFile(&'static str, Vec<u8>);
+
+    impl crate::ports::OutgoingFile for MemFile {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn size(&self) -> u64 {
+            self.1.len() as u64
+        }
+
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+            let from = usize::try_from(offset).unwrap().min(self.1.len());
+            let n = buf.len().min(self.1.len() - from);
+            buf[..n].copy_from_slice(&self.1[from..from + n]);
+            Ok(n)
+        }
+    }
+
+    /// Files a host got, by name, in order.
+    type Got = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+    /// The ZRINIT `rz` prints as it starts.
+    const RZ: &[u8] = b"rz waiting to receive.**\x18B0100000023be50\r\x8a\x11";
+
+    /// `rz` on the host: reads the session's input, answers through its
+    /// output, and keeps the files, by name, in `got`. It skips `skip`.
+    fn rz(
+        mut input: mpsc::Receiver<TerminalInput>,
+        events: mpsc::Sender<TerminalEvent>,
+        got: Got,
+        skip: &'static str,
+    ) {
+        tokio::spawn(async move {
+            let mut host = zmodem2::Receiver::new().unwrap();
+            host.set_manual_file_accept(true);
+            while let Some(message) = input.recv().await {
+                let TerminalInput::Data(bytes) = message else {
+                    continue;
+                };
+                let mut at = 0;
+                loop {
+                    let mut reply = Vec::new();
+                    loop {
+                        match host.poll() {
+                            Wire::WriteWire(out) => {
+                                let n = out.len();
+                                reply.extend_from_slice(out);
+                                host.wire_written(n);
+                            }
+                            Wire::Event(WireEvent::FileStarted(info)) => {
+                                let name = String::from_utf8_lossy(info.name).into_owned();
+                                if name == skip {
+                                    host.skip_file().unwrap();
+                                } else {
+                                    lock(&got).push((name, Vec::new()));
+                                    host.accept_file_at(0).unwrap();
+                                }
+                            }
+                            Wire::WriteFile(data) => {
+                                let n = data.len();
+                                lock(&got).last_mut().unwrap().1.extend_from_slice(data);
+                                host.file_written(n).unwrap();
+                            }
+                            Wire::Idle => break,
+                            _ => {}
+                        }
+                    }
+                    if !reply.is_empty() && events.send(TerminalEvent::Output(reply)).await.is_err()
+                    {
+                        return;
+                    }
+                    if at >= bytes.len() {
+                        break;
+                    }
+                    match host.submit_wire(&bytes[at..]) {
+                        Ok(n) => at += n,
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+    }
+
+    /// A session whose host runs `rz`: the files it got.
+    fn with_rz(skip: &'static str) -> (World, Got) {
+        let w = world();
+        let (input_tx, input) = mpsc::channel(64);
+        // The test's world reads input itself; this one gives it to `rz`.
+        let sessions = Arc::clone(&w.sessions);
+        let host = Arc::clone(&w.host);
+        let sink = w.sink.clone();
+        let (events_tx, events) = mpsc::channel(64);
+        let id = attach(&sessions, input_tx, events, &sink);
+        let got = Arc::default();
+        rz(input, events_tx.clone(), Arc::clone(&got), skip);
+        let (_, dummy) = mpsc::channel(1);
+        (
+            World {
+                sessions,
+                id,
+                events: events_tx,
+                input: dummy,
+                host,
+                sink,
+            },
+            got,
+        )
+    }
+
+    fn files(w: &World) -> Vec<Box<dyn crate::ports::OutgoingFile>> {
+        let _ = w;
+        vec![
+            Box::new(MemFile("a.txt", b"hello\n".to_vec())),
+            Box::new(MemFile("skip.me", vec![7; 3000])),
+            Box::new(MemFile("big.bin", big())),
+        ]
+    }
+
+    #[tokio::test]
+    async fn files_go_to_rz_once_the_user_chose_them() {
+        let (w, got) = with_rz("skip.me");
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        assert_eq!(*lock(&w.host.wants), Some(Wants::Send));
+        // Shown up to the header; keys refused; the wrong kind of answer
+        // does nothing.
+        until("the text", || w.sink.output() == b"rz waiting to receive.").await;
+        assert!(matches!(
+            w.sessions.write(w.id, b"x".to_vec()).await,
+            Err(SessionError::Transferring)
+        ));
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Receive(Box::new(Folder::default())),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(w.host.events(), vec![]);
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Send(files(&w)))
+            .unwrap();
+        until("the end", || {
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Finished { .. } | TransferEvent::Failed { .. })
+            )
+        })
+        .await;
+        assert!(
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Finished { folder: None, files, skipped, .. })
+                    if files == &["a.txt", "big.bin"] && skipped == &["skip.me"]
+            ),
+            "{:?}",
+            w.host.events()
+        );
+        let got = lock(&got).clone();
+        assert_eq!(got[0], ("a.txt".to_owned(), b"hello\n".to_vec()));
+        assert_eq!(got[1].0, "big.bin");
+        assert!(got[1].1.eq(&big()));
+        // Nothing of the protocol reached the view.
+        assert_eq!(w.sink.output(), b"rz waiting to receive.");
+        w.sessions.write(w.id, b"ls\r".to_vec()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stop_mid_send_tells_rz_and_frees_the_keys() {
+        let (w, got) = with_rz("");
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        let huge: Vec<Box<dyn crate::ports::OutgoingFile>> =
+            vec![Box::new(MemFile("huge.bin", vec![1; 64 << 20]))];
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Send(huge))
+            .unwrap();
+        until("data", || {
+            lock(&got).first().is_some_and(|f| !f.1.is_empty())
+        })
+        .await;
+        w.sessions.write(w.id, b"\x03".to_vec()).await.unwrap();
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        // Not all 64 MiB went: the stop came between.
+        assert!(lock(&got)[0].1.len() < 64 << 20);
+        w.sessions.write(w.id, b"ls\r".to_vec()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn when_rz_stops_by_itself_nothing_queued_reaches_the_host_after() {
+        // `rz` as lrzsz runs it: it takes a stream (ZRINIT with no buffer
+        // and CANOVIO), reads slowly, and stops after 10 KB, as on a full
+        // disk. What reaches it after that is counted.
+        let w = world();
+        let (input_tx, mut input) = mpsc::channel(64);
+        let (events_tx, events) = mpsc::channel(64);
+        let id = attach(&w.sessions, input_tx, events, &w.sink);
+        let after = Arc::new(AtomicUsize::new(0));
+        let late = Arc::clone(&after);
+        let replies = events_tx.clone();
+        tokio::spawn(async move {
+            let zrpos0 = b"**\x18B0900000000a87c\r\x8a\x11".to_vec();
+            let (mut messages, mut read, mut stopped) = (0, 0, false);
+            while let Some(TerminalInput::Data(bytes)) = input.recv().await {
+                messages += 1;
+                if stopped {
+                    late.fetch_add(bytes.len(), Ordering::Relaxed);
+                    continue;
+                }
+                match messages {
+                    // Our ZRQINIT, then ZFILE.
+                    1 => replies
+                        .send(TerminalEvent::Output(RZ[22..].to_vec()))
+                        .await
+                        .unwrap(),
+                    2 => replies
+                        .send(TerminalEvent::Output(zrpos0.clone()))
+                        .await
+                        .unwrap(),
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                        read += bytes.len();
+                        if read > 10_000 {
+                            stopped = true;
+                            replies
+                                .send(TerminalEvent::Output(vec![0x18; 10]))
+                                .await
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+        });
+        events_tx
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        let huge: Vec<Box<dyn crate::ports::OutgoingFile>> =
+            vec![Box::new(MemFile("huge.bin", vec![b'x'; 64 << 20]))];
+        w.sessions
+            .answer_transfer(id, 1, TransferAnswer::Send(huge))
+            .unwrap();
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // What the session's input queue held (64 writes of about 1 KiB)
+        // still goes; what was queued past it does not.
+        let late = after.load(Ordering::Relaxed);
+        assert!(late < 80 << 10, "{late} bytes after rz stopped");
+    }
+
+    /// A file that is shorter when read than when chosen.
+    #[derive(Debug)]
+    struct Shrunk;
+
+    impl crate::ports::OutgoingFile for Shrunk {
+        fn name(&self) -> &'static str {
+            "log.txt"
+        }
+
+        fn size(&self) -> u64 {
+            100_000
+        }
+
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+            let left = 5000u64.saturating_sub(offset);
+            let n = buf.len().min(usize::try_from(left).unwrap());
+            buf[..n].fill(b'a');
+            Ok(n)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_file_that_shrank_stops_the_send() {
+        let (w, _) = with_rz("");
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Send(vec![Box::new(Shrunk)]))
+            .unwrap();
+        until("the stop", || {
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Failed { reason }) if reason.contains("changed")
+            )
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn files_are_not_sent_to_sz_nor_received_from_rz() {
+        let w = world();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        assert_eq!(*lock(&w.host.wants), Some(Wants::Receive));
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Send(vec![Box::new(MemFile("a", vec![1]))]),
+            )
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(w.host.events(), vec![]);
+        assert_eq!(
+            w.sessions.waiting_offer(w.id).unwrap(),
+            Some((1, Wants::Receive))
+        );
+    }
+
+    #[tokio::test]
+    async fn the_prompt_after_a_finished_send_is_shown() {
+        let (w, _) = with_rz("");
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Send(vec![Box::new(MemFile("a", b"x".to_vec()))]),
+            )
+            .unwrap();
+        until("the end", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Finished { .. }))
+        })
+        .await;
+        w.events
+            .send(TerminalEvent::Output(b"\r\n$ ".to_vec()))
+            .await
+            .unwrap();
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+    }
+
+    #[tokio::test]
+    async fn a_send_to_an_rz_that_is_gone_ends_though_the_shell_prints() {
+        // `rz` gave up while the user chose; the shell prints a clock line
+        // every half second, and never answers as `rz`.
+        let w = world();
+        w.events
+            .send(TerminalEvent::Output(RZ.to_vec()))
+            .await
+            .unwrap();
+        w.events
+            .send(TerminalEvent::Output(b"rz: timed out\r\n$ ".to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Send(vec![Box::new(MemFile("a", vec![1; 10]))]),
+            )
+            .unwrap();
+        let clock = w.events.clone();
+        let ticking = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if clock
+                    .send(TerminalEvent::Output(b"12:00:01 tick\r\n".to_vec()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        });
+        for _ in 0..80 {
+            if matches!(w.host.events().last(), Some(TransferEvent::Failed { .. })) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        ticking.abort();
+        assert!(
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Failed { reason }) if reason.contains("not waiting")
+            ),
+            "{:?}",
+            w.host.events()
+        );
+        // What the shell printed while the user chose is shown.
+        until("the held output", || {
+            String::from_utf8_lossy(&w.sink.output()).contains("rz: timed out\r\n$ ")
+        })
+        .await;
+    }
 }
 
 mod live_sz {
@@ -1473,7 +1909,7 @@ mod live_sz {
 
     use super::transfers::{Attached, Folder, until};
     use super::*;
-    use crate::ports::TransferEvent;
+    use crate::ports::{TransferAnswer, TransferEvent};
 
     fn container() -> String {
         std::env::var("TAUMINUS_SZ_CONTAINER").expect("TAUMINUS_SZ_CONTAINER names a container")
@@ -1529,7 +1965,7 @@ mod live_sz {
         until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
         let folder = Folder::default();
         w.sessions
-            .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+            .answer_transfer(w.id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
             .unwrap();
         for _ in 0..3000 {
             if matches!(w.host.events().last(), Some(TransferEvent::Finished { .. })) {
