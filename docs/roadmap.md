@@ -165,6 +165,7 @@ Goal: beat Termius Pro.
 - [x] FIDO2 `sk-` keys through the agent: `ed25519-sk` and `ecdsa-sk` log in, tested in CI with OpenSSH's test provider (`ci/sk-agent.sh`)
 - [x] Direct FIDO2 signing with `ctap-hid-fido2`, with no agent, on Linux and macOS; Windows signs through the agent (ADR 0027)
 - [x] Keys bound to hardware through agents: Secure Enclave keys from Secretive, FIDO2 keys through the OpenSSH agent on Windows; a public key as `IdentityFile` picks the agent key (ADR 0028)
+  - [x] Scope narrowed from "Keys bound to Secure Enclave (macOS) and Windows Hello" on 2026-10-24, approved by the maintainer: native keys move to v0.5
 - [x] Zmodem receive: files a host sends with `sz`, asked first (ADR 0025)
 - [x] Zmodem send: files chosen in the system dialog go to `rz` (ADR 0026)
 
