@@ -180,3 +180,10 @@ test("shows the recording badge beside the broadcast one", async ({ page }) => {
     broadcast.x >= rec.x + rec.width;
   expect(apart).toBe(true);
 });
+
+test("sizes the recordings dialog to its content while it has none", async ({ page }) => {
+  await palette(page, "Recordings: play back recorded sessions");
+  await expect(recordings(page)).toContainText("No recordings yet");
+  const box = await recordings(page).boundingBox();
+  expect(box?.height ?? 0).toBeLessThan(200);
+});
