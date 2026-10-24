@@ -30,6 +30,7 @@ function host(label: string, address: string, tags: string[] = [], user = "me"):
     startup: [],
     protocol: "ssh",
     joinsTmux: false,
+    tmuxTabs: false,
   };
 }
 

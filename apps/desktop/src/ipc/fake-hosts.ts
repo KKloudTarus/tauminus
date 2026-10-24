@@ -25,6 +25,14 @@ const CONFIG = [
   { label: "changed", address: "changed.test", user: null },
 ];
 
+/** The address of each fake host, for the fake sessions. */
+const addresses = new Map<string, string>();
+
+/** A fake saved host's address, or `undefined`. */
+export function fakeHostAddress(id: string): string | undefined {
+  return addresses.get(id);
+}
+
 export function fakeHosts(): HostsClient {
   let groups: GroupView[] = [];
   let hosts: Omit<HostView, "target" | "problem" | "guarded" | "forwardsAgent">[] = [];
@@ -108,9 +116,14 @@ export function fakeHosts(): HostsClient {
       protocol: input.protocol ?? "ssh",
       // The fake reads only the host's own setting, not its groups'.
       joinsTmux: (input.protocol ?? "ssh") === "ssh" && Boolean(input.settings?.tmux),
+      tmuxTabs:
+        (input.protocol ?? "ssh") === "ssh" &&
+        Boolean(input.settings?.tmux) &&
+        input.settings?.tmuxTabs === true,
     };
     if (!host.label || !host.address) throw new Error("label and address are required");
     hosts = [...hosts.filter((h) => h.id !== host.id), host];
+    addresses.set(host.id, host.address);
   };
 
   return {

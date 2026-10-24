@@ -24,6 +24,7 @@ import {
   SessionCommandError,
   type SessionSpec,
   type TerminalSession,
+  type TmuxEvents,
 } from "@/ipc/index.ts";
 
 import { ACK_THRESHOLD_BYTES, AckBatcher } from "./ack-batcher.ts";
@@ -49,6 +50,25 @@ import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 import { type HighlightSource, Highlighter } from "./highlighter.ts";
+
+/** What xterm.js sends back for a program's query (DA, DSR, OSC colours, DECRQM). */
+const TERMINAL_REPLY =
+  // oxlint-disable-next-line no-control-regex -- terminal replies are control sequences
+  /^(?:\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001bP[^\u001b]*\u001b\\|\u001b\[\??\d+;\d+R|\u001b\[[?>]?[\d;]*c|\u001b\[\??\d+;\d+\$y|\u001b\[0n)$/u;
+
+/**
+ * How many cursor position queries `data` holds, as `ESC [ 6 n` or
+ * `ESC [ ? 6 n`, ending in its last 4 bytes or later. O(n).
+ */
+function cursorQueries(data: Uint8Array): number {
+  let count = 0;
+  for (let i = 0; i + 3 < data.length; i += 1) {
+    if (data[i] !== 0x1b || data[i + 1] !== 0x5b) continue;
+    const at = data[i + 2] === 0x3f ? i + 3 : i + 2;
+    if (data[at] === 0x36 && data[at + 1] === 0x6e) count += 1;
+  }
+  return count;
+}
 
 /** The completion list a pane shows, at the cursor's cell. */
 export interface CompletionState {
@@ -230,6 +250,11 @@ export class TerminalController {
   readonly #input: InputQueue;
   readonly #listeners = new Set<Listener>();
   readonly #openLink: ((url: string) => void) | undefined;
+  readonly #tmux: TmuxEvents | undefined;
+  /** Cursor position queries (DSR 6) a tmux pane's program sent, not yet answered. */
+  #cursorQueries = 0;
+  /** The last bytes of output, where a query may have started. */
+  #queryTail = new Uint8Array(0);
   readonly #mac: boolean;
   #onInput: ((data: string) => void) | undefined;
   /** Whether the pane is on screen; what happens then is seen. */
@@ -347,10 +372,13 @@ export class TerminalController {
       highlights?: HighlightSource;
       /** The trigger rules for this pane's host, and what to do when one fires. */
       triggers?: { source: TriggerSource; fired: (batch: FiredBatch) => void };
+      /** For a pane that starts a tmux session's tabs. */
+      tmux?: TmuxEvents;
     } = {},
   ) {
     this.#sessions = sessions;
     this.spec = options.spec ?? LOCAL;
+    this.#tmux = options.tmux;
     this.#openLink = options.openLink;
     this.#mac = options.mac ?? false;
     this.#webglRetired =
@@ -482,6 +510,9 @@ export class TerminalController {
     globalThis.addEventListener?.("online", this.#onWake);
     globalThis.addEventListener?.("focus", this.#onWake);
     this.terminal.onData((raw) => {
+      // tmux answers its panes' queries itself: an answer from here would
+      // reach the program twice.
+      if (this.spec.kind === "tmux" && this.#isReply(raw)) return;
       this.#closeCompletion();
       const data = defusePaste(raw);
       this.#noteTyping(data);
@@ -778,6 +809,20 @@ export class TerminalController {
    */
   #sent(data: string): void {
     if (/[\r\n]/u.test(data)) this.#marks.submitted();
+  }
+
+  /**
+   * Whether `data` is what xterm.js answered to a program's query, not a
+   * key: a cursor report only while one was asked for, since Shift+F3
+   * sends the same bytes.
+   */
+  #isReply(data: string): boolean {
+    if (!TERMINAL_REPLY.test(data)) return false;
+    // oxlint-disable-next-line no-control-regex -- a cursor position report
+    if (!/^\u001b\[\??\d+;\d+R$/u.test(data)) return true;
+    if (this.#cursorQueries === 0) return false;
+    this.#cursorQueries -= 1;
+    return true;
   }
 
   #closeCompletion(): void {
@@ -1195,6 +1240,7 @@ export class TerminalController {
       case "host":
       case "telnet":
       case "mosh":
+      case "tmux":
         return this.spec.label;
       case "ssh":
         return formatEndpoint(this.spec.target.destination);
@@ -1368,6 +1414,7 @@ export class TerminalController {
     this.#parsedBytes = 0;
     this.#sessions
       .open(this.spec, this.#sentSize, {
+        ...(this.#tmux ? { tmux: this.#tmux } : {}),
         onPrompt: (prompt) => this.#ask(prompt),
         onOutput: (data) => this.#write(data),
         onExit: (code, lost) => {
@@ -1510,6 +1557,14 @@ export class TerminalController {
   #write(data: Uint8Array): void {
     if (this.#disposed) {
       return;
+    }
+    if (this.spec.kind === "tmux") {
+      // A query may straddle two chunks: the end of the last goes first.
+      const seen = new Uint8Array(this.#queryTail.length + data.length);
+      seen.set(this.#queryTail);
+      seen.set(data, this.#queryTail.length);
+      this.#cursorQueries += cursorQueries(seen);
+      this.#queryTail = seen.slice(Math.max(0, seen.length - 3));
     }
     this.#mark("unread");
     this.#pin?.output(data.byteLength);

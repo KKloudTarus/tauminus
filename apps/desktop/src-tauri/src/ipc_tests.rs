@@ -272,6 +272,15 @@ fn triggers_fire_on_lines_and_notify_only_from_the_backend_s_own_text() {
 }
 
 #[test]
+fn tmux_tabs_name_a_control_client_and_a_pane() {
+    let (app, _dir) = app("tmux");
+    let missing = call(&app, "tmux_new_window", json!({"control": 999})).unwrap_err();
+    assert_eq!(missing["code"], "not_found");
+    let missing = call(&app, "tmux_detach", json!({"control": 999})).unwrap_err();
+    assert_eq!(missing["code"], "not_found");
+}
+
+#[test]
 fn the_ai_assistant_is_off_and_takes_no_output_from_the_view() {
     let (app, _dir) = app("ai");
     let settings = call(&app, "ai_settings_get", json!({})).unwrap();

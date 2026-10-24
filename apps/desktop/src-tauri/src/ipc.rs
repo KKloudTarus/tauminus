@@ -103,6 +103,9 @@ pub(crate) enum ErrorCode {
     WrongPassword,
     /// A system service, such as the OS keychain, is missing.
     Unavailable,
+    /// This host cannot do it: an old tmux, say. The view takes the
+    /// plain way instead.
+    Unsupported,
     /// A setting forbids it, such as a host that does not let the AI
     /// assistant read its output.
     NotAllowed,

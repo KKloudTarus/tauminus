@@ -1469,6 +1469,35 @@ describe("TerminalController completing the command being typed", () => {
   });
 });
 
+describe("TerminalController showing a tmux pane", () => {
+  it("drops what xterm.js answers, but not a key that looks like an answer", async () => {
+    const { sessions, controller } = setup({
+      spec: { kind: "tmux", hostId: "db", label: "db", control: 1, window: 1, pane: 1 },
+    });
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    const written = () => sessions.session.write.mock.calls.map(([data]) => data).join("");
+    // Device attributes: tmux answers its panes itself.
+    controller.terminal.input("\u001b[?1;2c", false);
+    // Shift+F3 sends what a cursor report would, and no query was made.
+    controller.terminal.input("\u001b[1;2R", false);
+    await expect.poll(written).toBe("\u001b[1;2R");
+    // A program asks where the cursor is: xterm.js answers, and the
+    // answer is tmux's to give.
+    sessions.events.onOutput(new TextEncoder().encode("\u001b[6n"));
+    await new Promise<void>((resolve) => controller.terminal.write("", resolve));
+    controller.terminal.input("x", false);
+    await expect.poll(written).toBe("\u001b[1;2Rx");
+    // A query cut across two reads still counts.
+    sessions.events.onOutput(new TextEncoder().encode("ok\u001b["));
+    sessions.events.onOutput(new TextEncoder().encode("6n"));
+    await new Promise<void>((resolve) => controller.terminal.write("", resolve));
+    controller.terminal.input("y", false);
+    await expect.poll(written).toBe("\u001b[1;2Rxy");
+  });
+});
+
 describe("mostUrgent", () => {
   it("takes the most urgent of a tab's panes", () => {
     expect(mostUrgent([])).toBe("idle");

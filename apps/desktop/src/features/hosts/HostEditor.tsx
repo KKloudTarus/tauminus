@@ -126,6 +126,8 @@ export interface SessionFieldsState {
   encoding: EncodingSpec | "inherit";
   /** A tmux session name; `inherit`, or `off` to turn a group's off. */
   tmux: string;
+  /** That session's windows as tabs. */
+  tmuxTabs: GuardChoice;
   /** One `NAME=value` per line. */
   env: string;
 }
@@ -140,6 +142,7 @@ export function sessionFields(settings: SettingsSpec | undefined): SessionFields
     aiOutput: aiOutput == null ? "inherit" : aiOutput ? "on" : "off",
     encoding: settings?.encoding ?? "inherit",
     tmux: settings?.tmux == null ? "inherit" : settings.tmux === "" ? "off" : settings.tmux,
+    tmuxTabs: settings?.tmuxTabs == null ? "inherit" : settings.tmuxTabs ? "on" : "off",
     env: (settings?.env ?? []).map((v) => `${v.name}=${v.value}`).join("\n"),
   };
 }
@@ -166,6 +169,7 @@ export function withSession(base: SettingsSpec, fields: SessionFieldsState): Set
     history: fields.history === "inherit" ? null : fields.history === "on",
     aiOutput: fields.aiOutput === "inherit" ? null : fields.aiOutput === "on",
     encoding: fields.encoding === "inherit" ? null : fields.encoding,
+    tmuxTabs: fields.tmuxTabs === "inherit" ? null : fields.tmuxTabs === "on",
     tmux:
       fields.tmux.trim() === "" || fields.tmux === "inherit"
         ? null
@@ -748,6 +752,17 @@ function SessionFields({
           With tmux, a dropped connection leaves your work running on the host, and the next connect
           picks it up where it was.
         </p>
+        <Field label="Show its windows as tabs (tmux 3.2 or later)">
+          <select
+            value={value.tmuxTabs}
+            onChange={(e) => set({ tmuxTabs: guardChoice(e.target.value) })}
+            className={FIELD}
+          >
+            <option value="inherit">Inherit (off by default)</option>
+            <option value="on">On</option>
+            <option value="off">Off</option>
+          </select>
+        </Field>
         <Field label="Environment variables (one per line, as LANG=C.UTF-8)">
           <textarea
             value={value.env}

@@ -9,6 +9,7 @@ import { AppShell } from "@/app/shell.ts";
 import {
   aiClient,
   filesClient,
+  tmuxClient,
   forwardsClient,
   historyClient,
   hostsClient,
@@ -51,6 +52,7 @@ const shell = new AppShell({
   serial: await serialClient(),
   recordings: await recordingsClient(),
   ai: await aiClient(),
+  tmux: await tmuxClient(),
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),

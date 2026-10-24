@@ -15,10 +15,22 @@ import {
   type SessionExit,
   type SshTargetSpec,
   type SerialSpec,
+  type TabWindowView,
+  type TopologyView,
   commands,
 } from "./bindings.ts";
 
-export type { AnswerSpec, EndpointSpec, ErrorCode, GridSize, PromptKind, RouteSpec, SshTargetSpec };
+export type {
+  AnswerSpec,
+  EndpointSpec,
+  ErrorCode,
+  GridSize,
+  PromptKind,
+  RouteSpec,
+  SshTargetSpec,
+  TabWindowView,
+  TopologyView,
+};
 
 /**
  * What a session runs: the local shell, a shell on an SSH host, or a saved
@@ -35,7 +47,29 @@ export type SessionSpec =
   /** A saved host signed in to over SSH, its terminal carried by Mosh. */
   | { kind: "mosh"; hostId: string; label: string }
   /** A serial port and its line settings. */
-  | { kind: "serial"; port: SerialSpec };
+  | { kind: "serial"; port: SerialSpec }
+  /**
+   * A saved host's tmux session as tabs (ADR 0024). Without `control`, it
+   * starts the control client and shows the first window; with it, the
+   * pane of one window that client showed.
+   */
+  | {
+      kind: "tmux";
+      hostId: string;
+      label: string;
+      control?: number;
+      window?: number;
+      pane?: number;
+    };
+
+/** What a tmux session shown as tabs tells the app that opened it. */
+export interface TmuxEvents {
+  /** The client started, showing `first` here; `rest` want tabs of their own. */
+  opened(control: number, first: TabWindowView, rest: TabWindowView[]): void;
+  topology(event: TopologyView): void;
+  /** The host's tmux cannot show tabs; the session joined it the plain way. */
+  fellBack(reason: string): void;
+}
 
 /** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
 export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
@@ -61,6 +95,8 @@ export interface SessionEvents {
   onExit(exitCode: number | null, lost?: boolean): void;
   /** Called for each question an SSH connect raises. Without it, every prompt is declined. */
   onPrompt?: PromptHandler;
+  /** For a `tmux` session that starts its control client. */
+  tmux?: TmuxEvents;
 }
 
 export interface TerminalSession {
@@ -118,28 +154,35 @@ export const tauriSessions: SessionClient = {
     const exit = new Channel<SessionExit>();
     exit.onmessage = (event) => events.onExit(event.exitCode, event.lost);
 
-    let opening: CommandResult<number>;
-    if (spec.kind === "local") {
-      opening = commands.sessionOpen(size, output, exit);
-    } else if (spec.kind === "telnet") {
-      opening = commands.telnetConnect(spec.hostId, size, output, exit);
-    } else if (spec.kind === "serial") {
-      opening = commands.serialOpen(spec.port, output, exit);
-    } else {
-      const prompts = new Channel<PromptRequest>();
-      prompts.onmessage = ({ id, prompt }) => {
+    const prompts = () => {
+      const channel = new Channel<PromptRequest>();
+      channel.onmessage = ({ id, prompt }) => {
         const ask = events.onPrompt ?? (async () => CANCEL);
         ask(prompt)
           .catch(() => CANCEL)
           .then((answer) => commands.sshPromptReply(id, answer))
           .catch((error: unknown) => console.warn("prompt reply failed", error));
       };
+      return channel;
+    };
+    let opening: CommandResult<number>;
+    if (spec.kind === "tmux" && spec.control !== undefined && spec.pane !== undefined) {
+      opening = commands.tmuxPaneAttach(spec.control, spec.pane, size, output, exit);
+    } else if (spec.kind === "tmux") {
+      opening = openTmux(spec.hostId, size, output, exit, prompts(), events.tmux);
+    } else if (spec.kind === "local") {
+      opening = commands.sessionOpen(size, output, exit);
+    } else if (spec.kind === "telnet") {
+      opening = commands.telnetConnect(spec.hostId, size, output, exit);
+    } else if (spec.kind === "serial") {
+      opening = commands.serialOpen(spec.port, output, exit);
+    } else {
       opening =
         spec.kind === "mosh"
-          ? commands.moshConnect(spec.hostId, size, output, exit, prompts)
+          ? commands.moshConnect(spec.hostId, size, output, exit, prompts())
           : spec.kind === "host"
-            ? commands.hostConnect(spec.hostId, size, output, exit, prompts)
-            : commands.sshOpen(spec.target, size, output, exit, prompts);
+            ? commands.hostConnect(spec.hostId, size, output, exit, prompts())
+            : commands.sshOpen(spec.target, size, output, exit, prompts());
     }
     const id = await unwrap(opening);
     return {
@@ -154,4 +197,58 @@ export const tauriSessions: SessionClient = {
       fillPassword: (seen) => done(commands.sessionFillPassword(id, seen)),
     };
   },
+};
+
+/**
+ * Starts host `hostId`'s tmux control client and shows its first window's
+ * pane; the other windows go to `tmux.opened`. A host whose tmux cannot
+ * (`unsupported`) is joined the plain way instead.
+ */
+async function openTmux(
+  hostId: string,
+  size: GridSize,
+  output: Channel<ArrayBuffer>,
+  exit: Channel<SessionExit>,
+  prompts: Channel<PromptRequest>,
+  tmux: TmuxEvents | undefined,
+): CommandResult<number> {
+  const topology = new Channel<TopologyView>();
+  topology.onmessage = (event) => tmux?.topology(event);
+  const opened = await commands.tmuxOpen(hostId, size, topology, prompts);
+  if (opened.status === "error") {
+    if (opened.error.code !== "unsupported") return opened;
+    tmux?.fellBack(opened.error.message);
+    return commands.hostConnect(hostId, size, output, exit, prompts);
+  }
+  const [first, ...rest] = opened.data.windows;
+  if (!first) {
+    return {
+      status: "error",
+      error: { code: "not_found", message: "the tmux session has no window" },
+    };
+  }
+  tmux?.opened(opened.data.control, first, rest);
+  const attached = await commands.tmuxPaneAttach(
+    opened.data.control,
+    first.pane,
+    size,
+    output,
+    exit,
+  );
+  // A client no tab shows would stay attached, holding window sizes.
+  if (attached.status === "error") await commands.tmuxDetach(opened.data.control);
+  return attached;
+}
+
+/** What the app asks of a tmux session shown as tabs. */
+export interface TmuxClient {
+  /** A new window, which comes back as a topology event. */
+  newWindow(control: number): Promise<void>;
+  /** Leaves the session running in tmux and stops showing it. */
+  detach(control: number): Promise<void>;
+}
+
+export const tauriTmux: TmuxClient = {
+  newWindow: (control) => done(commands.tmuxNewWindow(control)),
+  detach: (control) => done(commands.tmuxDetach(control)),
 };

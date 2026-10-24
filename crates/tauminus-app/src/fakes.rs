@@ -250,6 +250,13 @@ impl SshConnection for FakeConnection {
         })
     }
 
+    fn open_control<'a>(
+        &'a self,
+        _command: &'a str,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
+        Box::pin(async { Err(ConnectError::Cancelled) })
+    }
+
     fn open_sftp(&self) -> BoxFuture<'_, Result<Arc<dyn crate::ports::SftpPort>, ConnectError>> {
         let sftp = Arc::clone(&self.sftp) as Arc<dyn crate::ports::SftpPort>;
         Box::pin(async move { Ok(sftp) })

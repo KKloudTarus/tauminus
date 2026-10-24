@@ -56,7 +56,9 @@ export type Action =
   | "ai.ask"
   | "ai.explain"
   | "ai.settings"
-  | "terminal.complete";
+  | "terminal.complete"
+  | "tmux.newWindow"
+  | "tmux.detach";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -100,6 +102,8 @@ export const ACTIONS: readonly Action[] = [
   "ai.explain",
   "ai.settings",
   "terminal.complete",
+  "tmux.newWindow",
+  "tmux.detach",
 ];
 
 export type Platform = "mac" | "other";
@@ -150,6 +154,8 @@ const OTHER: Bindings = {
   "ai.settings": [],
   // Not Ctrl+Space, which sends NUL (set-mark in Emacs keys); never Tab.
   "terminal.complete": ["ctrl+shift+space"],
+  "tmux.newWindow": [],
+  "tmux.detach": [],
 };
 
 const MAC: Bindings = {
@@ -196,6 +202,8 @@ const MAC: Bindings = {
   "ai.settings": [],
   // Not Ctrl+Space, which sends NUL (set-mark in Emacs keys); never Tab.
   "terminal.complete": ["ctrl+shift+space"],
+  "tmux.newWindow": [],
+  "tmux.detach": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

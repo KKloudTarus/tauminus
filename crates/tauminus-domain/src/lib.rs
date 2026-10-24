@@ -25,6 +25,7 @@ mod snippet;
 mod ssh;
 mod telnet;
 mod terminal;
+mod tmux_control;
 mod trigger;
 
 pub use ai::{
@@ -75,6 +76,10 @@ pub use ssh::{
 };
 pub use telnet::{TELNET_PORT, TelnetTarget};
 pub use terminal::{TerminalSize, TerminalSizeError};
+pub use tmux_control::{
+    Command as TmuxCommand, ControlError, ControlEvent, ControlParser, MAX_CONTROL_LINE,
+    MAX_REPLY_LINES, PaneCursor, PaneId, TmuxVersion, WindowId, WindowInfo, layout_panes,
+};
 pub use trigger::{
     Action, Colour, Fired, Highlight, Hit, MAX_APPLIED_RULES, MAX_APPLIED_SETS, MAX_FIRED,
     MAX_FIRED_TEXT, MAX_HITS, MAX_LEVEL_SETS, MAX_RULE_PATTERN, MAX_SCAN_BYTES, MAX_SCAN_LINE,

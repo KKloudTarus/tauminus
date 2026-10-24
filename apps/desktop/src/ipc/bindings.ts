@@ -31,6 +31,19 @@ export const commands = {
 	 *  the session showed more since, nothing is typed (`cancelled`).
 	 */
 	sessionFillPassword: (id: SessionHandle, seen: number | null) => typedError<null, CommandError>(__TAURI_INVOKE("session_fill_password", { id, seen })),
+	/**
+	 *  Joins saved host `id`'s tmux session as tabs: the windows to show, and
+	 *  what changes on `on_topology`. `unsupported` when the host's tmux cannot
+	 *  (before 3.2, a split window, not UTF-8): the view joins it the plain
+	 *  way instead.
+	 */
+	tmuxOpen: (id: string, size: GridSize, onTopology: Channel<TopologyView>, onPrompt: Channel<PromptRequest>) => typedError<TmuxOpenedView, CommandError>(__TAURI_INVOKE("tmux_open", { id, size, onTopology, onPrompt })),
+	/**  Shows `pane` of control client `control` in a session of its own. */
+	tmuxPaneAttach: (control: number, pane: number, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("tmux_pane_attach", { control, pane, size, onOutput, onExit })),
+	/**  A new tmux window; it comes back as a topology event. */
+	tmuxNewWindow: (control: number) => typedError<null, CommandError>(__TAURI_INVOKE("tmux_new_window", { control })),
+	/**  Leaves the tmux session running and stops showing it. */
+	tmuxDetach: (control: number) => typedError<null, CommandError>(__TAURI_INVOKE("tmux_detach", { control })),
 	aiSettingsGet: () => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_get")),
 	/**  Saves the settings. A new server address forgets the saved key. */
 	aiSettingsSet: (settings: AiSettingsSpec) => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_set", { settings })),
@@ -467,6 +480,11 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 /**  A system service, such as the OS keychain, is missing. */
 "unavailable" | 
 /**
+ *  This host cannot do it: an old tmux, say. The view takes the
+ *  plain way instead.
+ */
+"unsupported" | 
+/**
  *  A setting forbids it, such as a host that does not let the AI
  *  assistant read its output.
  */
@@ -674,6 +692,11 @@ export type HostView = {
 	protocol: ProtocolSpec,
 	/**  Each connect joins a tmux session, by the host's setting or a group's. */
 	joinsTmux: boolean,
+	/**
+	 *  That session's windows show as tabs, by the host's setting or a
+	 *  group's.
+	 */
+	tmuxTabs: boolean,
 };
 
 export type HostsView = {
@@ -868,6 +891,11 @@ export type SettingsSpec = {
 	 */
 	aiOutput?: boolean | null,
 	/**
+	 *  Show the tmux session's windows as tabs; `null` inherits (off at
+	 *  the root).
+	 */
+	tmuxTabs?: boolean | null,
+	/**
 	 *  Variables sent before the shell starts. A host's value for a name
 	 *  wins over its groups'.
 	 */
@@ -950,6 +978,24 @@ export type StyleSpec = {
 	/**  The whole line, not only the match. */
 	line?: boolean,
 };
+
+export type TabWindowView = {
+	window: number,
+	pane: number,
+	name: string,
+};
+
+export type TmuxOpenedView = {
+	control: number,
+	windows: TabWindowView[],
+};
+
+/**  What changes in a tmux session shown as tabs. */
+export type TopologyView = {
+	kind: "window",
+} & TabWindowView | ({ kind: "renamed"; window: number; name: string }) & { lost?: never; reason?: never } | ({ kind: "closed"; window: number }) & { lost?: never; name?: never; reason?: never } | 
+/**  Detached, the session gone, or the link lost. */
+({ kind: "ended"; reason: string | null; lost: boolean }) & { name?: never; window?: never };
 
 export type TransferStatusSpec = { kind: "waiting" } | { kind: "running" } | { kind: "done" } | { kind: "cancelled" } | { kind: "failed"; reason: string };
 

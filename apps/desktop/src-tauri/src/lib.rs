@@ -23,6 +23,7 @@ mod serial;
 mod snippets;
 mod ssh;
 mod telnet;
+mod tmux;
 mod triggers;
 mod vault;
 
@@ -52,6 +53,10 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         commands::session_write,
         fill::session_fill_offer,
         fill::session_fill_password,
+        tmux::tmux_open,
+        tmux::tmux_pane_attach,
+        tmux::tmux_new_window,
+        tmux::tmux_detach,
         ai::ai_settings_get,
         ai::ai_settings_set,
         ai::ai_key_set,
@@ -205,22 +210,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     app.manage(drops::Drops::default());
     app.manage(Arc::new(edit::Edits::new(edit::edit_root())));
     app.manage(Arc::new(tauminus_app::Forwards::new(connections)));
-    app.manage(tauminus_app::SerialSessions::new(
-        Arc::new(tauminus_serial::NativeSerialPorts::default()),
-        Arc::clone(&sessions),
-    ));
-    app.manage(tauminus_app::TelnetSessions::new(
-        Arc::new(tauminus_telnet::TcpTelnetConnector::default()),
-        Arc::clone(&sessions),
-    ));
-    app.manage(tauminus_app::MoshSessions::new(
-        Arc::clone(&connector),
-        Arc::new(tauminus_mosh::NativeMoshClient::new(Arc::new(
-            NativePtyLauncher,
-        ))),
-        Arc::clone(&sessions),
-    ));
-    app.manage(SshSessions::new(connector, Arc::clone(&sessions)));
+    manage_terminals(app, connector, &sessions);
     let recording_sessions = Arc::clone(&sessions);
     let fill_sessions = Arc::clone(&sessions);
     let ai_sessions = Arc::clone(&sessions);
@@ -285,6 +275,35 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     app.manage(hosts::SshConfig(
         home.map(|home| OpenSshConfig::user(home, local)),
     ));
+}
+
+/// The session kinds that reach other machines: serial ports, Telnet,
+/// Mosh, tmux tabs, and SSH shells.
+fn manage_terminals<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+    connector: Arc<dyn tauminus_app::ports::SshConnector>,
+    sessions: &Arc<SessionManager>,
+) {
+    app.manage(tauminus_app::SerialSessions::new(
+        Arc::new(tauminus_serial::NativeSerialPorts::default()),
+        Arc::clone(sessions),
+    ));
+    app.manage(tauminus_app::TelnetSessions::new(
+        Arc::new(tauminus_telnet::TcpTelnetConnector::default()),
+        Arc::clone(sessions),
+    ));
+    app.manage(tauminus_app::MoshSessions::new(
+        Arc::clone(&connector),
+        Arc::new(tauminus_mosh::NativeMoshClient::new(Arc::new(
+            NativePtyLauncher,
+        ))),
+        Arc::clone(sessions),
+    ));
+    app.manage(Arc::new(tauminus_app::TmuxSessions::new(
+        Arc::clone(&connector),
+        Arc::clone(sessions),
+    )));
+    app.manage(SshSessions::new(connector, Arc::clone(sessions)));
 }
 
 /// The AI assistant, off until the user turns it on; it needs the saved

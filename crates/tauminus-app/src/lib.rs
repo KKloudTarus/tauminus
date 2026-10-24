@@ -26,6 +26,7 @@ mod session;
 mod snippets;
 mod ssh;
 mod telnet;
+mod tmux;
 mod triggers;
 pub mod vault;
 
@@ -45,4 +46,7 @@ pub use session::{RECENT_OUTPUT, SessionConfig, SessionError, SessionManager, Se
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
 pub use telnet::TelnetSessions;
+pub use tmux::{
+    ControlId, Opened, TabWindow, TmuxError, TmuxSessions, TopologyEvent, TopologySink,
+};
 pub use triggers::{Prepared, TriggerBook, TriggerBookError};

@@ -127,6 +127,14 @@ impl Connection {
         }
         Ok(bridge::spawn(channel, self.lease(), options.encoding))
     }
+
+    /// No PTY, no environment, no agent: the command alone, its output
+    /// passed through as bytes.
+    async fn control(&self, command: &str) -> Result<TerminalStream, ConnectError> {
+        let channel = self.last().channel_open_session().await.map_err(protocol)?;
+        channel.exec(true, command).await.map_err(protocol)?;
+        Ok(bridge::spawn(channel, self.lease(), Encoding::Utf8))
+    }
 }
 
 impl SshConnection for Connection {
@@ -136,6 +144,13 @@ impl SshConnection for Connection {
         options: &'a SessionOptions,
     ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
         Box::pin(self.shell(size, options))
+    }
+
+    fn open_control<'a>(
+        &'a self,
+        command: &'a str,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>> {
+        Box::pin(self.control(command))
     }
 
     fn start_forward<'a>(

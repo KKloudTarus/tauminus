@@ -42,6 +42,10 @@ import type {
   SerialSpec,
   SnippetView,
   SnippetsClient,
+  TabWindowView,
+  TmuxClient,
+  TmuxEvents,
+  TopologyView,
   TriggersClient,
   FiredView,
   TextClipboard,
@@ -103,6 +107,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   "ai.explain": "Explain this pane's output with AI",
   "ai.settings": "AI assistant settings",
   "terminal.complete": "Complete the command being typed",
+  "tmux.newWindow": "New tmux window",
+  "tmux.detach": "Detach from tmux, leaving its windows running",
 };
 
 export interface AssistantOpen {
@@ -175,6 +181,12 @@ export class AppShell {
   readonly recordings: RecordingsClient | undefined;
   /** The AI assistant, when this window has a backend for it. */
   readonly ai: AiClient | undefined;
+  readonly #tmuxClient: TmuxClient | undefined;
+  /** tmux sessions shown as tabs: each control client's host, and the pane showing each window. */
+  readonly #tmux = new Map<
+    number,
+    { hostId: string; label: string; windows: Map<number, PaneId> }
+  >();
   /** Settles once a host pane's session is up and its startup snippets typed. */
   readonly #ready = new WeakMap<
     TerminalController,
@@ -213,6 +225,7 @@ export class AppShell {
     serial?: SerialClient;
     recordings?: RecordingsClient;
     ai?: AiClient;
+    tmux?: TmuxClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -252,6 +265,7 @@ export class AppShell {
     this.serial = options.serial;
     this.recordings = options.recordings;
     this.ai = options.ai;
+    this.#tmuxClient = options.tmux;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -308,6 +322,9 @@ export class AppShell {
             }
           : {}),
         mac: this.platform === "mac",
+        ...(spec?.kind === "tmux" && spec.control === undefined
+          ? { tmux: this.#tmuxEvents(paneId, spec) }
+          : {}),
         ...(links
           ? {
               openLink: (url: string) => {
@@ -319,6 +336,9 @@ export class AppShell {
           : {}),
       });
       created = controller;
+      if (spec?.kind === "tmux" && spec.control !== undefined && spec.window !== undefined) {
+        this.#tmux.get(spec.control)?.windows.set(spec.window, paneId);
+      }
       controller.setKeyHandler((event) => this.handleKey(event));
       controller.setInputListener((data) => this.#broadcastFrom(paneId, data));
       // A secret typed into a session that went away ends with it: the next
@@ -453,6 +473,79 @@ export class AppShell {
   insertSuggestion(pane: PaneId | undefined, command: string): boolean {
     const controller = pane ? this.workspace.terminal(pane) : undefined;
     return controller?.insertCommand(command) ?? false;
+  }
+
+  /**
+   * What a pane that starts a tmux session's tabs hears: the windows to
+   * open tabs for, and the session's changes after.
+   */
+  #tmuxEvents(paneId: PaneId, spec: { hostId: string; label: string }): TmuxEvents {
+    let control: number | undefined;
+    const tabFor = (window: TabWindowView, id: number) => {
+      this.workspace.newTab({
+        kind: "tmux",
+        hostId: spec.hostId,
+        label: `${spec.label}: ${window.name}`,
+        control: id,
+        window: window.window,
+        pane: window.pane,
+      });
+    };
+    return {
+      opened: (id, first, rest) => {
+        control = id;
+        this.#tmux.set(id, {
+          hostId: spec.hostId,
+          label: spec.label,
+          windows: new Map([[first.window, paneId]]),
+        });
+        const shown = this.workspace.activeTab?.id;
+        for (const window of rest) tabFor(window, id);
+        // The tab that asked stays in front.
+        if (shown) this.workspace.activateTab(shown);
+      },
+      topology: (event: TopologyView) => {
+        const session = control === undefined ? undefined : this.#tmux.get(control);
+        if (control === undefined || !session) return;
+        if (event.kind === "window") {
+          // A window shown before whose pane changed: its tab goes.
+          const before = session.windows.get(event.window);
+          if (before) this.#closeTabOf(before);
+          tabFor(event, control);
+        } else if (event.kind === "closed") {
+          const pane = session.windows.get(event.window);
+          session.windows.delete(event.window);
+          if (pane) this.#closeTabOf(pane);
+        } else if (event.kind === "ended") {
+          this.#tmux.delete(control);
+          if (event.lost || event.reason) {
+            this.hosts.notify(
+              `${spec.label}: tmux ${event.lost ? "connection lost" : event.reason}`,
+            );
+          }
+        }
+      },
+      fellBack: (reason) => this.hosts.notify(`${spec.label}: ${reason}; joined as one terminal`),
+    };
+  }
+
+  /** Closes the tab holding `paneId`, if it is open. */
+  #closeTabOf(paneId: PaneId): void {
+    const tab = this.workspace.getSnapshot().tabs.find((t) => paneIds(t.root).includes(paneId));
+    if (tab) this.workspace.closeTab(tab.id);
+  }
+
+  /** The control client the focused pane shows a window of, if any. */
+  #focusedTmux(): number | undefined {
+    const pane = this.workspace.activeTab?.focused;
+    if (!pane) return undefined;
+    const spec = this.workspace.focusedSpec();
+    if (spec?.kind !== "tmux") return undefined;
+    if (spec.control !== undefined) return spec.control;
+    for (const [id, session] of this.#tmux) {
+      if ([...session.windows.values()].includes(pane)) return id;
+    }
+    return undefined;
   }
 
   /** The focused pane types its host's password, after an unlock if need be. */
@@ -663,6 +756,11 @@ export class AppShell {
       const spec = host ? specFor(host) : "deleted";
       if (typeof spec === "string") {
         unable.push(`${host?.label ?? hostId} (${spec})`);
+        continue;
+      }
+      // Its windows open as tabs, not as one pane of the grid.
+      if (spec.kind === "tmux") {
+        unable.push(`${spec.label} (its tmux windows open as tabs)`);
         continue;
       }
       specs.push(spec);
@@ -1031,7 +1129,13 @@ export class AppShell {
       }
       return { kind: "local" };
     };
-    const tabs = this.workspace.templates().map((t) => mapTemplate(t, saved));
+    // A tmux session's other windows come back with its first.
+    const tabs = this.workspace
+      .templates()
+      .filter(
+        (t) => !(t.kind === "pane" && t.spec?.kind === "tmux" && t.spec.control !== undefined),
+      )
+      .map((t) => mapTemplate(t, saved));
     if (!this.workspaces.save(name, tabs)) {
       return "A workspace needs a name and a tab, and at most 50 are kept";
     }
@@ -1266,11 +1370,32 @@ export class AppShell {
         w.moveActiveTab(1);
         break;
       case "pane.splitRight":
-        w.split("row");
-        break;
       case "pane.splitDown":
-        w.split("column");
+        // A tmux tab shows one pane of its window; a split would show it twice.
+        if (w.focusedSpec()?.kind === "tmux") {
+          this.hosts.notify("A tmux tab shows one window: open another with New tmux window");
+          break;
+        }
+        w.split(action === "pane.splitRight" ? "row" : "column");
         break;
+      case "tmux.newWindow": {
+        const control = this.#focusedTmux();
+        if (control !== undefined) {
+          this.#tmuxClient
+            ?.newWindow(control)
+            .catch((error: unknown) => this.hosts.notify(`tmux: ${messageOf(error)}`));
+        }
+        return;
+      }
+      case "tmux.detach": {
+        const control = this.#focusedTmux();
+        if (control !== undefined) {
+          this.#tmuxClient
+            ?.detach(control)
+            .catch((error: unknown) => this.hosts.notify(`tmux: ${messageOf(error)}`));
+        }
+        return;
+      }
       case "pane.close":
         w.closePane();
         break;
@@ -1330,7 +1455,10 @@ export class AppShell {
   #recorderFor(spec: SessionSpec | undefined): (entry: RecordedCommand) => void {
     const host = savedHostId(spec) ?? null;
     const label =
-      spec?.kind === "host" || spec?.kind === "telnet" || spec?.kind === "mosh"
+      spec?.kind === "host" ||
+      spec?.kind === "telnet" ||
+      spec?.kind === "mosh" ||
+      spec?.kind === "tmux"
         ? spec.label
         : spec?.kind === "ssh"
           ? formatEndpoint(spec.target.destination)
@@ -1391,12 +1519,16 @@ function specFor(host: HostView): SessionSpec | string {
     return { kind: "mosh", hostId: host.id, label: host.label };
   }
   if (!host.target) return host.problem ?? "cannot connect";
+  if (host.tmuxTabs) return { kind: "tmux", hostId: host.id, label: host.label };
   return { kind: "host", hostId: host.id, label: host.label, target: host.target };
 }
 
 /** The saved host a pane opened, whatever its protocol. */
 function savedHostId(spec: SessionSpec | undefined): string | undefined {
-  return spec?.kind === "host" || spec?.kind === "telnet" || spec?.kind === "mosh"
+  return spec?.kind === "host" ||
+    spec?.kind === "telnet" ||
+    spec?.kind === "mosh" ||
+    spec?.kind === "tmux"
     ? spec.hostId
     : undefined;
 }
