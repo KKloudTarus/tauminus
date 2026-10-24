@@ -38,9 +38,19 @@ use zeroize::Zeroizing;
 use crate::Client;
 use crate::rejected::RejectedPasswords;
 
-/// Default key files, strongest first. Hardware-backed `*_sk` keys need a
-/// FIDO device and are used through an agent instead.
-const DEFAULT_KEYS: &[&str] = &["id_ed25519", "id_ecdsa", "id_rsa"];
+/// Default key files, strongest first, then the FIDO2 (`*_sk`) ones
+/// OpenSSH also looks for. Those are signed for by an agent only: listed
+/// here, `IdentitiesOnly` lets the agent's copy through.
+const DEFAULT_KEYS: &[&str] = &[
+    "id_ed25519",
+    "id_ecdsa",
+    "id_rsa",
+    "id_ed25519_sk",
+    "id_ecdsa_sk",
+];
+/// Named among what was tried when a FIDO2 key was passed over and
+/// nothing else signed in: the user then knows what is missing.
+const SKIPPED_FIDO: &str = "a FIDO2 key, which only ssh-agent signs with";
 /// Attempts per secret before giving up on it, as OpenSSH does.
 const ATTEMPTS: usize = 3;
 /// Keyboard-interactive rounds answered before giving up on a looping server.
@@ -68,6 +78,8 @@ pub(crate) struct Authenticator<'a> {
     /// The stored password was the last answer the server got, so a
     /// failure now is about it, not a later factor.
     pub(crate) stored_last: bool,
+    /// A FIDO2 key was passed over: only an agent signs with it.
+    pub(crate) skipped_fido: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +208,9 @@ impl Authenticator<'_> {
                 break;
             }
         }
+        if self.skipped_fido {
+            tried.push(SKIPPED_FIDO.to_owned());
+        }
         Err(ConnectError::AuthFailed {
             endpoint: self.endpoint.to_string(),
             tried,
@@ -276,6 +291,7 @@ impl Authenticator<'_> {
             };
             if needs_security_key(&public) {
                 debug!(path = %path.display(), "skipping a FIDO2 key: only an agent signs with it");
+                self.skipped_fido = true;
                 continue;
             }
             let mut signer = KeyFileSigner {
@@ -464,6 +480,7 @@ impl Authenticator<'_> {
         };
         if needs_security_key(key.public_key()) {
             debug!("skipping the identity's FIDO2 key: only an agent signs with it");
+            self.skipped_fido = true;
             return Ok(Outcome::Skipped);
         }
         let hash = self.rsa_hash(key.public_key()).await?;
