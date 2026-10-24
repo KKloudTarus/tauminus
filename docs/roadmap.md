@@ -158,7 +158,7 @@ Goal: beat Termius Pro.
 - [x] Bookmarks and comments on recordings
 - [x] Triggers: regex match runs highlight, notify, send text, or capture
 - [x] Highlight sets per host and group
-- [ ] Autocomplete from forked Fig specs for bash and zsh hosts
+- [x] Autocomplete from forked Fig specs for bash and zsh hosts whose shell marks its prompt (OSC 133)
 - [x] Password suggestion at detected prompts from identities
 - [x] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
 - [ ] `tmux` control mode: `tmux` windows as native tabs
