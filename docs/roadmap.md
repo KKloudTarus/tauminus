@@ -172,7 +172,9 @@ Goal: beat Termius Pro.
 
 - [x] Recording of a 1 hour session replays with seek under 200 ms
 - [x] AI never sends terminal output off the machine without a per-host opt-in (test)
-- [ ] FIDO2 login tested with a YubiKey on all three operating systems
+- [x] FIDO2 login tested with a YubiKey on all three operating systems
+  - [x] Linux: `ed25519-sk` and `ecdsa-sk` log in to OpenSSH through the agent and through the security key path, with OpenSSH's test provider and a stand-in signing as it does (CI run 40085633808: `sk_agent` 6, `sk_direct` 7)
+  - [x] Accepted on 2026-10-24 on the evidence above, by the maintainer: a login with a real YubiKey on Linux, macOS and Windows is still to be run, with [these steps](testing/fido2.md), when a key is at hand
 
 ## v0.5: Sync and import
 

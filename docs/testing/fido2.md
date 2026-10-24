@@ -59,6 +59,12 @@ ssh-agent`), whose OpenSSH 8.9 and later sign `sk-` keys through
 
 ## Status
 
+On 2026-10-24 the maintainer accepted v0.4's exit criterion on CI's runs
+(run 40085633808, commit `ca84824`): `sk_agent` 6 and `sk_direct` 7 passed
+against OpenSSH, through the agent and through the security key path,
+with `sk-dummy.so` and a stand-in signing as it does. The USB transport
+(`HidSecurityKey`) has not met a real key yet.
+
 No run on real hardware has been recorded yet. Record each OS's first run
 here, with the key model and firmware (`ykman info`), the OS version and
 the Tauminus commit.
