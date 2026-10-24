@@ -19,6 +19,8 @@ tracing.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+# A host running `sz`, for the transfer tests.
+zmodem2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
 
 [lints]

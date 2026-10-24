@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
-use tauminus_domain::{SavedHost, SessionId, SessionKind, SessionMeta, SshTarget, TerminalSize};
+use tauminus_domain::{
+    Encoding, SavedHost, SessionId, SessionKind, SessionMeta, SshTarget, TerminalSize,
+};
 use thiserror::Error;
 
 use crate::connections::Login;
@@ -101,6 +103,7 @@ impl SshSessions {
             SessionMeta {
                 kind: SessionKind::Ssh,
                 host,
+                transfers: target.session.encoding == Encoding::Utf8,
             },
         ))
     }

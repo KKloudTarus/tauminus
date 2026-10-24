@@ -11,6 +11,8 @@ import {
 } from "@/features/keymap/keymap.ts";
 import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RecordedCommand } from "@/features/terminal/recorder.ts";
+import { ReceiveHub } from "@/features/terminal/receive.ts";
+import type { ReceiveClient } from "@/ipc/receive.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Broadcast, typedByUser } from "@/features/workspace/broadcast.ts";
@@ -181,6 +183,8 @@ export class AppShell {
   readonly recordings: RecordingsClient | undefined;
   /** The AI assistant, when this window has a backend for it. */
   readonly ai: AiClient | undefined;
+  /** Files hosts send with `sz`, for every pane. */
+  readonly receive: ReceiveHub | undefined;
   readonly #tmuxClient: TmuxClient | undefined;
   /** tmux sessions shown as tabs: each control client's host, and the pane showing each window. */
   readonly #tmux = new Map<
@@ -226,6 +230,7 @@ export class AppShell {
     recordings?: RecordingsClient;
     ai?: AiClient;
     tmux?: TmuxClient;
+    receive?: ReceiveClient;
     renderer?: RendererPreference;
   }) {
     this.platform = detectPlatform(options.userAgent);
@@ -265,6 +270,7 @@ export class AppShell {
     this.serial = options.serial;
     this.recordings = options.recordings;
     this.ai = options.ai;
+    this.receive = options.receive ? new ReceiveHub(options.receive) : undefined;
     this.#tmuxClient = options.tmux;
     this.#state = {
       paletteOpen: false,
@@ -322,6 +328,7 @@ export class AppShell {
             }
           : {}),
         mac: this.platform === "mac",
+        ...(this.receive ? { receive: this.receive } : {}),
         ...(spec?.kind === "tmux" && spec.control === undefined
           ? { tmux: this.#tmuxEvents(paneId, spec) }
           : {}),

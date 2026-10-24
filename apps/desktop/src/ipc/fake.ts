@@ -4,7 +4,8 @@
 // An in-memory shell for end-to-end tests of the UI in a plain browser. Only
 // the `e2e` build mode loads this module; production bundles do not contain it.
 
-import type { CommandError } from "./bindings.ts";
+import type { CommandError, ReceiveView } from "./bindings.ts";
+import type { ReceiveClient } from "./receive.ts";
 import {
   type GridSize,
   type SessionClient,
@@ -29,6 +30,52 @@ const PROMPT = "$ ";
  */
 /** What fake sessions print, by session, for the fake recordings. */
 export const fakeOutputTaps = new Map<number, (text: string) => void>();
+
+/** The receive handler, and each fake shell offering a file by `sz`. */
+let receiveHandler: ((event: ReceiveView) => void) | undefined;
+const offers = new Map<number, { name: string; done: () => void }>();
+
+/** Answers `sz NAME` as the backend would: `NAME` comes, 3 MB, unless the user declines. */
+export const fakeReceive: ReceiveClient = {
+  async listen(handler) {
+    receiveHandler = handler;
+  },
+  async answer(session, _offer, accept) {
+    const offer = offers.get(session);
+    if (!offer) return;
+    offers.delete(session);
+    if (!accept) {
+      receiveHandler?.({ kind: "declined", session });
+      offer.done();
+      return;
+    }
+    const folder = "/home/me/Downloads/Tauminus";
+    receiveHandler?.({ kind: "started", session, folder });
+    receiveHandler?.({ kind: "file", session, name: offer.name, size: 3_000_000 });
+    receiveHandler?.({ kind: "progress", session, bytes: 1_500_000, size: 3_000_000 });
+    setTimeout(() => {
+      receiveHandler?.({
+        kind: "finished",
+        session,
+        folder,
+        files: [offer.name],
+        moreFiles: 0,
+        skipped: [],
+        moreSkipped: 0,
+      });
+      offer.done();
+    }, 300);
+  },
+  async cancel(session) {
+    const offer = offers.get(session);
+    offers.delete(session);
+    receiveHandler?.(
+      offer ? { kind: "declined", session } : { kind: "failed", session, reason: "cancelled" },
+    );
+    offer?.done();
+  },
+  async reveal() {},
+};
 
 class FakeShell implements TerminalSession {
   readonly id: number;
@@ -135,6 +182,15 @@ class FakeShell implements TerminalSession {
         break;
       case "exit":
         this.#exit(Number.parseInt(argument || "0", 10));
+        return;
+      case "sz":
+        // As `sz` does: it asks the terminal to receive, then waits.
+        this.#print("rz\r");
+        offers.set(this.id, {
+          name: argument || "file.bin",
+          done: () => this.#print(`\r\n${this.#prompt}`),
+        });
+        receiveHandler?.({ kind: "offered", session: this.id, offer: 1 });
         return;
       case "drop":
         // As a network going away: the session ends without an exit.

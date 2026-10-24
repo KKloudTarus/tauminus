@@ -204,6 +204,7 @@ fn saved(kind: SessionKind, address: &str) -> SessionMeta {
             )
             .unwrap(),
         }),
+        transfers: false,
     }
 }
 

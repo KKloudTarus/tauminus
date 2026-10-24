@@ -18,6 +18,7 @@ mod ipc;
 mod links;
 mod mosh;
 mod notices;
+mod receive;
 mod recordings;
 mod serial;
 mod snippets;
@@ -47,6 +48,7 @@ use tracing_subscriber::EnvFilter;
 
 /// Typed command registry. The same builder serves IPC at runtime and
 /// generates `apps/desktop/src/ipc/bindings.ts`.
+#[expect(clippy::too_many_lines, reason = "one line per command")]
 pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new().commands(tauri_specta::collect_commands![
         commands::session_open,
@@ -57,6 +59,10 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         tmux::tmux_pane_attach,
         tmux::tmux_new_window,
         tmux::tmux_detach,
+        receive::receive_listen,
+        receive::receive_answer,
+        receive::receive_cancel,
+        receive::receive_reveal,
         ai::ai_settings_get,
         ai::ai_settings_set,
         ai::ai_key_set,
@@ -153,6 +159,9 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
 pub(crate) struct Paths {
     pub(crate) config_dir: std::path::PathBuf,
     pub(crate) home: Option<std::path::PathBuf>,
+    /// The user's downloads folder: files a host sends go to `Tauminus`
+    /// in it.
+    pub(crate) downloads: Option<std::path::PathBuf>,
 }
 
 /// The snippet and highlight libraries, each kept as it is and reported
@@ -184,8 +193,22 @@ fn manage_libraries<R: tauri::Runtime>(app: &tauri::App<R>, config_dir: &std::pa
 /// app and the IPC tests share it, so a command never asks for state the
 /// app does not manage.
 pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
-    let Paths { config_dir, home } = paths;
+    let Paths {
+        config_dir,
+        home,
+        downloads,
+    } = paths;
     let sessions = Arc::new(SessionManager::new(SessionConfig::default()));
+    let transfers = Arc::new(receive::Transfers::default());
+    sessions
+        .set_transfer_host(Arc::clone(&transfers) as Arc<dyn tauminus_app::ports::TransferHost>);
+    app.manage(transfers);
+    app.manage(receive::ReceiveRoot(
+        downloads
+            .or_else(|| home.as_ref().map(|home| home.join("Downloads")))
+            .unwrap_or_else(|| config_dir.join("received"))
+            .join("Tauminus"),
+    ));
     app.manage(LocalShells::new(
         Arc::new(NativePtyLauncher),
         Arc::clone(&sessions),
@@ -348,6 +371,7 @@ pub fn run() -> anyhow::Result<()> {
             let paths = Paths {
                 config_dir: app.path().app_config_dir()?,
                 home: app.path().home_dir().ok(),
+                downloads: app.path().download_dir().ok(),
             };
             install(app, paths);
             let notifier = app.handle().clone();

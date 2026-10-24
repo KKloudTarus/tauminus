@@ -47,6 +47,11 @@ pub struct SessionMeta {
     /// The saved host the session logs in to, when it was opened from one:
     /// what may be typed into it from the vault depends on it.
     pub host: Option<SavedHost>,
+    /// Bytes reach the pump as the host sent them, and go back so: a file
+    /// transfer can run over it (ADR 0025). SSH on a UTF-8 host; not Mosh,
+    /// whose client draws a screen, nor tmux tabs, Telnet, or a host whose
+    /// character set is decoded on the way.
+    pub transfers: bool,
 }
 
 /// A saved host as a session opened from it logged in: its id, the vault
@@ -64,12 +69,17 @@ impl SessionMeta {
         Self {
             kind: SessionKind::Local,
             host: None,
+            transfers: false,
         }
     }
 
     /// A session of `kind` that is not a saved host's.
     pub const fn of(kind: SessionKind) -> Self {
-        Self { kind, host: None }
+        Self {
+            kind,
+            host: None,
+            transfers: false,
+        }
     }
 }
 

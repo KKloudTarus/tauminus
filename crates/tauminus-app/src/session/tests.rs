@@ -820,3 +820,752 @@ async fn recent_output_holds_what_the_session_showed() {
         b"make: *** [all] Error 2\r\n"
     );
 }
+
+mod transfers {
+    //! Files a host sends with `sz`, through a session's pump.
+
+    use tauminus_domain::SessionKind;
+    use zmodem2::{Action as Wire, Event as WireEvent, FileInfo, Position, Sender};
+
+    use super::*;
+    use crate::ports::{PartFile, ReceiveFolder, TransferEvent, TransferHost};
+
+    #[derive(Debug, Default)]
+    pub(super) struct Host {
+        pub(super) offers: AtomicUsize,
+        events: Mutex<Vec<TransferEvent>>,
+    }
+
+    impl TransferHost for Host {
+        fn offered(&self, _id: SessionId, offer: u64) {
+            let before = self.offers.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(offer, before as u64 + 1, "offers are numbered from 1");
+        }
+
+        fn event(&self, _id: SessionId, event: TransferEvent) {
+            lock(&self.events).push(event);
+        }
+    }
+
+    impl Host {
+        pub(super) fn events(&self) -> Vec<TransferEvent> {
+            lock(&self.events).clone()
+        }
+    }
+
+    /// Files kept in memory, by name.
+    #[derive(Debug, Default, Clone)]
+    pub(super) struct Folder(
+        pub(super) Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        /// Files discarded half written.
+        pub(super) Arc<AtomicUsize>,
+    );
+
+    #[derive(Debug)]
+    struct Part {
+        name: String,
+        bytes: Vec<u8>,
+        into: Folder,
+    }
+
+    impl ReceiveFolder for Folder {
+        fn create(&mut self, name: &str) -> std::io::Result<(String, Box<dyn PartFile>)> {
+            Ok((
+                name.to_owned(),
+                Box::new(Part {
+                    name: name.to_owned(),
+                    bytes: Vec::new(),
+                    into: self.clone(),
+                }),
+            ))
+        }
+
+        fn shown(&self) -> String {
+            "Downloads".into()
+        }
+    }
+
+    impl PartFile for Part {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(())
+        }
+
+        fn finish(self: Box<Self>) -> std::io::Result<()> {
+            lock(&self.into.0).insert(self.name, self.bytes);
+            Ok(())
+        }
+
+        fn discard(self: Box<Self>) {
+            self.into.1.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    struct World {
+        sessions: Arc<SessionManager>,
+        id: SessionId,
+        events: mpsc::Sender<TerminalEvent>,
+        input: mpsc::Receiver<TerminalInput>,
+        host: Arc<Host>,
+        sink: RecordingSink,
+    }
+
+    /// A session of a stream the caller runs.
+    pub(super) struct Attached {
+        pub(super) sessions: Arc<SessionManager>,
+        pub(super) id: SessionId,
+        pub(super) host: Arc<Host>,
+        pub(super) sink: RecordingSink,
+    }
+
+    impl Attached {
+        pub(super) fn with_stream(
+            input_tx: mpsc::Sender<TerminalInput>,
+            events: mpsc::Receiver<TerminalEvent>,
+        ) -> Self {
+            let sessions = Arc::new(SessionManager::new(config()));
+            let host = Arc::new(Host::default());
+            sessions.set_transfer_host(Arc::clone(&host) as Arc<dyn TransferHost>);
+            let sink = RecordingSink::default();
+            let id = attach(&sessions, input_tx, events, &sink);
+            Self {
+                sessions,
+                id,
+                host,
+                sink,
+            }
+        }
+    }
+
+    fn attach(
+        sessions: &SessionManager,
+        input_tx: mpsc::Sender<TerminalInput>,
+        events: mpsc::Receiver<TerminalEvent>,
+        sink: &RecordingSink,
+    ) -> SessionId {
+        sessions.attach(
+            sessions.reserve().unwrap(),
+            TerminalStream {
+                input: input_tx,
+                events,
+                terminator: Box::new(CountingTerminator {
+                    terminated: Arc::default(),
+                    killed: Arc::default(),
+                    probed: Arc::default(),
+                }),
+            },
+            sink.clone(),
+            SessionMeta {
+                transfers: true,
+                ..SessionMeta::of(SessionKind::Ssh)
+            },
+        )
+    }
+
+    fn world() -> World {
+        let sessions = Arc::new(SessionManager::new(config()));
+        let host = Arc::new(Host::default());
+        sessions.set_transfer_host(Arc::clone(&host) as Arc<dyn TransferHost>);
+        let (events_tx, events) = mpsc::channel(64);
+        let (input_tx, input) = mpsc::channel(64);
+        let sink = RecordingSink::default();
+        let id = attach(&sessions, input_tx, events, &sink);
+        World {
+            sessions,
+            id,
+            events: events_tx,
+            input,
+            host,
+            sink,
+        }
+    }
+
+    pub(super) async fn until(what: &str, mut done: impl FnMut() -> bool) {
+        for _ in 0..400 {
+            if done() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("never: {what}");
+    }
+
+    const OFFER: &[u8] = b"rz\r**\x18B00000000000000\r\x8a\x11";
+
+    #[tokio::test]
+    async fn an_offer_waits_for_the_user_and_a_decline_shows_it_as_it_came() {
+        let mut w = world();
+        let mut printed = b"$ cat notes\r\n".to_vec();
+        printed.extend_from_slice(OFFER);
+        w.events.send(TerminalEvent::Output(printed)).await.unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        // Shown up to the offer; nothing sent back; no keys in.
+        until("the text before", || {
+            w.sink.output() == b"$ cat notes\r\nrz\r"
+        })
+        .await;
+        assert!(w.input.try_recv().is_err());
+        assert!(matches!(
+            w.sessions.write(w.id, b"ls\r".to_vec()).await,
+            Err(SessionError::Transferring)
+        ));
+        w.events
+            .send(TerminalEvent::Output(b" more".to_vec()))
+            .await
+            .unwrap();
+        w.sessions.answer_transfer(w.id, 1, None).unwrap();
+        let mut whole = b"$ cat notes\r\n".to_vec();
+        whole.extend_from_slice(OFFER);
+        whole.extend_from_slice(b" more");
+        until("the held output", || w.sink.output() == whole).await;
+        assert!(w.input.try_recv().is_err(), "nothing went to the host");
+        w.sessions.write(w.id, b"ls\r".to_vec()).await.unwrap();
+        assert_eq!(w.host.events(), vec![TransferEvent::Declined]);
+        // `sz` asking again at once is not offered again.
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(w.host.offers.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn after_a_stop_the_rest_of_the_files_is_dropped_and_text_shows_again() {
+        let mut w = world();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .unwrap();
+        until("the start", || !w.host.events().is_empty()).await;
+        let shown = w.sink.output().len();
+        w.sessions.cancel_transfer(w.id).unwrap();
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        // The host is told to stop: CAN, five or more.
+        let mut sent = Vec::new();
+        while let Ok(TerminalInput::Data(bytes)) = w.input.try_recv() {
+            sent.extend(bytes);
+        }
+        assert!(sent.windows(5).any(|x| x == [0x18; 5]), "{sent:?}");
+        // What it had sent already: data with ZDLE, and bytes that are not
+        // UTF-8.
+        for chunk in [&b"\x93\x18h\x01\xfe"[..], &[0xc3, 0x28, 0x00, 0xff]] {
+            w.events
+                .send(TerminalEvent::Output(chunk.to_vec()))
+                .await
+                .unwrap();
+        }
+        // Text of a file, cut where it holds no ZDLE: nobody typed, so it
+        // is still the file's, before and after the host goes quiet.
+        w.events
+            .send(TerminalEvent::Output(b"db_password=hunter2\n".to_vec()))
+            .await
+            .unwrap();
+        // Ctrl+C again, as users press it: not typing.
+        w.sessions.write(w.id, b"\x03".to_vec()).await.unwrap();
+        w.events
+            .send(TerminalEvent::Output(b"AWS_SECRET=abc123\n".to_vec()))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(w.sink.output().len(), shown, "nothing of the file shows");
+        // Typed: the shell answers, and shows.
+        w.sessions.write(w.id, b"\r".to_vec()).await.unwrap();
+        w.events
+            .send(TerminalEvent::Output(b"\r\n$ ".to_vec()))
+            .await
+            .unwrap();
+        until("the prompt", || w.sink.output().ends_with(b"\r\n$ ")).await;
+        assert_eq!(&w.sink.output()[shown..], b"\r\n$ ");
+    }
+
+    #[tokio::test]
+    async fn typing_during_the_stop_still_drops_file_data() {
+        let mut w = world();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .unwrap();
+        until("the start", || !w.host.events().is_empty()).await;
+        let shown = w.sink.output().len();
+        w.sessions.cancel_transfer(w.id).unwrap();
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        while w.input.try_recv().is_ok() {}
+        w.sessions.write(w.id, b"x".to_vec()).await.unwrap();
+        // Typed, but this is the file's: it carries ZDLE.
+        w.events
+            .send(TerminalEvent::Output(b"data\x18hmore".to_vec()))
+            .await
+            .unwrap();
+        w.events
+            .send(TerminalEvent::Output(b"x".to_vec()))
+            .await
+            .unwrap();
+        until("the echo", || w.sink.output().len() > shown).await;
+        assert_eq!(&w.sink.output()[shown..], b"x");
+    }
+
+    #[tokio::test]
+    async fn an_offer_cut_across_reads_is_found_and_shown_once_when_declined() {
+        for cut in [4, 8, 12, 20] {
+            let w = world();
+            let mut printed = b"motd ".to_vec();
+            printed.extend_from_slice(OFFER);
+            let (first, second) = printed.split_at(cut);
+            for part in [first, second] {
+                w.events
+                    .send(TerminalEvent::Output(part.to_vec()))
+                    .await
+                    .unwrap();
+            }
+            until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+            w.sessions.answer_transfer(w.id, 1, None).unwrap();
+            until("the held output", || w.sink.output() == printed).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn an_offer_left_waiting_past_256_kib_is_declined_and_shown_whole() {
+        let w = world();
+        let mut whole = OFFER.to_vec();
+        let mut chunks = vec![OFFER.to_vec()];
+        for i in 0..40u8 {
+            let chunk = vec![b'a' + i % 26; 8 << 10];
+            whole.extend_from_slice(&chunk);
+            chunks.push(chunk);
+        }
+        // Sent from a task: the session holds back while the view is behind.
+        let events = w.events.clone();
+        tokio::spawn(async move {
+            for chunk in chunks {
+                events.send(TerminalEvent::Output(chunk)).await.unwrap();
+            }
+        });
+        // The view keeps up, acknowledging what it parsed.
+        let mut acked = 0;
+        until("all of it", || {
+            let shown = w.sink.output().len();
+            w.sessions.acknowledge(w.id, shown - acked).unwrap();
+            acked = shown;
+            w.sink.output() == whole
+        })
+        .await;
+        assert_eq!(w.host.events(), vec![TransferEvent::Declined]);
+    }
+
+    #[tokio::test]
+    async fn a_host_that_reads_no_replies_is_stopped() {
+        let w = world();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(w.id, 1, Some(Box::new(Folder::default())))
+            .unwrap();
+        // Headers that each get a reply, and the test reads none of them.
+        let header = &OFFER[3..];
+        for _ in 0..40 {
+            w.events
+                .send(TerminalEvent::Output(header.repeat(1000)))
+                .await
+                .unwrap();
+            if matches!(w.host.events().last(), Some(TransferEvent::Failed { .. })) {
+                break;
+            }
+        }
+        until("the stop", || {
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Failed { reason }) if reason.contains("stopped reading")
+            )
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_declines_an_offer() {
+        let w = world();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        // Typed with other keys, in one write.
+        w.sessions.write_text(w.id, "q\u{3}".into()).await.unwrap();
+        until("the decline", || {
+            w.host.events() == vec![TransferEvent::Declined]
+        })
+        .await;
+    }
+
+    type Files = [(&'static [u8], Vec<u8>)];
+
+    /// A host running `sz` for `files` against the session, until it is
+    /// done (true) or `stop` holds (false). `waiting` runs whenever the
+    /// host waits for the session.
+    async fn host_sends(
+        w: &mut World,
+        files: &Files,
+        mut waiting: impl FnMut(&World),
+        stop: impl Fn(&World) -> bool,
+    ) -> bool {
+        let mut sender = Sender::new().unwrap();
+        let size = |data: &Vec<u8>| Some(Position::new(u32::try_from(data.len()).unwrap()));
+        sender
+            .start_file(FileInfo::new(files[0].0, size(&files[0].1)))
+            .unwrap();
+        let mut index = 0;
+        let mut to_sender: Vec<u8> = Vec::new();
+        for _ in 0..200_000 {
+            if stop(w) {
+                return false;
+            }
+            match sender.poll() {
+                Wire::WriteWire(bytes) => {
+                    let n = bytes.len();
+                    w.events
+                        .send(TerminalEvent::Output(bytes.to_vec()))
+                        .await
+                        .unwrap();
+                    sender.wire_written(n);
+                }
+                Wire::ReadFile { offset, max_len } => {
+                    let data = &files[index].1;
+                    let from = offset.get() as usize;
+                    let to = (from + max_len).min(data.len());
+                    sender.submit_file(&data[from..to]).unwrap();
+                }
+                Wire::Event(WireEvent::FileCompleted) => {
+                    index += 1;
+                    if let Some((name, data)) = files.get(index) {
+                        sender.start_file(FileInfo::new(name, size(data))).unwrap();
+                    } else {
+                        sender.finish().unwrap();
+                    }
+                }
+                Wire::Event(WireEvent::SessionCompleted) => return true,
+                _ => {
+                    waiting(w);
+                    if let Ok(Some(TerminalInput::Data(reply))) =
+                        tokio::time::timeout(Duration::from_millis(20), w.input.recv()).await
+                    {
+                        to_sender.extend(reply);
+                    }
+                    let taken = sender.submit_wire(&to_sender).unwrap();
+                    to_sender.drain(..taken);
+                }
+            }
+        }
+        panic!("the host never finished");
+    }
+
+    fn big() -> Vec<u8> {
+        (0..300_000u32).map(|i| (i * 7).to_le_bytes()[0]).collect()
+    }
+
+    /// Accepts offer 1 into `folder` once it is made.
+    fn accept(folder: &Folder) -> impl FnMut(&World) + '_ {
+        move |w: &World| {
+            if w.host.offers.load(Ordering::Relaxed) == 1 && w.host.events().is_empty() {
+                w.sessions
+                    .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn started(w: &World) -> usize {
+        w.host
+            .events()
+            .iter()
+            .filter(|e| matches!(e, TransferEvent::Started { .. }))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn accepted_files_are_saved_and_never_shown_or_recorded() {
+        let mut w = world();
+        let folder = Folder::default();
+        let files = [
+            (&b"a.txt"[..], b"hello\n".to_vec()),
+            (&b"big.bin"[..], big()),
+        ];
+        // Clicked twice: every wait answers, as a double click would.
+        let done = host_sends(
+            &mut w,
+            &files,
+            |w| {
+                if w.host.offers.load(Ordering::Relaxed) == 1 {
+                    w.sessions
+                        .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+                        .unwrap();
+                }
+            },
+            |_| false,
+        )
+        .await;
+        assert!(done, "the host finished");
+        w.events
+            .send(TerminalEvent::Output(b"OO\r\n$ ".to_vec()))
+            .await
+            .unwrap();
+        until("the prompt after", || w.sink.output().ends_with(b"$ ")).await;
+        assert_eq!(lock(&folder.0).get("a.txt"), Some(&b"hello\n".to_vec()));
+        assert!(
+            lock(&folder.0)
+                .get("big.bin")
+                .is_some_and(|got| *got == big())
+        );
+        // The view saw the prompt alone: no file byte, no header, no `OO`.
+        assert_eq!(w.sink.output(), b"$ ");
+        assert!(
+            !w.sessions
+                .recent(w.id)
+                .unwrap()
+                .windows(6)
+                .any(|x| x == b"hello\n")
+        );
+        assert!(matches!(
+            w.host.events().last(),
+            Some(TransferEvent::Finished { files, more_files: 0, .. })
+                if files == &vec!["a.txt".to_owned(), "big.bin".to_owned()]
+        ));
+        w.sessions.write(w.id, b"ls\r".to_vec()).await.unwrap();
+        while w.input.try_recv().is_ok() {}
+
+        // A cancel with nothing to cancel, the answers left from the double
+        // click, and one given ahead for the next offer, do nothing to it:
+        // it waits for the user.
+        w.sessions.cancel_transfer(w.id).unwrap();
+        w.sessions
+            .answer_transfer(w.id, 2, Some(Box::new(folder.clone())))
+            .unwrap();
+        w.events
+            .send(TerminalEvent::Output(OFFER.to_vec()))
+            .await
+            .unwrap();
+        until("the second offer", || {
+            w.host.offers.load(Ordering::Relaxed) == 2
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(started(&w), 1);
+        assert!(matches!(
+            w.host.events().last(),
+            Some(TransferEvent::Finished { .. })
+        ));
+        assert!(w.input.try_recv().is_err(), "nothing went to the host");
+        // A cancel asked for offer 1 that reaches the pump only now: it
+        // stops nothing of offer 2.
+        {
+            let control = w.sessions.control(w.id).unwrap();
+            control.transfer_cancel_offer.store(1, Ordering::Relaxed);
+            control.transfer_cancel.notify_one();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(matches!(
+            w.host.events().last(),
+            Some(TransferEvent::Finished { .. })
+        ));
+        // Its own number answers it.
+        w.sessions.answer_transfer(w.id, 2, None).unwrap();
+        until("the decline", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Declined))
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_stop_mid_file_removes_it_and_tells_the_host() {
+        let mut w = world();
+        let folder = Folder::default();
+        let files = [(&b"big.bin"[..], big())];
+        let receiving = |w: &World| {
+            w.host
+                .events()
+                .iter()
+                .any(|e| matches!(e, TransferEvent::File { .. }))
+        };
+        assert!(!host_sends(&mut w, &files, accept(&folder), receiving).await);
+        w.sessions.cancel_transfer(w.id).unwrap();
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        assert_eq!(folder.1.load(Ordering::Relaxed), 1, "the part file went");
+        assert!(lock(&folder.0).is_empty());
+        let mut sent = Vec::new();
+        while let Ok(TerminalInput::Data(bytes)) = w.input.try_recv() {
+            sent.extend(bytes);
+        }
+        assert!(sent.windows(5).any(|x| x == [0x18; 5]));
+    }
+
+    #[tokio::test]
+    async fn a_session_that_ends_mid_file_removes_it_and_says_so() {
+        let mut w = world();
+        let folder = Folder::default();
+        let files = [(&b"big.bin"[..], big())];
+        let receiving = |w: &World| {
+            w.host
+                .events()
+                .iter()
+                .any(|e| matches!(e, TransferEvent::File { .. }))
+        };
+        assert!(!host_sends(&mut w, &files, accept(&folder), receiving).await);
+        w.events.send(TerminalEvent::Lost).await.unwrap();
+        until("the end", || {
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Failed { reason }) if reason == "the session ended"
+            )
+        })
+        .await;
+        assert_eq!(folder.1.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn closing_mid_file_shows_none_of_it() {
+        let mut w = world();
+        let folder = Folder::default();
+        let files = [(&b"big.bin"[..], big())];
+        let receiving = |w: &World| {
+            w.host
+                .events()
+                .iter()
+                .any(|e| matches!(e, TransferEvent::File { .. }))
+        };
+        assert!(!host_sends(&mut w, &files, accept(&folder), receiving).await);
+        let shown = w.sink.output().len();
+        w.sessions.close(w.id).unwrap();
+        w.events
+            .send(TerminalEvent::Output(b"secret file text".to_vec()))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(w.sink.output().len(), shown);
+    }
+}
+
+mod live_sz {
+    //! lrzsz's `sz` in a container, through a session's pump. Run with a
+    //! container that has lrzsz, `/tmp/a.txt`, and `/tmp/big.bin`:
+    //! `TAUMINUS_SZ_CONTAINER=<id> cargo test -p tauminus-app live_sz -- --ignored`.
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::process::Command;
+
+    use super::transfers::{Attached, Folder, until};
+    use super::*;
+    use crate::ports::TransferEvent;
+
+    fn container() -> String {
+        std::env::var("TAUMINUS_SZ_CONTAINER").expect("TAUMINUS_SZ_CONTAINER names a container")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs a container with lrzsz"]
+    async fn files_from_lrzsz_sz_arrive_whole() {
+        let id = container();
+        let mut child = Command::new("docker")
+            .args(["exec", "-i", &id, "sz", "/tmp/a.txt", "/tmp/big.bin"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let (events_tx, events) = mpsc::channel(64);
+        let (input_tx, mut input) = mpsc::channel::<TerminalInput>(64);
+        tokio::spawn(async move {
+            let mut buffer = vec![0; 32 << 10];
+            loop {
+                match stdout.read(&mut buffer).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if events_tx
+                            .send(TerminalEvent::Output(buffer[..n].to_vec()))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+            let _ = events_tx
+                .send(TerminalEvent::Exited { code: Some(0) })
+                .await;
+        });
+        tokio::spawn(async move {
+            while let Some(message) = input.recv().await {
+                let TerminalInput::Data(bytes) = message else {
+                    continue;
+                };
+                if stdin.write_all(&bytes).await.is_err() {
+                    return;
+                }
+            }
+        });
+        let w = Attached::with_stream(input_tx, events);
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        let folder = Folder::default();
+        w.sessions
+            .answer_transfer(w.id, 1, Some(Box::new(folder.clone())))
+            .unwrap();
+        for _ in 0..3000 {
+            if matches!(w.host.events().last(), Some(TransferEvent::Finished { .. })) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Finished { files, .. }) if files.len() == 2
+            ),
+            "{:?}",
+            w.host.events()
+        );
+        let expected = Command::new("docker")
+            .args(["exec", &id, "cat", "/tmp/big.bin"])
+            .output()
+            .await
+            .unwrap()
+            .stdout;
+        assert_eq!(
+            lock(&folder.0).get("big.bin").map(Vec::len),
+            Some(expected.len())
+        );
+        assert!(
+            lock(&folder.0)
+                .get("big.bin")
+                .is_some_and(|got| *got == expected)
+        );
+        // `sz` ends once it heard the end, and the view saw no file bytes.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), child.wait())
+                .await
+                .is_ok()
+        );
+        assert!(w.sink.output().len() < 1000, "{}", w.sink.output().len());
+    }
+}

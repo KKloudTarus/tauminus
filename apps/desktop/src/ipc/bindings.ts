@@ -44,6 +44,17 @@ export const commands = {
 	tmuxNewWindow: (control: number) => typedError<null, CommandError>(__TAURI_INVOKE("tmux_new_window", { control })),
 	/**  Leaves the tmux session running and stops showing it. */
 	tmuxDetach: (control: number) => typedError<null, CommandError>(__TAURI_INVOKE("tmux_detach", { control })),
+	/**  Where transfer events go from now on. */
+	receiveListen: (onEvent: Channel<ReceiveView>) => __TAURI_INVOKE<void>("receive_listen", { onEvent }),
+	/**
+	 *  The user's answer to `session`'s offer: receive into the folder, or
+	 *  not.
+	 */
+	receiveAnswer: (session: SessionHandle, offer: number | null, accept: boolean) => typedError<null, CommandError>(__TAURI_INVOKE("receive_answer", { session, offer, accept })),
+	/**  Stops `session`'s transfer, or declines its offer. */
+	receiveCancel: (session: SessionHandle) => typedError<null, CommandError>(__TAURI_INVOKE("receive_cancel", { session })),
+	/**  Opens the folder files are received into. */
+	receiveReveal: () => typedError<null, CommandError>(__TAURI_INVOKE("receive_reveal")),
 	aiSettingsGet: () => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_get")),
 	/**  Saves the settings. A new server address forgets the saved key. */
 	aiSettingsSet: (settings: AiSettingsSpec) => typedError<AiSettingsView, CommandError>(__TAURI_INVOKE("ai_settings_set", { settings })),
@@ -796,6 +807,16 @@ export type ReadDone = {
 	/**  The recording ended cleanly; `false`: it stops where a crash cut it. */
 	complete: boolean,
 };
+
+/**  What a session's transfer tells the view. */
+export type ReceiveView = 
+/**
+ *  The host offers files; nothing is sent back until the user answers
+ *  this offer, by its number.
+ */
+{ kind: "offered"; session: SessionHandle; offer: number | null } | { kind: "started"; session: SessionHandle; folder: string } | { kind: "file"; session: SessionHandle; name: string; size: number | null } | { kind: "progress"; session: SessionHandle; bytes: number | null; size: number | null } | 
+/**  The first 100 names of each list, and how many more. */
+{ kind: "finished"; session: SessionHandle; folder: string; files: string[]; moreFiles: number | null; skipped: string[]; moreSkipped: number | null } | { kind: "failed"; session: SessionHandle; reason: string } | { kind: "declined"; session: SessionHandle };
 
 export type RecordedSpec = "stored" | "sealed" | "dropped";
 

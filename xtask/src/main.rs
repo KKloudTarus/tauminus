@@ -130,7 +130,13 @@ fn check_bindings(root: &Path) -> Result<()> {
 const LAYER_RULES: &[(&str, &[&str])] = &[
     // regex and its parser: pure matching with no I/O, for highlight rules;
     // the domain checks and matches them with one engine (ADR 0020).
-    ("tauminus-domain", &["regex", "regex-syntax", "thiserror"]),
+    // zmodem2: the Zmodem protocol as a state machine the caller drives,
+    // with no I/O, for files a host sends with `sz` (ADR 0025). memchr:
+    // the substring search that finds its offer in every output chunk.
+    (
+        "tauminus-domain",
+        &["memchr", "regex", "regex-syntax", "thiserror", "zmodem2"],
+    ),
     // zeroize: a dependency-free crate that wipes secrets when they drop.
     (
         "tauminus-app",

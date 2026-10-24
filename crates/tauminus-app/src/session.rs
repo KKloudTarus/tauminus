@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -17,8 +17,8 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::ports::{
-    LaunchError, OutputSink, OutputTap, Secret, TerminalEvent, TerminalInput, TerminalStream,
-    Terminator,
+    LaunchError, OutputSink, OutputTap, ReceiveFolder, Secret, TerminalEvent, TerminalInput,
+    TerminalStream, Terminator, TransferHost,
 };
 
 /// Limits and timings for terminal sessions.
@@ -58,6 +58,15 @@ pub enum SessionError {
     LimitReached { max: usize },
     #[error("failed to start session")]
     Launch(#[source] LaunchError),
+    #[error("a file transfer runs in this session: Ctrl+C cancels it")]
+    Transferring,
+}
+
+/// The user's answer to a transfer's offer.
+#[derive(Debug)]
+enum TransferAnswer {
+    Receive(Box<dyn ReceiveFolder>),
+    Decline,
 }
 
 /// A reserved place for one session. Reserve before starting a process or a
@@ -90,6 +99,9 @@ pub struct SessionManager {
     next_id: AtomicU64,
     slots: Arc<Semaphore>,
     sessions: Arc<Mutex<HashMap<SessionId, SessionEntry>>>,
+    /// Where file transfers ask and keep files; none, and output is shown
+    /// as it is.
+    transfers: std::sync::OnceLock<Arc<dyn TransferHost>>,
 }
 
 #[derive(Debug)]
@@ -117,6 +129,20 @@ struct SessionControl {
     /// `received` when a password was last filled. 0 at first, which no
     /// fill sees: a fill needs a prompt, so output.
     filled_at: AtomicU64,
+    /// A transfer's offer waits, or files come: no keys go to the session.
+    transferring: AtomicBool,
+    /// The user's answer to an offer, and the offer's number, for the pump.
+    transfer_answer: Mutex<Option<(u64, TransferAnswer)>>,
+    transfer_answered: Notify,
+    /// The number of the offer waiting or being received, set by the
+    /// pump; a cancel names the one it was asked for, so one asked as a
+    /// transfer ends never stops the next.
+    transfer_offer: AtomicU64,
+    transfer_cancel_offer: AtomicU64,
+    transfer_cancel: Notify,
+    /// Writes that went to the stream: after a transfer stops, a key
+    /// typed means what comes next is the shell's.
+    inputs: Arc<AtomicU64>,
 }
 
 /// Output a session keeps, from its end.
@@ -192,7 +218,60 @@ impl SessionManager {
             next_id: AtomicU64::new(1),
             slots: Arc::new(Semaphore::new(config.max_sessions)),
             sessions: Arc::default(),
+            transfers: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Lets sessions that can carry one take file transfers (ADR 0025),
+    /// asking `host`. Sessions attached before are not changed.
+    pub fn set_transfer_host(&self, host: Arc<dyn TransferHost>) {
+        let _ = self.transfers.set(host);
+    }
+
+    /// The user's answer to offer `offer` of session `id`'s host: a
+    /// folder to receive into, or none to decline. An answer to any other
+    /// offer (a second click, or one that came after the offer went) is
+    /// ignored.
+    pub fn answer_transfer(
+        &self,
+        id: SessionId,
+        offer: u64,
+        folder: Option<Box<dyn ReceiveFolder>>,
+    ) -> Result<(), SessionError> {
+        let control = self.control(id)?;
+        // Only the offer waiting now: none is kept for one still to come.
+        if !control.transferring.load(Ordering::Acquire)
+            || control.transfer_offer.load(Ordering::Relaxed) != offer
+        {
+            return Ok(());
+        }
+        *lock(&control.transfer_answer) = Some((
+            offer,
+            match folder {
+                Some(folder) => TransferAnswer::Receive(folder),
+                None => TransferAnswer::Decline,
+            },
+        ));
+        control.transfer_answered.notify_one();
+        Ok(())
+    }
+
+    /// Stops session `id`'s transfer, or declines its offer. Nothing when
+    /// none runs.
+    pub fn cancel_transfer(&self, id: SessionId) -> Result<(), SessionError> {
+        let control = self.control(id)?;
+        if control.transferring.load(Ordering::Acquire) {
+            Self::cancel(&control);
+        }
+        Ok(())
+    }
+
+    fn cancel(control: &SessionControl) {
+        control.transfer_cancel_offer.store(
+            control.transfer_offer.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        control.transfer_cancel.notify_one();
     }
 
     pub fn reserve(&self) -> Result<SessionSlot, SessionError> {
@@ -221,6 +300,33 @@ impl SessionManager {
         } = stream;
         let id = SessionId::new(self.next_id.fetch_add(1, Ordering::Relaxed));
         let control = Arc::new(SessionControl::default());
+        let transfer = match (meta.transfers, self.transfers.get()) {
+            (true, Some(host)) => {
+                // The protocol's replies, in order, without the pump waiting;
+                // `pending` counts what is queued, which the transfer caps.
+                let (to_host, mut replies) = mpsc::unbounded_channel::<Vec<u8>>();
+                let pending = Arc::new(AtomicUsize::new(0));
+                let input = input.clone();
+                let sent = Arc::clone(&pending);
+                tokio::spawn(async move {
+                    while let Some(reply) = replies.recv().await {
+                        let len = reply.len();
+                        if input.send(TerminalInput::Data(reply)).await.is_err() {
+                            return;
+                        }
+                        sent.fetch_sub(len, Ordering::Relaxed);
+                    }
+                });
+                Some(transfer::Transfer::new(
+                    id,
+                    Arc::clone(host),
+                    to_host,
+                    pending,
+                    Arc::clone(&control.inputs),
+                ))
+            }
+            _ => None,
+        };
         lock(&self.sessions).insert(
             id,
             SessionEntry {
@@ -242,6 +348,7 @@ impl SessionManager {
             close_grace: self.config.close_grace,
             last_flush: None,
             closing: false,
+            transfer,
         };
         let registry = Arc::clone(&self.sessions);
         let ending = Arc::clone(&pump.control);
@@ -268,6 +375,21 @@ impl SessionManager {
     /// is full, so a stalled remote slows the caller instead of dropping input.
     pub async fn write(&self, id: SessionId, data: Vec<u8>) -> Result<(), SessionError> {
         self.send(id, TerminalInput::Data(data)).await
+    }
+
+    /// Nothing may reach a session while a transfer runs: keys would go
+    /// into the protocol. A write with Ctrl+C in it cancels the transfer
+    /// instead, and is not sent.
+    fn gate(&self, id: SessionId, interrupt: bool) -> Result<bool, SessionError> {
+        let control = self.control(id)?;
+        if !control.transferring.load(Ordering::Acquire) {
+            return Ok(true);
+        }
+        if interrupt {
+            Self::cancel(&control);
+            return Ok(false);
+        }
+        Err(SessionError::Transferring)
     }
 
     /// Sends typed or pasted text, which the stream converts to its
@@ -394,6 +516,22 @@ impl SessionManager {
     }
 
     async fn send(&self, id: SessionId, message: TerminalInput) -> Result<(), SessionError> {
+        // Keys typed together come in one write: a Ctrl+C among them counts.
+        let interrupt = match &message {
+            TerminalInput::Data(bytes) => bytes.contains(&0x03),
+            TerminalInput::Text(text) => text.contains('\u{3}'),
+            TerminalInput::Secret(_) | TerminalInput::Resize(_) => false,
+        };
+        if !matches!(message, TerminalInput::Resize(_)) {
+            if !self.gate(id, interrupt)? {
+                return Ok(());
+            }
+            // Ctrl+C, pressed again and again to stop a transfer, says
+            // nothing of what comes next.
+            if !interrupt {
+                self.control(id)?.inputs.fetch_add(1, Ordering::Relaxed);
+            }
+        }
         let input = lock(&self.sessions)
             .get(&id)
             .map(|entry| entry.input.clone())
@@ -427,6 +565,8 @@ struct Pump<S> {
     /// regardless of flow control, so the stream's reader can never block
     /// forever on a queue nobody reads.
     closing: bool,
+    /// File transfers, where the session can carry one.
+    transfer: Option<transfer::Transfer>,
 }
 
 enum Step {
@@ -442,6 +582,9 @@ impl<S: OutputSink> Pump<S> {
         let mut timer_armed = false;
         let grace = tokio::time::sleep(Duration::ZERO);
         tokio::pin!(grace);
+        // While files come: nothing from the host for a while.
+        let idle = tokio::time::sleep(Duration::ZERO);
+        tokio::pin!(idle);
 
         loop {
             let step = tokio::select! {
@@ -462,6 +605,34 @@ impl<S: OutputSink> Pump<S> {
                     self.terminator.probe();
                     Step::Continue
                 }
+                () = self.control.transfer_answered.notified(), if self.offered() => {
+                    let answer = lock(&self.control.transfer_answer).take();
+                    let shown = match (self.transfer.as_mut(), answer) {
+                        (Some(transfer), Some((offer, TransferAnswer::Receive(folder)))) => {
+                            transfer.answer(offer, Some(folder))
+                        }
+                        (Some(transfer), Some((offer, TransferAnswer::Decline))) => {
+                            transfer.answer(offer, None)
+                        }
+                        _ => Vec::new(),
+                    };
+                    self.rearm(idle.as_mut());
+                    self.after_transfer(shown)
+                }
+                () = self.control.transfer_cancel.notified(), if self.transfer_busy() => {
+                    let asked = self.control.transfer_cancel_offer.load(Ordering::Relaxed);
+                    let shown = match self.transfer.as_mut() {
+                        Some(transfer) if transfer.offer() == asked => transfer.cancel(),
+                        _ => Vec::new(),
+                    };
+                    self.rearm(idle.as_mut());
+                    self.after_transfer(shown)
+                }
+                () = &mut idle, if self.transfer_deadline().is_some() => {
+                    let shown = self.transfer.as_mut().map(transfer::Transfer::timeout).unwrap_or_default();
+                    self.rearm(idle.as_mut());
+                    self.after_transfer(shown)
+                }
                 () = self.control.acked.notified() => {
                     let acked = self.control.acked_bytes.swap(0, Ordering::Relaxed);
                     if self.flow.record_ack(acked) == FlowSignal::Resume {
@@ -478,6 +649,7 @@ impl<S: OutputSink> Pump<S> {
                 // terminal write.
                 event = self.events.recv(), if self.accepting() => {
                     let step = self.absorb_burst(event);
+                    self.rearm(idle.as_mut());
                     if matches!(step, Step::Continue) && !self.batcher.is_empty() {
                         match self.flush_deadline() {
                             None => self.flush(),
@@ -500,6 +672,51 @@ impl<S: OutputSink> Pump<S> {
 
     fn accepting(&self) -> bool {
         self.closing || !self.flow.is_paused()
+    }
+
+    fn offered(&self) -> bool {
+        self.transfer
+            .as_ref()
+            .is_some_and(transfer::Transfer::offered)
+    }
+
+    fn transfer_deadline(&self) -> Option<Duration> {
+        self.transfer
+            .as_ref()
+            .and_then(transfer::Transfer::deadline)
+    }
+
+    /// Restarts the transfer's timer from now, while it has one.
+    fn rearm(&self, idle: std::pin::Pin<&mut tokio::time::Sleep>) {
+        if let Some(after) = self.transfer_deadline() {
+            idle.reset(Instant::now() + after);
+        }
+    }
+
+    fn transfer_busy(&self) -> bool {
+        self.transfer.as_ref().is_some_and(transfer::Transfer::busy)
+    }
+
+    /// Shows what a transfer gave back, and says whether keys may go in.
+    fn after_transfer(&mut self, shown: Vec<u8>) -> Step {
+        if let Some(transfer) = &mut self.transfer {
+            self.control
+                .transfer_offer
+                .store(transfer.offer(), Ordering::Relaxed);
+            self.control
+                .transferring
+                .store(transfer.busy(), Ordering::Release);
+            transfer.announce();
+        }
+        if shown.is_empty() {
+            return Step::Continue;
+        }
+        let step = self.show(shown);
+        if matches!(step, Step::Continue) {
+            self.flush()
+        } else {
+            step
+        }
     }
 
     /// Handles `first` and every event already queued behind it, so a burst
@@ -539,6 +756,33 @@ impl<S: OutputSink> Pump<S> {
         // but once the view is behind, the rest is discarded: a process that
         // ignores hang-up must not flood the webview during the grace period.
         if self.closing && self.flow.is_paused() {
+            return Step::Continue;
+        }
+        // A transfer's bytes go to the files, not to the view, the
+        // recording, or the recent ring.
+        let chunk = match self.transfer.as_mut() {
+            Some(transfer) if !self.closing => {
+                let shown = transfer.absorb(chunk);
+                self.control
+                    .transfer_offer
+                    .store(transfer.offer(), Ordering::Relaxed);
+                self.control
+                    .transferring
+                    .store(transfer.busy(), Ordering::Release);
+                transfer.announce();
+                shown
+            }
+            // Closing mid-transfer: the rest of the files goes nowhere.
+            Some(transfer) if !transfer.idle() => return Step::Continue,
+            _ => chunk,
+        };
+        self.show(chunk)
+    }
+
+    /// Output the view is to show: counted, kept in the recent ring, and
+    /// batched.
+    fn show(&mut self, chunk: Vec<u8>) -> Step {
+        if chunk.is_empty() {
             return Step::Continue;
         }
         self.control
@@ -603,6 +847,8 @@ impl<S: OutputSink> Pump<S> {
         }
     }
 }
+
+mod transfer;
 
 #[cfg(test)]
 mod tests;
