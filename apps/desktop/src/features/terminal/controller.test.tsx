@@ -776,6 +776,43 @@ describe("TerminalController with TerminalView", () => {
     await expect(later).resolves.toEqual({ kind: "cancel" });
   });
 
+  it("shows the security key's touch notice until the backend withdraws it", async () => {
+    const { sessions, controller } = setup();
+    const view = await mount(controller);
+    const withdrawn = new AbortController();
+    const touch = sessions.events.onPrompt?.(
+      { kind: "securityKeyTouch", keyPath: "~/.ssh/id_ed25519_sk" },
+      withdrawn.signal,
+    );
+    await expect.element(view.getByTestId("security-key-touch")).toBeVisible();
+    // The key answered: the notice goes, and nothing is answered.
+    withdrawn.abort();
+    await expect(touch).resolves.toEqual({ kind: "cancel" });
+    await expect.element(view.getByTestId("security-key-touch")).not.toBeInTheDocument();
+    expect(controller.getPrompt()).toBeUndefined();
+
+    // Off screen, the notice marks the tab waiting until it is withdrawn.
+    controller.setWatched(false);
+    const hidden = new AbortController();
+    void sessions.events.onPrompt?.(
+      { kind: "securityKeyTouch", keyPath: "~/.ssh/id_ed25519_sk" },
+      hidden.signal,
+    );
+    expect(controller.getActivity()).toBe("waiting");
+    hidden.abort();
+    expect(controller.getActivity()).toBe("idle");
+    controller.setWatched(true);
+
+    // A PIN is typed and sent as a secret.
+    const pin = sessions.events.onPrompt?.({
+      kind: "securityKeyPin",
+      keyPath: "~/.ssh/id_ed25519_sk",
+    });
+    await view.getByLabelText("PIN").fill("1234");
+    await userEvent.keyboard("{Enter}");
+    await expect(pin).resolves.toEqual({ kind: "secret", value: "1234" });
+  });
+
   it("retries after a failed start and only then", async () => {
     const { sessions, controller } = setup();
     await mount(controller);

@@ -32,15 +32,18 @@ use tauminus_app::ports::{
     Answer, ChallengeField, ConnectError, Credentials, Prompt, Prompter, Secret,
 };
 use tauminus_domain::{AuthMethod, AuthOptions, Endpoint};
+use tauminus_fido::SecurityKey;
 use tracing::debug;
 use zeroize::Zeroizing;
 
 use crate::Client;
 use crate::rejected::RejectedPasswords;
+use crate::sk;
 
 /// Default key files, strongest first, then the FIDO2 (`*_sk`) ones
-/// OpenSSH also looks for. Those are signed for by an agent only: listed
-/// here, `IdentitiesOnly` lets the agent's copy through.
+/// OpenSSH also looks for. Those sign through the security key when one
+/// is set (`RusshConnector::with_security_key`), else through an agent:
+/// listed here, `IdentitiesOnly` lets the agent's copy through.
 const DEFAULT_KEYS: &[&str] = &[
     "id_ed25519",
     "id_ecdsa",
@@ -51,6 +54,9 @@ const DEFAULT_KEYS: &[&str] = &[
 /// Named among what was tried when a FIDO2 key was passed over and
 /// nothing else signed in: the user then knows what is missing.
 const SKIPPED_FIDO: &str = "a FIDO2 key, which only ssh-agent signs with";
+/// How long a security key may take to sign when no touch is asked: a
+/// silent assertion takes well under a second.
+const NO_TOUCH_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// Attempts per secret before giving up on it, as OpenSSH does.
 const ATTEMPTS: usize = 3;
 /// Keyboard-interactive rounds answered before giving up on a looping server.
@@ -66,6 +72,8 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) prompter: &'a Arc<dyn Prompter>,
     pub(crate) home: Option<&'a Path>,
     pub(crate) agent: &'a AgentSource,
+    /// Signs for FIDO2 key files; none leaves them to an agent.
+    pub(crate) security_key: Option<&'a Arc<dyn SecurityKey>>,
     /// From a vault identity: tried before key files and prompts.
     pub(crate) credentials: &'a Credentials,
     /// Stored passwords a server turned down; not sent again.
@@ -80,6 +88,8 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) stored_last: bool,
     /// A FIDO2 key was passed over: only an agent signs with it.
     pub(crate) skipped_fido: bool,
+    /// Why the security key last did not sign, named among what was tried.
+    pub(crate) fido_failed: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,10 +221,22 @@ impl Authenticator<'_> {
         if self.skipped_fido {
             tried.push(SKIPPED_FIDO.to_owned());
         }
+        for reason in &self.fido_failed {
+            tried.push((*reason).to_owned());
+        }
         Err(ConnectError::AuthFailed {
             endpoint: self.endpoint.to_string(),
             tried,
         })
+    }
+
+    /// Records why a security key did not sign, once per reason.
+    fn note_fido(&mut self, reason: Option<&'static str>) {
+        if let Some(reason) = reason
+            && !self.fido_failed.contains(&reason)
+        {
+            self.fido_failed.push(reason);
+        }
     }
 
     async fn agent(&mut self, user: &str, server: &mut Server) -> Result<Outcome, ConnectError> {
@@ -289,7 +311,7 @@ impl Authenticator<'_> {
                 debug!(path = %path.display(), "skipping unreadable key");
                 continue;
             };
-            if needs_security_key(&public) {
+            if needs_security_key(&public) && self.security_key.is_none() {
                 debug!(path = %path.display(), "skipping a FIDO2 key: only an agent signs with it");
                 self.skipped_fido = true;
                 continue;
@@ -298,8 +320,10 @@ impl Authenticator<'_> {
                 path: &path,
                 text: &text,
                 prompter: self.prompter,
+                security_key: self.security_key,
                 key: None,
                 gave_up: false,
+                fido_failed: None,
             };
             let hash = self.rsa_hash(&public).await?;
             if let Some(certificate) = read_certificate(&with_suffix(&path, "-cert.pub")).await
@@ -312,6 +336,7 @@ impl Authenticator<'_> {
                     .await
                     .map_err(SignError::into_connect_error)?;
                 outcome = Outcome::Tried;
+                self.note_fido(signer.fido_failed);
                 if server.settle(result) {
                     return Ok(Outcome::Done);
                 }
@@ -325,6 +350,7 @@ impl Authenticator<'_> {
                 .await
                 .map_err(SignError::into_connect_error)?;
             outcome = Outcome::Tried;
+            self.note_fido(signer.fido_failed);
             if server.settle(result) {
                 return Ok(Outcome::Done);
             }
@@ -479,9 +505,28 @@ impl Authenticator<'_> {
             }
         };
         if needs_security_key(key.public_key()) {
-            debug!("skipping the identity's FIDO2 key: only an agent signs with it");
-            self.skipped_fido = true;
-            return Ok(Outcome::Skipped);
+            let Some(security_key) = self.security_key else {
+                debug!("skipping the identity's FIDO2 key: only an agent signs with it");
+                self.skipped_fido = true;
+                return Ok(Outcome::Skipped);
+            };
+            let mut signer = SecurityKeySigner {
+                security_key,
+                key: &key,
+                prompter: self.prompter,
+                shown: "the identity's key",
+                failed: None,
+            };
+            let result = self
+                .handle
+                .authenticate_publickey_with(user, key.public_key().clone(), None, &mut signer)
+                .await
+                .map_err(SignError::into_connect_error)?;
+            self.note_fido(signer.failed);
+            if server.settle(result) {
+                return Ok(Outcome::Done);
+            }
+            return Ok(Outcome::Tried);
         }
         let hash = self.rsa_hash(key.public_key()).await?;
         let result = self
@@ -684,8 +729,11 @@ struct KeyFileSigner<'a> {
     path: &'a Path,
     text: &'a Zeroizing<String>,
     prompter: &'a Arc<dyn Prompter>,
+    security_key: Option<&'a Arc<dyn SecurityKey>>,
     key: Option<Arc<PrivateKey>>,
     gave_up: bool,
+    /// Why the security key did not sign for this file.
+    fido_failed: Option<&'static str>,
 }
 
 impl KeyFileSigner<'_> {
@@ -751,10 +799,156 @@ impl Signer for KeyFileSigner<'_> {
         hash: Option<HashAlg>,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, SignError> {
-        match self.unlock().await {
-            Some(key) => append_signature(&key, hash, data),
-            None => Ok(append_refused_signature(identity, hash, data)),
+        let Some(key) = self.unlock().await else {
+            return Ok(append_refused_signature(identity, hash, data));
+        };
+        if let Some(security_key) = self.security_key
+            && sk::credential(&key).is_some()
+        {
+            let shown = self.path.display().to_string();
+            let mut signer = SecurityKeySigner {
+                security_key,
+                key: &key,
+                prompter: self.prompter,
+                shown: &shown,
+                failed: None,
+            };
+            let answer = signer.auth_sign(identity, hash, data).await;
+            // Asked again for the same file, the key would fail the same
+            // way, or make the user touch it twice.
+            if signer.failed.is_some() {
+                self.fido_failed = signer.failed;
+                self.gave_up = true;
+            }
+            return answer;
         }
+        append_signature(&key, hash, data)
+    }
+}
+
+/// Signs with a FIDO2 key through the security key: its PIN asked first
+/// when the key file wants one, then the touch, which the user may cancel.
+/// A key that does not sign, or a cancel, sends a signature the server
+/// refuses, so authentication moves on.
+struct SecurityKeySigner<'a> {
+    security_key: &'a Arc<dyn SecurityKey>,
+    key: &'a PrivateKey,
+    prompter: &'a Arc<dyn Prompter>,
+    /// The key file, as the prompts name it.
+    shown: &'a str,
+    /// Why it did not sign, once it did not.
+    failed: Option<&'static str>,
+}
+
+/// Why the security key did not sign, as the failed sign-in names it.
+fn security_key_failure(error: &sk::SkError) -> &'static str {
+    use tauminus_fido::SecurityKeyError as E;
+    match error {
+        sk::SkError::Key(E::NoDevice) => "a FIDO2 key, with no security key plugged in",
+        sk::SkError::Key(E::UnknownCredential) => {
+            "a FIDO2 key, which the security key plugged in does not hold"
+        }
+        sk::SkError::Key(E::PinRequired) => "a FIDO2 key, whose security key wants a PIN",
+        sk::SkError::Key(E::PinInvalid { .. }) => "a FIDO2 key, whose PIN the security key refused",
+        sk::SkError::Key(E::PinBlocked) => "a FIDO2 key, whose security key has its PIN blocked",
+        sk::SkError::Key(E::NotConfirmed) => "a FIDO2 key, which was not touched in time",
+        sk::SkError::Key(E::Device(_)) | sk::SkError::Answer(_) => {
+            "a FIDO2 key, which the security key did not sign with"
+        }
+    }
+}
+
+impl SecurityKeySigner<'_> {
+    async fn sign(&mut self, data: &[u8]) -> Option<russh::keys::ssh_key::Signature> {
+        let credential = sk::credential(self.key)?;
+        let wants_pin = credential.flags & sk::USER_VERIFICATION != 0;
+        let touch = credential.flags & sk::USER_PRESENCE != 0;
+        let pin = if wants_pin {
+            Some(self.pin().await?)
+        } else {
+            None
+        };
+        match self.attempt(pin, touch, data).await {
+            // A key set to always verify (CTAP 2.1 `alwaysUv`) wants its
+            // PIN though the file did not ask for one: asked once, as
+            // OpenSSH does.
+            Err(sk::SkError::Key(tauminus_fido::SecurityKeyError::PinRequired)) if !wants_pin => {
+                let pin = self.pin().await?;
+                self.attempt(Some(pin), touch, data).await.ok()
+            }
+            result => result.ok(),
+        }
+    }
+
+    /// The key's PIN, from the user.
+    async fn pin(&mut self) -> Option<Zeroizing<String>> {
+        let answer = self
+            .prompter
+            .ask(Prompt::SecurityKeyPin {
+                key_path: self.shown.to_owned(),
+            })
+            .await;
+        if let Answer::Secret(pin) = answer {
+            return Some(pin);
+        }
+        self.failed = Some("a FIDO2 key, whose PIN was not given");
+        None
+    }
+
+    /// One request to the key, with the touch notice up while it waits.
+    /// A failure is recorded in `failed`.
+    async fn attempt(
+        &mut self,
+        pin: Option<Zeroizing<String>>,
+        touch: bool,
+        data: &[u8],
+    ) -> Result<russh::keys::ssh_key::Signature, sk::SkError> {
+        const CANCELLED: sk::SkError = sk::SkError::Answer("cancelled");
+        let signing = sk::sign(self.security_key, self.key, pin, data);
+        let result = if touch {
+            // Dropped once the key answers: the touch notice goes away.
+            let asked = self.prompter.ask(Prompt::SecurityKeyTouch {
+                key_path: self.shown.to_owned(),
+            });
+            tokio::select! {
+                biased;
+                result = signing => result,
+                _ = asked => {
+                    self.failed = Some("a FIDO2 key, whose touch was cancelled");
+                    return Err(CANCELLED);
+                }
+            }
+        } else {
+            // No touch bounds it: a key that never answers ends here.
+            let Ok(result) = tokio::time::timeout(NO_TOUCH_WAIT, signing).await else {
+                self.failed = Some("a FIDO2 key, which did not answer");
+                return Err(CANCELLED);
+            };
+            result
+        };
+        result.inspect_err(|error| {
+            debug!(%error, "the security key did not sign");
+            self.failed = Some(security_key_failure(error));
+        })
+    }
+}
+
+impl Signer for SecurityKeySigner<'_> {
+    type Error = SignError;
+
+    async fn auth_sign(
+        &mut self,
+        identity: &AgentIdentity,
+        hash: Option<HashAlg>,
+        mut data: Vec<u8>,
+    ) -> Result<Vec<u8>, SignError> {
+        let Some(signature) = self.sign(&data).await else {
+            return Ok(append_refused_signature(identity, hash, data));
+        };
+        let failed = |e: &dyn std::fmt::Display| SignError::Sign(e.to_string());
+        let encoded = signature.encode_vec().map_err(|e| failed(&e))?;
+        encoded.encode(&mut data).map_err(|e| failed(&e))?;
+        Ok(data)
     }
 }
 

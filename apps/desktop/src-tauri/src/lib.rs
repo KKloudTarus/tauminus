@@ -223,11 +223,10 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
     // OpenSSH files are read but never written.
     let remember_in = config_dir.join("known_hosts");
     let store = HostKeyStore::new(HostKeyStore::openssh_files(home.as_deref()), remember_in);
-    let connector: Arc<dyn tauminus_app::ports::SshConnector> = Arc::new(RusshConnector::new(
-        store,
-        home.clone(),
-        AgentSource::Environment,
-    ));
+    let connector = RusshConnector::new(store, home.clone(), AgentSource::Environment);
+    #[cfg(not(windows))]
+    let connector = connector.with_security_key(Arc::new(tauminus_fido::HidSecurityKey::default()));
+    let connector: Arc<dyn tauminus_app::ports::SshConnector> = Arc::new(connector);
     let connections = Arc::new(tauminus_app::Connections::new(Arc::clone(&connector)));
     app.manage(Arc::new(tauminus_app::Files::new(Arc::clone(&connections))));
     app.manage(files::UploadState(config_dir.join("transfers")));

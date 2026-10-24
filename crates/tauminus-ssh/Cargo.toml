@@ -22,12 +22,17 @@ russh = { version = "0.64.1", default-features = false, features = ["ring", "rsa
 russh-sftp = { version = "3.0.1", default-features = false }
 sha1 = "0.11"
 sha2 = "0.11"
+# A FIDO2 key's ECDSA signature comes as DER; SSH wants its two mpints.
+# Already in the tree through russh.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
 # Through tokio already; sets IPV6_V6ONLY so a forward's two loopback
 # listeners never collide with each other.
 socket2 = "0.6"
 tauminus-app.workspace = true
 tauminus-charset.workspace = true
 tauminus-domain.workspace = true
+# FIDO2 key files sign through a security key (ADR 0027).
+tauminus-fido.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "sync", "time"] }
 tracing.workspace = true
@@ -53,6 +58,10 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# Stand-in security keys: they sign as a FIDO2 key would.
+ed25519-dalek = "3"
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pem", "pkcs8"] }
+signature = "3"
 # The Mosh test bootstraps over a real sshd, which lives in these tests.
 tauminus-mosh.workspace = true
 tauminus-pty.workspace = true

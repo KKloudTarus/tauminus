@@ -138,7 +138,9 @@ export class ForwardsStore {
     this.#mark(key, true);
     const mine = new Set<PendingPrompt>();
     try {
-      await this.#client.start(host, rule, (prompt) => this.#ask(prompt, mine));
+      await this.#client.start(host, rule, (prompt, withdrawn) =>
+        this.#ask(prompt, mine, withdrawn),
+      );
       this.#setError(key, undefined);
     } catch (error) {
       if (error instanceof SessionCommandError && error.code === "vault_locked") {
@@ -168,7 +170,7 @@ export class ForwardsStore {
   }
 
   /** Shows questions one at a time, in the order they came. */
-  #ask(prompt: PromptKind, mine: Set<PendingPrompt>): Promise<AnswerSpec> {
+  #ask(prompt: PromptKind, mine: Set<PendingPrompt>, withdrawn?: AbortSignal): Promise<AnswerSpec> {
     return new Promise((resolve) => {
       const pending: PendingPrompt = {
         prompt,
@@ -179,6 +181,8 @@ export class ForwardsStore {
           resolve(reply);
         },
       };
+      // No longer asked, as when a security key answered: it goes away.
+      withdrawn?.addEventListener("abort", () => pending.answer(CANCEL), { once: true });
       mine.add(pending);
       this.#prompts = [...this.#prompts, pending];
       this.#set({ ...this.#state, prompt: this.#prompts[0] });

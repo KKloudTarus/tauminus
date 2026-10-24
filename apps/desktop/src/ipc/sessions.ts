@@ -72,7 +72,40 @@ export interface TmuxEvents {
 }
 
 /** Asks the user during a connect. Must settle: answer `cancel` rather than hang. */
-export type PromptHandler = (prompt: PromptKind) => Promise<AnswerSpec>;
+/**
+ * Answers a question an SSH connect raised. `withdrawn` aborts when the
+ * backend no longer asks it (a security key answered, the connect gave
+ * up): the view hides it, and its answer goes nowhere.
+ */
+export type PromptHandler = (prompt: PromptKind, withdrawn?: AbortSignal) => Promise<AnswerSpec>;
+
+/**
+ * A connect's prompt channel: each question goes to `ask`, its answer
+ * back to the backend, and a `withdrawn` message aborts the one it names.
+ * O(1) per message.
+ */
+export function promptChannel(ask: PromptHandler | undefined): Channel<PromptRequest> {
+  const channel = new Channel<PromptRequest>();
+  const open = new Map<number, AbortController>();
+  channel.onmessage = ({ id, prompt }) => {
+    if (prompt.kind === "withdrawn") {
+      open.get(id)?.abort();
+      open.delete(id);
+      return;
+    }
+    const withdrawn = new AbortController();
+    open.set(id, withdrawn);
+    (ask ?? (async () => CANCEL))(prompt, withdrawn.signal)
+      .catch(() => CANCEL)
+      .then(async (answer) => {
+        if (withdrawn.signal.aborted) return;
+        open.delete(id);
+        await commands.sshPromptReply(id, answer);
+      })
+      .catch((error: unknown) => console.warn("prompt reply failed", error));
+  };
+  return channel;
+}
 
 /** A failed session command, carrying the stable code from the backend. */
 export class SessionCommandError extends Error {
@@ -154,17 +187,7 @@ export const tauriSessions: SessionClient = {
     const exit = new Channel<SessionExit>();
     exit.onmessage = (event) => events.onExit(event.exitCode, event.lost);
 
-    const prompts = () => {
-      const channel = new Channel<PromptRequest>();
-      channel.onmessage = ({ id, prompt }) => {
-        const ask = events.onPrompt ?? (async () => CANCEL);
-        ask(prompt)
-          .catch(() => CANCEL)
-          .then((answer) => commands.sshPromptReply(id, answer))
-          .catch((error: unknown) => console.warn("prompt reply failed", error));
-      };
-      return channel;
-    };
+    const prompts = () => promptChannel(events.onPrompt);
     let opening: CommandResult<number>;
     if (spec.kind === "tmux" && spec.control !== undefined && spec.pane !== undefined) {
       opening = commands.tmuxPaneAttach(spec.control, spec.pane, size, output, exit);

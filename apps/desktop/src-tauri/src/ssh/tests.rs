@@ -240,6 +240,49 @@ async fn unanswered_prompt_times_out_as_cancel_and_is_forgotten() {
 }
 
 #[tokio::test]
+async fn a_touch_notice_the_key_ended_is_withdrawn_and_an_answered_one_is_not() {
+    let broker = Arc::new(PromptBroker::default());
+    let (channel, sent) = capture();
+    let prompter = ChannelPrompter {
+        broker: Arc::clone(&broker),
+        channel,
+        timeout: PROMPT_TIMEOUT,
+    };
+    // The security key answered while the notice was up: it is dropped.
+    let ask = prompter.ask(Prompt::SecurityKeyTouch {
+        key_path: "~/.ssh/id_ed25519_sk".into(),
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), ask)
+            .await
+            .is_err()
+    );
+    let shown = sent.recv().unwrap();
+    assert_eq!(shown["prompt"]["kind"], "securityKeyTouch");
+    let gone = sent.recv().unwrap();
+    assert_eq!(gone["prompt"]["kind"], "withdrawn");
+    assert_eq!(gone["id"], shown["id"]);
+
+    // Answered: nothing is withdrawn.
+    let ask = prompter.ask(Prompt::SecurityKeyPin {
+        key_path: "~/.ssh/id_ed25519_sk".into(),
+    });
+    let replier = {
+        let broker = Arc::clone(&broker);
+        tokio::task::spawn_blocking(move || {
+            let request = sent.recv().unwrap();
+            assert_eq!(request["prompt"]["kind"], "securityKeyPin");
+            let id = PromptId::try_from(request["id"].as_u64().unwrap()).unwrap();
+            assert!(broker.reply(id, Answer::Secret(Zeroizing::new("1234".into()))));
+            sent
+        })
+    };
+    assert!(matches!(ask.await, Answer::Secret(_)));
+    let sent = replier.await.unwrap();
+    assert!(sent.try_recv().is_err(), "no withdrawal after an answer");
+}
+
+#[tokio::test]
 async fn an_abandoned_prompt_is_forgotten() {
     let broker = Arc::new(PromptBroker::default());
     let (channel, _sent) = capture();

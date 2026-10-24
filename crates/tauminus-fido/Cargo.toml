@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-fido"
+description = "FIDO2 security keys for Tauminus: the assertion a key gives for an SSH signature"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+zeroize.workspace = true
+
+# USB security keys over CTAP2 HID. MIT. Not on Windows, where only
+# webauthn.dll reaches a key from a process that is not elevated.
+[target.'cfg(not(windows))'.dependencies]
+anyhow = "1"
+ctap-hid-fido2 = { version = "=3.6.0", default-features = false, features = ["ring"] }
+
+[lints]
+workspace = true

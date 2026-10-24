@@ -267,6 +267,16 @@ pub(crate) enum PromptKind {
     Passphrase {
         key_path: String,
     },
+    /// The PIN of the FIDO2 security key the key file names.
+    SecurityKeyPin {
+        key_path: String,
+    },
+    /// Touch the security key; withdrawn once it answers.
+    SecurityKeyTouch {
+        key_path: String,
+    },
+    /// The question with this id is no longer asked: hide it.
+    Withdrawn,
     KeyboardInteractive {
         endpoint: String,
         name: String,
@@ -299,6 +309,8 @@ impl From<Prompt> for PromptKind {
             },
             Prompt::Password { endpoint } => Self::Password { endpoint },
             Prompt::Passphrase { key_path } => Self::Passphrase { key_path },
+            Prompt::SecurityKeyPin { key_path } => Self::SecurityKeyPin { key_path },
+            Prompt::SecurityKeyTouch { key_path } => Self::SecurityKeyTouch { key_path },
             Prompt::KeyboardInteractive {
                 endpoint,
                 name,
@@ -389,8 +401,9 @@ impl PromptBroker {
         (id, rx)
     }
 
-    fn forget(&self, id: PromptId) {
-        self.lock().pending.remove(&id);
+    /// Forgets `id`; true when it was still waiting for its answer.
+    fn forget(&self, id: PromptId) -> bool {
+        self.lock().pending.remove(&id).is_some()
     }
 
     /// Delivers `answer`. Returns false when no prompt has that id, because
@@ -426,6 +439,7 @@ impl Prompter for ChannelPrompter {
             // connect is abandoned and drops it mid-wait.
             let _entry = Registration {
                 broker: &self.broker,
+                channel: &self.channel,
                 id,
             };
             let request = PromptRequest {
@@ -445,12 +459,20 @@ impl Prompter for ChannelPrompter {
 
 struct Registration<'a> {
     broker: &'a PromptBroker,
+    channel: &'a Channel<PromptRequest>,
     id: PromptId,
 }
 
 impl Drop for Registration<'_> {
+    /// Still unanswered (a touch notice the key ended, a connect given
+    /// up): the view hides it.
     fn drop(&mut self) {
-        self.broker.forget(self.id);
+        if self.broker.forget(self.id) {
+            let _ = self.channel.send(PromptRequest {
+                id: self.id,
+                prompt: PromptKind::Withdrawn,
+            });
+        }
     }
 }
 

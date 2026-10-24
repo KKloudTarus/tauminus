@@ -20,6 +20,7 @@ pub mod known_hosts;
 mod pipe;
 mod rejected;
 mod sftp;
+mod sk;
 mod socks;
 mod transport;
 mod tunnel;
@@ -72,6 +73,8 @@ pub struct RusshConnector {
     /// Shared by every connect, so a password one host turned down is not
     /// sent to the next.
     rejected: Arc<rejected::RejectedPasswords>,
+    /// Signs for FIDO2 key files (`sk-`); none leaves them to an agent.
+    security_key: Option<Arc<dyn tauminus_fido::SecurityKey>>,
 }
 
 impl RusshConnector {
@@ -85,7 +88,17 @@ impl RusshConnector {
             forward_budget: pipe::BUDGET,
             forward_stall: pipe::STALL,
             rejected: Arc::default(),
+            security_key: None,
         }
+    }
+
+    /// Signs with FIDO2 key files (`sk-`) through `key`, a security key
+    /// the user touches (ADR 0027). Without one, such files are left to
+    /// an agent that holds their keys.
+    #[must_use]
+    pub fn with_security_key(mut self, key: Arc<dyn tauminus_fido::SecurityKey>) -> Self {
+        self.security_key = Some(key);
+        self
     }
 
     /// Replaces the 15 s limit on each TCP connect, proxy handshake, and SSH
@@ -184,6 +197,7 @@ impl RusshConnector {
                 prompter: &prompter,
                 home: self.home.as_deref(),
                 agent: &self.agent,
+                security_key: self.security_key.as_ref(),
                 // A jump host is another login; the identity is for the target.
                 credentials: if last { &credentials } else { &none },
                 rejected: &self.rejected,
@@ -191,6 +205,7 @@ impl RusshConnector {
                 turn: None,
                 stored_last: false,
                 skipped_fido: false,
+                fido_failed: Vec::new(),
             }
             .run()
             .await
