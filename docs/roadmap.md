@@ -185,7 +185,7 @@ Goal: Termius Pro sync without a Termius account.
 
 - [ ] trzsz transfers, in Rust (moved from v0.4: ADR 0026)
 - [ ] End-to-end encrypted sync with `age` to a git remote, S3-compatible storage, or a synced folder
-- [ ] Conflict handling with a CRDT (`automerge` or `yrs`, decided by ADR)
+- [x] Conflict handling with a CRDT: last-writer-wins per field on hybrid logical clocks, a delete winning over an edit, keyed lists per element, every clash listed on both devices; `automerge` and `yrs` weighed and not taken (ADR 0030)
 - [ ] Per-item flag to keep credentials off the sync target
 - [ ] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP
 - [x] Import CSV, PuTTY, MobaXterm, SecureCRT, with their folders and jump hosts (ADR 0029)
@@ -196,8 +196,8 @@ Goal: Termius Pro sync without a Termius account.
 
 ### Exit criteria
 
-- [ ] Two devices edit the same host offline, then sync without data loss (test)
-- [ ] Sync target holds only ciphertext (test inspects the remote)
+- [x] Two devices edit the same host offline, then sync without data loss: both fields kept, or for one field both values shown as a clash (tests: `two_devices_edit_one_host_offline_and_sync_without_losing_either`, `the_device_whose_value_lost_is_told_on_its_next_sync`)
+- [x] Sync target holds only ciphertext (tests: `the_target_holds_only_ciphertext` on a folder, and every object of a git remote through `git cat-file --batch-all-objects`)
 - [ ] Update signature check rejects a tampered package (test)
 
 ## v0.6: Tauminus Hub
