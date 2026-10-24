@@ -15,6 +15,9 @@ interface TerminalViewProps {
   onUnlockVault?: (retry: () => void) => void;
 }
 
+/** The host's padding above and beside the cells; the completion layer copies it. */
+const HOST_PAD = "px-3 pt-2";
+
 /** Shows a terminal. Mounting attaches it; unmounting detaches it and keeps the session. */
 export function TerminalView({ controller, className, onUnlockVault }: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -46,7 +49,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
       */}
       <div
         ref={hostRef}
-        className="min-h-0 flex-1 px-3 pt-2 pb-1"
+        className={`min-h-0 flex-1 ${HOST_PAD} pb-1`}
         style={{ minWidth: 0, contain: "strict" }}
         data-testid="terminal-host"
       />
@@ -205,35 +208,42 @@ function CompletionList({
 }) {
   const cell = controller.cellSize();
   return (
-    <ul
-      aria-label="Completions"
-      data-testid="completion"
-      className="absolute z-10 max-h-64 min-w-48 overflow-auto rounded border border-current/20 bg-background py-1 font-mono text-xs shadow-lg"
-      style={{
-        left: Math.max(0, (completion.column - completion.current.length) * cell.width),
-        top: (completion.row + 1) * cell.height,
-      }}
-    >
-      {completion.items.map((item, index) => (
-        <li key={`${item.kind}:${item.name}`}>
-          <button
-            type="button"
-            tabIndex={-1}
-            data-selected={index === completion.selected}
-            className={`flex w-full gap-3 px-2 py-0.5 text-left ${
-              index === completion.selected ? "bg-current/15" : "hover:bg-current/10"
-            }`}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              controller.acceptCompletion(index);
-              controller.focus();
-            }}
-          >
-            <span className="shrink-0">{item.name}</span>
-            {item.description && <span className="truncate opacity-60">{item.description}</span>}
-          </button>
-        </li>
-      ))}
-    </ul>
+    // A layer padded like the host starts where the cells do.
+    <div className={`pointer-events-none absolute inset-x-0 top-0 z-10 ${HOST_PAD}`}>
+      <div className="relative">
+        <ul
+          aria-label="Completions"
+          data-testid="completion"
+          className="pointer-events-auto absolute max-h-64 min-w-48 overflow-auto rounded border border-current/20 bg-background py-1 font-mono text-xs shadow-lg"
+          style={{
+            left: Math.max(0, (completion.column - completion.current.length) * cell.width),
+            top: (completion.row + 1) * cell.height,
+          }}
+        >
+          {completion.items.map((item, index) => (
+            <li key={`${item.kind}:${item.name}`}>
+              <button
+                type="button"
+                tabIndex={-1}
+                data-selected={index === completion.selected}
+                className={`flex w-full gap-3 px-2 py-0.5 text-left ${
+                  index === completion.selected ? "bg-current/15" : "hover:bg-current/10"
+                }`}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  controller.acceptCompletion(index);
+                  controller.focus();
+                }}
+              >
+                <span className="shrink-0">{item.name}</span>
+                {item.description && (
+                  <span className="truncate opacity-60">{item.description}</span>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   );
 }

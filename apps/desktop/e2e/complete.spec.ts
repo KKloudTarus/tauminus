@@ -35,6 +35,19 @@ test("completes a subcommand at a marked prompt, leaving Enter to the user", asy
   await expect(screen(page)).not.toContainText("command not found");
 });
 
+test("opens the list under the word being completed", async ({ page }) => {
+  await run(page, "integrate");
+  await page.keyboard.type("git checkou");
+  await page.keyboard.press("Control+Shift+Space");
+  await expect(list(page)).toBeVisible();
+  const cursor = await screen(page).locator(".xterm-cursor").boundingBox();
+  const box = await list(page).boundingBox();
+  if (!cursor || !box) throw new Error("no cursor or list on screen");
+  // The cursor sits after "checkou", seven cells past where the word starts.
+  expect(Math.abs(box.x - (cursor.x - 7 * cursor.width))).toBeLessThan(1.5);
+  expect(Math.abs(box.y - (cursor.y + cursor.height))).toBeLessThan(1.5);
+});
+
 test("Tab takes the selection while the list shows, and other keys reach the shell", async ({
   page,
 }) => {
