@@ -523,6 +523,74 @@ pub trait HostStore: Send + Sync + 'static {
     fn new_id(&self) -> String;
 }
 
+/// What sync carries: the saved hosts and groups, and the snippets.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncData {
+    pub hosts: tauminus_domain::Inventory,
+    pub snippets: tauminus_domain::Library,
+}
+
+/// A field this device and another both changed, to different values:
+/// the value kept and the one that lost, as text. A record deleted on one
+/// device and edited on the other clashes on field `(deleted)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncClash {
+    /// The record's name: a host's label, a group's or a snippet's name.
+    pub record: String,
+    pub field: String,
+    pub kept: String,
+    pub lost: String,
+}
+
+/// What a merge with the other devices gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Merged {
+    pub data: SyncData,
+    /// What was moved to make the merged lists valid.
+    pub repairs: Vec<tauminus_domain::Repair>,
+    pub clashes: Vec<SyncClash>,
+    /// What the target did that the user should know: an object that was
+    /// not read, a device whose objects went back or away.
+    pub notices: Vec<String>,
+}
+
+/// Why a sync did not happen.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SyncError {
+    /// The target could not be read or written.
+    #[error("the sync target: {0}")]
+    Target(String),
+    /// An object, or the key file, is not this sync key's.
+    #[error("{0}")]
+    Sealed(String),
+    /// A device wrote with a newer Tauminus; syncing stops until this one
+    /// is updated, so nothing it cannot read is lost.
+    #[error("another device syncs with a newer Tauminus ({0}); update this one to sync")]
+    Newer(String),
+    /// The merged lists are not valid, and cannot be made so.
+    #[error("the merged lists are not valid: {0}")]
+    Invalid(String),
+}
+
+/// One of the lists a sync saves on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncPart {
+    Hosts,
+    Snippets,
+}
+
+/// The other devices' state, through a sync target. `merge` reads and
+/// merges; `adopt` records that a part of what it gave was saved here,
+/// so the next sync compares against it; `publish` writes this device's
+/// state for the others. They block on files and the network.
+pub trait SyncRemote: Send + Sync + 'static {
+    fn merge(&self, local: SyncData) -> BoxFuture<'_, Result<Merged, SyncError>>;
+    /// Called once `part` of the last merge is saved here.
+    fn adopt(&self, part: SyncPart) -> BoxFuture<'_, Result<(), SyncError>>;
+    /// Writes the state adopted, if the target lacks it.
+    fn publish(&self) -> BoxFuture<'_, Result<(), SyncError>>;
+}
+
 /// Keeps the saved snippets, replacing everything at once as
 /// [`HostStore`] does.
 pub trait SnippetStore: Send + Sync + 'static {
