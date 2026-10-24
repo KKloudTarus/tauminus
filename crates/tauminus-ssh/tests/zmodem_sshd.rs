@@ -557,7 +557,8 @@ async fn in_bash_rz_killed_mid_send_leaves_no_line_for_enter() {
         .await
         .unwrap();
     until("rz", || host.offers.load(Ordering::Relaxed) == 1).await;
-    let lines = b"touch /tmp/bash-pwned\n".repeat(4_000_000);
+    // Each line ends a command: joined, they would still run.
+    let lines = b"touch /tmp/bash-pwned;\n".repeat(4_000_000);
     let files: Vec<Box<dyn tauminus_app::ports::OutgoingFile>> =
         vec![Box::new(MemFile("lines.txt", lines))];
     sessions
@@ -589,7 +590,15 @@ async fn in_bash_rz_killed_mid_send_leaves_no_line_for_enter() {
         )
         .await
         .unwrap();
-    until("the check", || screen.text().contains("checked-42")).await;
+    // bash's readline takes its time over what reached it, up to the SSH
+    // window: up to two minutes on a busy machine.
+    for _ in 0..1200 {
+        if screen.text().contains("checked-42") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(screen.text().contains("checked-42"), "never: the check");
     let text = screen.text();
     assert!(
         text.contains("No such file"),
