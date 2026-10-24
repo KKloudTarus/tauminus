@@ -38,6 +38,7 @@ test("completes a subcommand at a marked prompt, leaving Enter to the user", asy
 test("opens the list under the word being completed", async ({ page }) => {
   await run(page, "integrate");
   await page.keyboard.type("git checkou");
+  await expect(screen(page)).toContainText("$ git checkou");
   await page.keyboard.press("Control+Shift+Space");
   await expect(list(page)).toBeVisible();
   const cursor = await screen(page).locator(".xterm-cursor").boundingBox();
@@ -46,6 +47,23 @@ test("opens the list under the word being completed", async ({ page }) => {
   // The cursor sits after "checkou", seven cells past where the word starts.
   expect(Math.abs(box.x - (cursor.x - 7 * cursor.width))).toBeLessThan(1.5);
   expect(Math.abs(box.y - (cursor.y + cursor.height))).toBeLessThan(1.5);
+});
+
+test("keeps the list inside a phone-wide screen", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await run(page, "integrate");
+  await page.keyboard.type("git checkou");
+  await expect(screen(page)).toContainText("$ git checkou");
+  await page.keyboard.press("Control+Shift+Space");
+  await expect(list(page)).toBeVisible();
+  const box = await list(page).boundingBox();
+  if (!box) throw new Error("no list on screen");
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(390);
+  const description = list(page).getByText("Switch branches", { exact: false });
+  const text = await description.boundingBox();
+  if (!text) throw new Error("no description");
+  expect(text.x + text.width).toBeLessThanOrEqual(box.x + box.width);
 });
 
 test("Tab takes the selection while the list shows, and other keys reach the shell", async ({

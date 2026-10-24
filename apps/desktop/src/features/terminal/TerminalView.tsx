@@ -207,6 +207,7 @@ function CompletionList({
   completion: CompletionState;
 }) {
   const cell = controller.cellSize();
+  const start = Math.max(0, (completion.column - completion.current.length) * cell.width);
   return (
     // A layer padded like the host starts where the cells do.
     <div className={`pointer-events-none absolute inset-x-0 top-0 z-10 ${HOST_PAD}`}>
@@ -216,7 +217,10 @@ function CompletionList({
           data-testid="completion"
           className="pointer-events-auto absolute max-h-64 min-w-48 overflow-auto rounded-lg border border-line-strong bg-surface-2 p-1 font-mono text-xs shadow-lg"
           style={{
-            left: Math.max(0, (completion.column - completion.current.length) * cell.width),
+            // Under the word, but never past the right edge: near it, the list
+            // shifts left to keep its 12rem, and it is never wider than the view.
+            left: `min(${start}px, max(0px, 100% - 12rem))`,
+            maxWidth: `calc(100% - min(${start}px, max(0px, 100% - 12rem)))`,
             top: (completion.row + 1) * cell.height,
           }}
         >
@@ -239,7 +243,7 @@ function CompletionList({
               >
                 <span className="shrink-0">{item.name}</span>
                 {item.description && (
-                  <span className="truncate text-faint">{item.description}</span>
+                  <span className="min-w-0 truncate text-faint">{item.description}</span>
                 )}
               </button>
             </li>
