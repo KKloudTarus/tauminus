@@ -40,7 +40,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libudev-dev \
             libayatana-appindicator3-dev librsvg2-dev openssh-server busybox-static socat tmux mosh \
             zlib1g-dev
           # The Telnet tests run BusyBox's telnetd, which the static build has;
@@ -116,11 +116,12 @@ jobs:
         if: runner.os == 'Linux'
         run: cargo test -p tauminus-store --release --locked -- --ignored a_million_lines --nocapture
 
-      # v0.4: FIDO2 keys through the agent log in (ci/sk-agent.sh).
-      - name: FIDO2 keys through ssh-agent
+      # v0.4: FIDO2 keys log in through the agent, and through the security
+      # key with no agent (ci/sk-agent.sh; ADR 0027).
+      - name: FIDO2 keys through ssh-agent and the security key
         if: runner.os == 'Linux'
         # --workspace: the Test step's build, not a feature set of its own.
-        run: cargo test --workspace --locked --test sk_agent -- --ignored
+        run: cargo test --workspace --locked --test sk_agent --test sk_direct -- --ignored
 
       # v0.3 exit criterion: 1 GiB up and down over SFTP with matching
       # checksums. Release build, since debug crypto takes minutes; Unix
