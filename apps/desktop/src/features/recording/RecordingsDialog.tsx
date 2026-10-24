@@ -60,12 +60,16 @@ export function RecordingsDialog({ client, onClose, onUnlock, engine }: Recordin
     reload();
   }, [reload]);
 
+  // The player and a long list want the height; a message alone does not.
+  const roomy = playing !== undefined || (list.kind === "ready" && list.recordings.length > 0);
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="panel modal flex h-[min(860px,92dvh)] w-[min(1100px,96vw)] flex-col p-4 sm:mt-[4dvh] sm:max-h-[92dvh]"
+      className={`panel modal flex flex-col p-4 sm:mt-[4dvh] sm:max-h-[92dvh] ${
+        roomy ? "h-[min(860px,92dvh)] w-[min(1100px,96vw)]" : "w-[min(560px,96vw)]"
+      }`}
     >
       <h2 id={titleId} className="mb-3 font-semibold">
         Recordings
