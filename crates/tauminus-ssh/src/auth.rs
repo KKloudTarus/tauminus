@@ -1231,8 +1231,8 @@ mod tests {
         );
         // A variable is read now; unset, no agent rather than the default.
         assert_eq!(
-            pick(Some(IdentityAgent::Variable("HOME".into()))),
-            AgentSource::Path(std::env::var_os("HOME").unwrap().into())
+            pick(Some(IdentityAgent::Variable("PATH".into()))),
+            AgentSource::Path(std::env::var_os("PATH").unwrap().into())
         );
         assert_eq!(
             pick(Some(IdentityAgent::Variable(
