@@ -214,7 +214,7 @@ function CompletionList({
         <ul
           aria-label="Completions"
           data-testid="completion"
-          className="pointer-events-auto absolute max-h-64 min-w-48 overflow-auto rounded border border-current/20 bg-background py-1 font-mono text-xs shadow-lg"
+          className="pointer-events-auto absolute max-h-64 min-w-48 overflow-auto rounded-lg border border-line-strong bg-surface-2 p-1 font-mono text-xs shadow-lg"
           style={{
             left: Math.max(0, (completion.column - completion.current.length) * cell.width),
             top: (completion.row + 1) * cell.height,
@@ -226,8 +226,10 @@ function CompletionList({
                 type="button"
                 tabIndex={-1}
                 data-selected={index === completion.selected}
-                className={`flex w-full gap-3 px-2 py-0.5 text-left ${
-                  index === completion.selected ? "bg-current/15" : "hover:bg-current/10"
+                className={`flex w-full gap-3 rounded px-2 py-0.5 text-left ${
+                  index === completion.selected
+                    ? "bg-accent-soft text-foreground"
+                    : "hover:bg-surface-3"
                 }`}
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -237,7 +239,7 @@ function CompletionList({
               >
                 <span className="shrink-0">{item.name}</span>
                 {item.description && (
-                  <span className="truncate opacity-60">{item.description}</span>
+                  <span className="truncate text-faint">{item.description}</span>
                 )}
               </button>
             </li>
