@@ -458,7 +458,11 @@ impl Inventory {
             .as_ref()
             .is_none_or(|old| old.parent != group.parent);
         self.groups.insert(id.clone(), group);
-        let check = if moved {
+        // A new group has nothing below it: its own ancestry is all to
+        // check, O(d) instead of O(G·d).
+        let check = if existing.is_none() {
+            self.check_ancestry(&id).map(|_| ())
+        } else if moved {
             self.check_subtree(&id)
         } else {
             Ok(())

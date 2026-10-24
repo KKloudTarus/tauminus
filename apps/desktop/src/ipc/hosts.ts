@@ -13,6 +13,7 @@ import {
   type HostInput,
   type HostView,
   type HostsView,
+  type ImportKind,
   type ImportResult,
   type SettingsSpec,
   commands,
@@ -31,6 +32,7 @@ export type {
   HostInput,
   HostView,
   HostsView,
+  ImportKind,
   ImportResult,
   SettingsSpec,
 };
@@ -45,6 +47,12 @@ export interface HostsClient {
   /** How many hosts `~/.ssh/config` names. */
   configAliases(): Promise<number>;
   importConfig(): Promise<ImportResult>;
+  /**
+   * Hosts from another client: from the file or folder the user picks in
+   * the system's dialog, or PuTTY's own sessions. `null` when nothing was
+   * picked.
+   */
+  importFrom(kind: ImportKind): Promise<ImportResult | null>;
   /**
    * Checks the readings of a command line about to run on a saved host
    * against its prod guard. `incomplete` comes from the first.
@@ -71,5 +79,6 @@ export const tauriHosts: HostsClient = {
   deleteGroup: (id) => unwrap(commands.groupDelete(id)),
   configAliases: () => unwrap(commands.sshConfigAliases()),
   importConfig: () => unwrap(commands.hostsImportSshConfig()),
+  importFrom: (kind) => unwrap(commands.hostsImportFrom(kind)),
   checkCommand: (hostId, lines) => unwrap(commands.guardCheck(hostId, lines)),
 };

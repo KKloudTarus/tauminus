@@ -426,7 +426,7 @@ fn offer_number(offer: f64) -> Result<u64, CommandError> {
 
 /// One file dialog at a time, in the whole app: a host cannot stack them.
 #[derive(Debug, Default)]
-pub(crate) struct Choosing(AtomicBool);
+pub(crate) struct Choosing(pub(crate) AtomicBool);
 
 /// Opens the system's file dialog for `rz` waiting in `session` (offer
 /// `offer`), and sends what the user chose; nothing chosen declines. The

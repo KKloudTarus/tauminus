@@ -111,3 +111,30 @@ fn a_stored_key_with_any_comment_can_be_installed() {
     // The key itself is still checked.
     assert!(PublicKeyLine::installable("ssh-ed25519 AA'AA x").is_err());
 }
+
+#[test]
+fn key_paths_on_another_machine_are_told_apart() {
+    for remote in [
+        r"\\server\share\k",
+        "//server/share/k",
+        r"\/server/k",
+        r"\\?\UNC\server\k",
+        r"\??\UNC\server\k",
+        r"\??\GLOBALROOT\Device\Mup\s\k",
+        "/??/UNC/server/k",
+        r"\\.\pipe\agent",
+    ] {
+        assert!(names_another_machine(remote), "{remote}");
+    }
+    for local in [
+        r"C:\keys\k",
+        r"\\?\C:\keys\k",
+        r"\\.\D:\k",
+        r"\??\C:\k",
+        "/home/me/.ssh/id",
+        "~/.ssh/id",
+        "id",
+    ] {
+        assert!(!names_another_machine(local), "{local}");
+    }
+}

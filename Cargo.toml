@@ -20,6 +20,7 @@ tauminus-ai = { path = "crates/tauminus-ai" }
 tauminus-app = { path = "crates/tauminus-app" }
 tauminus-charset = { path = "crates/tauminus-charset" }
 tauminus-fido = { path = "crates/tauminus-fido" }
+tauminus-import = { path = "crates/tauminus-import" }
 tauminus-domain = { path = "crates/tauminus-domain" }
 tauminus-presence = { path = "crates/tauminus-presence" }
 tauminus-serial = { path = "crates/tauminus-serial" }

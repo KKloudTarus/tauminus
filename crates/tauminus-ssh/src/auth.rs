@@ -1076,6 +1076,12 @@ const MAX_KEY_FILE: u64 = 64 * 1024;
 /// imported config, so they are not trusted to point at a key.
 async fn read_key_file(path: &Path) -> Option<Zeroizing<String>> {
     use tokio::io::AsyncReadExt as _;
+    // Looking up a file on another machine makes Windows sign in to it
+    // with the user's credentials: a key path never does.
+    if cfg!(windows) && tauminus_domain::names_another_machine(&path.to_string_lossy()) {
+        debug!(path = %path.display(), "skipping a key on another machine");
+        return None;
+    }
     let metadata = tokio::fs::metadata(path).await.ok()?;
     if !metadata.is_file() || metadata.len() > MAX_KEY_FILE {
         return None;

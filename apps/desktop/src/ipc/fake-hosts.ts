@@ -28,6 +28,16 @@ const CONFIG = [
 /** The address of each fake host, for the fake sessions. */
 const addresses = new Map<string, string>();
 
+/** What another client's file holds, for the fake: one host per kind. */
+const FROM_FILE = [{ label: "moba-web", address: "web.moba.internal" }] as const;
+const IMPORT_GROUPS = {
+  csv: "CSV import",
+  putty: "PuTTY",
+  puttyExport: "PuTTY",
+  mobaXterm: "MobaXterm",
+  secureCrt: "SecureCRT",
+} as const;
+
 /** A fake saved host's address, or `undefined`. */
 export function fakeHostAddress(id: string): string | undefined {
   return addresses.get(id);
@@ -165,6 +175,25 @@ export function fakeHosts(): HostsClient {
       );
       return { findings: unique, incomplete: verdicts[0]?.incomplete ?? false };
     },
+    importFrom: async (kind) => {
+      const name = IMPORT_GROUPS[kind];
+      let group = groups.find((g) => g.name === name);
+      if (!group) {
+        group = { id: id(), name, parent: null, settings: {} };
+        groups = [...groups, group];
+      }
+      let added = 0;
+      const skipped = [{ alias: "desk", reason: "a RDP session, not SSH" }];
+      for (const entry of FROM_FILE) {
+        if (hosts.some((h) => h.label === entry.label)) {
+          skipped.push({ alias: entry.label, reason: "already saved" });
+          continue;
+        }
+        saveHost({ ...entry, group: group.id, settings: {}, forwards: [] });
+        added += 1;
+      }
+      return { added, skipped, skippedCount: skipped.length, view: view() };
+    },
     importConfig: async () => {
       let group = groups.find((g) => g.name === "SSH config");
       if (!group) {
@@ -187,7 +216,7 @@ export function fakeHosts(): HostsClient {
         });
         added += 1;
       }
-      return { added, skipped, view: view() };
+      return { added, skipped, skippedCount: skipped.length, view: view() };
     },
   };
 }

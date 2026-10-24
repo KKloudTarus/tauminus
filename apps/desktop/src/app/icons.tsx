@@ -24,7 +24,8 @@ export type IconName =
   | "sun"
   | "moon"
   | "monitor"
-  | "plug";
+  | "plug"
+  | "import";
 
 const PATHS: Record<IconName, ReactNode> = {
   plus: <path d="M8 3.5v9M3.5 8h9" />,
@@ -94,6 +95,7 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   plug: <path d="M6 2.5V5m4-2.5V5M4.5 5h7v2.5a3.5 3.5 0 0 1-7 0V5ZM8 11v2.5" />,
+  import: <path d="M8 2.5v7m-3-3 3 3 3-3M3 10.5v2h10v-2" />,
 };
 
 export function Icon({ name, className = "size-4" }: { name: IconName; className?: string }) {

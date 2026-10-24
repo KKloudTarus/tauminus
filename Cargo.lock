@@ -5633,6 +5633,7 @@ dependencies = [
  "tauminus-app",
  "tauminus-domain",
  "tauminus-fido",
+ "tauminus-import",
  "tauminus-mosh",
  "tauminus-presence",
  "tauminus-pty",
@@ -5670,6 +5671,16 @@ dependencies = [
  "ctap-hid-fido2",
  "thiserror 2.0.21",
  "zeroize",
+]
+
+[[package]]
+name = "tauminus-import"
+version = "0.0.0"
+dependencies = [
+ "tauminus-app",
+ "tauminus-charset",
+ "tauminus-domain",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

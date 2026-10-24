@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use tauminus_domain::{
     EnvVar, ForwardId, ForwardRule, Group, GroupId, Hop, Host, HostId, HostName, HostsError,
-    IdentityAgent, IdentityId, Inventory, Label, Policy, Route, Settings, SnippetId, SshTarget,
-    TelnetTarget, TriggerSetId, UserName, env_list,
+    IdentityAgent, IdentityId, Inventory, Label, MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, Policy,
+    Route, Settings, SnippetId, SshTarget, TelnetTarget, TriggerSetId, UserName, env_list,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
@@ -19,8 +19,8 @@ pub enum HostBookError {
     Hosts(#[from] HostsError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error("could not read ~/.ssh/config: {0}")]
-    Config(std::io::Error),
+    #[error("could not read {what}: {error}")]
+    Config { what: String, error: std::io::Error },
 }
 
 /// What an import added and what it left out, with the reason.
@@ -30,7 +30,7 @@ pub struct ImportReport {
     pub skipped: Vec<(String, String)>,
 }
 
-/// Name of the group that imported hosts go into.
+/// Name of the group that hosts imported from `~/.ssh/config` go into.
 pub const IMPORT_GROUP: &str = "SSH config";
 
 /// The saved hosts. Every change is saved before it becomes visible, so a
@@ -166,65 +166,103 @@ impl HostBook {
         self.inventory.lock().await.guard_policy(id)
     }
 
-    /// Adds the hosts `source` defines to the [`IMPORT_GROUP`] group, in one
-    /// save. A host whose alias is already a saved name is skipped, so
-    /// importing twice adds nothing. Aliases sharing an address stay apart:
-    /// they often differ in user or jump host. O(H + n) for n entries.
+    /// Adds the hosts `source` defines to its group (`source.group()`), in
+    /// one save, each in groups for the folder it was kept in. A host whose
+    /// alias is already a saved name is skipped, so importing twice adds
+    /// nothing. Aliases sharing an address stay apart: they often differ in
+    /// user or jump host. O(H + G + n·d) for n entries d folders deep.
     pub async fn import(
         &self,
         source: &dyn SshConfigSource,
     ) -> Result<(ImportReport, Inventory), HostBookError> {
-        let entries = source.hosts().await.map_err(HostBookError::Config)?;
+        let entries = source
+            .hosts()
+            .await
+            .map_err(|error| HostBookError::Config {
+                what: source.what().to_owned(),
+                error,
+            })?;
         let mut ids = Vec::with_capacity(entries.len() + 1);
         for _ in 0..=entries.len() {
             ids.push(self.new_host_id()?);
         }
-        let group_id = self.new_group_id()?;
+        // One id for the import's group and each folder it might make, no
+        // more than the group list has room for.
+        let free_groups = MAX_GROUPS.saturating_sub(self.inventory.lock().await.groups().count());
+        let folders: usize = entries
+            .iter()
+            .map(|e| e.folder.len().min(MAX_FOLDERS))
+            .sum::<usize>()
+            .min(free_groups);
+        let mut group_ids = Vec::with_capacity(folders + 1);
+        for _ in 0..=folders {
+            group_ids.push(self.new_group_id()?);
+        }
+        let name = source.group().to_owned();
         let mut report = ImportReport::default();
         let inventory = self
             .edit(|inventory| {
-                let existing = inventory
+                let mut fresh = group_ids.into_iter();
+                let name = Label::parse(&name)?;
+                // The import's own group is a top-level one: a folder of the
+                // same name, inside another import's group, is not it.
+                let mut root: Option<GroupId> = inventory
                     .groups()
-                    .find(|g| g.name.as_str() == IMPORT_GROUP)
+                    .find(|g| g.parent.is_none() && g.name == name)
                     .map(|g| g.id.clone());
-                let group = if let Some(id) = existing {
-                    id
-                } else {
-                    inventory.put_group(Group {
-                        id: group_id.clone(),
-                        name: Label::parse(IMPORT_GROUP)?,
-                        parent: None,
-                        settings: Settings::default(),
-                    })?;
-                    group_id
-                };
+                let mut made: std::collections::HashMap<Vec<String>, GroupId> =
+                    std::collections::HashMap::new();
                 let mut labels: std::collections::HashSet<String> = inventory
                     .hosts()
                     .map(|h| h.label.as_str().to_owned())
                     .collect();
-                for (entry, id) in entries.into_iter().zip(ids) {
+                for (mut entry, id) in entries.into_iter().zip(ids) {
                     let alias = entry.alias.clone();
                     if let Some(problem) = entry.problem {
                         report.skipped.push((alias, problem));
                         continue;
                     }
-                    match host_from_config(id, entry, &group) {
-                        Ok(host) => {
-                            if !labels.insert(host.label.as_str().to_owned()) {
-                                report.skipped.push((alias, "already saved".into()));
+                    let folder = std::mem::take(&mut entry.folder);
+                    let mut host = match host_from_config(id, entry) {
+                        Ok(host) => host,
+                        Err(reason) => {
+                            report.skipped.push((alias, reason.to_string()));
+                            continue;
+                        }
+                    };
+                    if !labels.insert(host.label.as_str().to_owned()) {
+                        report.skipped.push((alias, "already saved".into()));
+                        continue;
+                    }
+                    // Groups are made for a host that is saved, not before.
+                    if inventory.hosts().count() >= MAX_HOSTS {
+                        report.skipped.push((alias, "the host list is full".into()));
+                        continue;
+                    }
+                    let top = match &root {
+                        Some(found) => found.clone(),
+                        None => match child_group(inventory, None, &name, &mut fresh) {
+                            Ok(id) => root.insert(id).clone(),
+                            Err(HostsError::TooMany) => {
+                                report
+                                    .skipped
+                                    .push((alias, "the group list is full".into()));
                                 continue;
                             }
-                            let id = host.id.clone();
-                            match inventory.put_host(host) {
-                                Ok(()) => report.added.push(id),
-                                // A full list keeps what fit and reports the rest.
-                                Err(HostsError::TooMany) => {
-                                    report.skipped.push((alias, "the host list is full".into()));
-                                }
-                                Err(e) => return Err(e),
-                            }
+                            Err(e) => return Err(e),
+                        },
+                    };
+                    host.group = Some(folder_group(
+                        inventory, &top, &folder, &mut made, &mut fresh,
+                    )?);
+                    let id = host.id.clone();
+                    match inventory.put_host(host) {
+                        Ok(()) => report.added.push(id),
+                        // A full list keeps what fit and reports the rest.
+                        Err(HostsError::TooMany) => {
+                            report.skipped.push((alias, "the host list is full".into()));
                         }
-                        Err(reason) => report.skipped.push((alias, reason.to_string())),
+                        Err(e) => return Err(e),
                     }
                 }
                 Ok(())
@@ -234,11 +272,70 @@ impl HostBook {
     }
 }
 
-fn host_from_config(id: HostId, entry: ConfigHost, group: &GroupId) -> Result<Host, HostsError> {
+/// Folders nest at most this deep inside the import's group, which takes
+/// one level of [`MAX_GROUP_DEPTH`]; deeper ones are cut there.
+const MAX_FOLDERS: usize = MAX_GROUP_DEPTH - 1;
+
+/// The group named `name` under `parent`, made from `fresh` if missing.
+/// O(G).
+fn child_group(
+    inventory: &mut Inventory,
+    parent: Option<&GroupId>,
+    name: &Label,
+    fresh: &mut impl Iterator<Item = GroupId>,
+) -> Result<GroupId, HostsError> {
+    if let Some(found) = inventory
+        .groups()
+        .find(|g| g.parent.as_ref() == parent && g.name == *name)
+    {
+        return Ok(found.id.clone());
+    }
+    let id = fresh.next().ok_or(HostsError::TooMany)?;
+    inventory.put_group(Group {
+        id: id.clone(),
+        name: name.clone(),
+        parent: parent.cloned(),
+        settings: Settings::default(),
+    })?;
+    Ok(id)
+}
+
+/// The group for `folder` inside the top-level `root`, each level found or
+/// made once per import, at most [`MAX_FOLDERS`] deep. A name that is not
+/// a valid label, or a full group list, stops the path there: the host
+/// goes into the deepest folder that is. O(d·G) for a new path.
+fn folder_group(
+    inventory: &mut Inventory,
+    root: &GroupId,
+    folder: &[String],
+    made: &mut std::collections::HashMap<Vec<String>, GroupId>,
+    fresh: &mut impl Iterator<Item = GroupId>,
+) -> Result<GroupId, HostsError> {
+    let mut group = root.clone();
+    for depth in 1..=folder.len().min(MAX_FOLDERS) {
+        let path = &folder[..depth];
+        if let Some(id) = made.get(path) {
+            group = id.clone();
+            continue;
+        }
+        let Ok(name) = Label::parse(&path[depth - 1]) else {
+            break;
+        };
+        group = match child_group(inventory, Some(&group), &name, fresh) {
+            Ok(id) => id,
+            Err(HostsError::TooMany | HostsError::TooDeep) => break,
+            Err(e) => return Err(e),
+        };
+        made.insert(path.to_vec(), group.clone());
+    }
+    Ok(group)
+}
+
+/// A host from an entry, in no group yet.
+fn host_from_config(id: HostId, entry: ConfigHost) -> Result<Host, HostsError> {
     let address = HostName::parse(&entry.hostname)
         .map_err(|e| HostsError::Target(format!("HostName {:?}: {e}", entry.hostname)))?;
     let mut host = Host::new(id, Label::parse(&entry.alias)?, address);
-    host.group = Some(group.clone());
     let settings = &mut host.settings;
     settings.user = entry
         .user

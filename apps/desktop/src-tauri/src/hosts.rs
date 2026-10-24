@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauminus_app::{Forwards, HostBook, HostBookError};
+use tauminus_app::{Forwards, HostBook, HostBookError, ImportReport};
 use tauminus_domain::{
     Encoding, EnvError, EnvVar, Group, GroupId, GuardSettings, Hop, Host, HostId, HostName,
     HostsError, IdentityAgent, IdentityId, Inventory, Label, MAX_ENV, MAX_PATTERNS, Pattern,
@@ -327,8 +327,11 @@ pub(crate) struct SkippedHost {
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ImportResult {
     pub(crate) added: u32,
+    /// How many were skipped; `skipped` lists the first 50.
+    pub(crate) skipped_count: u32,
     pub(crate) skipped: Vec<SkippedHost>,
     pub(crate) view: HostsView,
 }
@@ -337,7 +340,7 @@ impl From<HostBookError> for CommandError {
     fn from(error: HostBookError) -> Self {
         let code = match &error {
             HostBookError::Hosts(_) => ErrorCode::InvalidArgument,
-            HostBookError::Store(_) | HostBookError::Config(_) => ErrorCode::StoreFailed,
+            HostBookError::Store(_) | HostBookError::Config { .. } => ErrorCode::StoreFailed,
         };
         Self::new(code, error.to_string())
     }
@@ -947,15 +950,51 @@ pub(crate) async fn hosts_import_ssh_config(
         )
     })?;
     let (report, inventory) = hosts.book()?.import(config).await?;
-    Ok(ImportResult {
+    Ok(import_result(report, &inventory))
+}
+
+/// Skipped hosts listed to the view, and the longest name or reason shown:
+/// a file may skip thousands, each with text it chose.
+const MAX_SKIPPED: usize = 50;
+const MAX_SKIPPED_TEXT: usize = 128;
+
+/// What an import did, for the view. Past 50 skipped hosts, the rest are
+/// counted, not listed.
+pub(crate) fn import_result(report: ImportReport, inventory: &Inventory) -> ImportResult {
+    let cut = |text: String| -> String {
+        let shown: String = text
+            .chars()
+            .filter(|c| !c.is_control() && !is_bidi_control(*c))
+            .take(MAX_SKIPPED_TEXT)
+            .collect();
+        if text.chars().count() > MAX_SKIPPED_TEXT {
+            format!("{shown}…")
+        } else {
+            shown
+        }
+    };
+    let skipped_count = u32::try_from(report.skipped.len()).unwrap_or(u32::MAX);
+    let skipped: Vec<SkippedHost> = report
+        .skipped
+        .into_iter()
+        .take(MAX_SKIPPED)
+        .map(|(alias, reason)| SkippedHost {
+            alias: cut(alias),
+            reason: cut(reason),
+        })
+        .collect();
+    ImportResult {
         added: u32::try_from(report.added.len()).unwrap_or(u32::MAX),
-        skipped: report
-            .skipped
-            .into_iter()
-            .map(|(alias, reason)| SkippedHost { alias, reason })
-            .collect(),
-        view: view(&inventory),
-    })
+        skipped_count,
+        skipped,
+        view: view(inventory),
+    }
+}
+
+/// Characters that reorder the text around them, so a name could show
+/// as another.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]

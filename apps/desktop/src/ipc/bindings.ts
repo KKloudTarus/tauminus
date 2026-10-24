@@ -240,6 +240,18 @@ export const commands = {
 	 *  are skipped, so importing again adds only new ones.
 	 */
 	hostsImportSshConfig: () => typedError<ImportResult, CommandError>(__TAURI_INVOKE("hosts_import_ssh_config")),
+	/**
+	 *  Imports hosts from `kind`: from the file or folder the user picks, or
+	 *  for [`ImportKind::Putty`] from PuTTY's own store. `None` when the user
+	 *  picked nothing.
+	 */
+	hostsImportFrom: (kind: ImportKind) => typedError<{
+	added: number,
+	/**  How many were skipped; `skipped` lists the first 50. */
+	skippedCount: number,
+	skipped: SkippedHost[],
+	view: HostsView,
+} | null, CommandError>(__TAURI_INVOKE("hosts_import_from", { kind })),
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**
@@ -752,8 +764,26 @@ export type IdentityView = {
 	publicKey: string | null,
 };
 
+/**  Where the hosts come from. */
+export type ImportKind = 
+/**  A CSV host list the user picks. */
+"csv" | 
+/**
+ *  The sessions PuTTY (or KiTTY) keeps on this machine: the registry
+ *  on Windows, `~/.putty/sessions` elsewhere.
+ */
+"putty" | 
+/**  A `.reg` file of PuTTY's sessions `regedit` exported. */
+"puttyExport" | 
+/**  A `MobaXterm.ini` or `.mxtsessions` file the user picks. */
+"mobaXterm" | 
+/**  SecureCRT's `Config` or `Sessions` folder the user picks. */
+"secureCrt";
+
 export type ImportResult = {
 	added: number,
+	/**  How many were skipped; `skipped` lists the first 50. */
+	skippedCount: number,
 	skipped: SkippedHost[],
 	view: HostsView,
 };

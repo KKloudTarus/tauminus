@@ -2,7 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import type { GuardSource } from "@/features/terminal/command-guard.ts";
-import type { GroupInput, HostInput, HostView, HostsClient, HostsView } from "@/ipc/index.ts";
+import type {
+  GroupInput,
+  HostInput,
+  HostView,
+  HostsClient,
+  HostsView,
+  ImportKind,
+  ImportResult,
+} from "@/ipc/index.ts";
 
 export interface HostsState {
   readonly view: HostsView;
@@ -16,6 +24,26 @@ export interface HostsState {
 }
 
 const EMPTY: HostsView = { groups: [], hosts: [] };
+
+/** Each importer's name, as the menu and the notice say it. */
+export const IMPORT_SOURCES: Record<ImportKind, string> = {
+  csv: "a CSV file",
+  putty: "PuTTY",
+  puttyExport: "a PuTTY .reg export",
+  mobaXterm: "MobaXterm",
+  secureCrt: "SecureCRT",
+};
+
+function importNotice(result: ImportResult, from: string): string {
+  const skipped = result.skippedCount;
+  const unlisted = skipped - result.skipped.length;
+  const listed = result.skipped.map((s) => `${s.alias} (${s.reason})`).join(", ");
+  return (
+    `Imported ${result.added} ${result.added === 1 ? "host" : "hosts"} from ${from}` +
+    (skipped > 0 ? `; skipped ${skipped}: ${listed}` : "") +
+    (unlisted > 0 ? `, and ${unlisted} more` : "")
+  );
+}
 
 /**
  * The saved hosts as the UI sees them, outside React. Each change goes to
@@ -102,13 +130,17 @@ export class HostsStore {
 
   async importConfig(): Promise<void> {
     const result = await this.#client.importConfig();
-    const skipped = result.skipped.length;
-    const notice =
-      `Imported ${result.added} ${result.added === 1 ? "host" : "hosts"} from ~/.ssh/config` +
-      (skipped > 0
-        ? `; skipped ${skipped}: ${result.skipped.map((s) => `${s.alias} (${s.reason})`).join(", ")}`
-        : "");
-    this.#setView(result.view, { notice });
+    this.#setView(result.view, { notice: importNotice(result, "~/.ssh/config") });
+  }
+
+  /**
+   * Imports from another client's file, which the backend asks the user
+   * for; picking nothing changes nothing.
+   */
+  async importFrom(kind: ImportKind): Promise<void> {
+    const result = await this.#client.importFrom(kind);
+    if (!result) return;
+    this.#setView(result.view, { notice: importNotice(result, IMPORT_SOURCES[kind] ?? kind) });
   }
 
   /** Shows `text` where import results appear, for example why a host cannot connect. */

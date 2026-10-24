@@ -31,6 +31,7 @@ export {
   type HostView,
   type HostsClient,
   type HostsView,
+  type ImportKind,
   type ImportResult,
   type SettingsSpec,
   tauriHosts,

@@ -37,6 +37,11 @@ export type Action =
   | "ssh.connect"
   | "hosts.toggle"
   | "hosts.import"
+  | "hosts.importPutty"
+  | "hosts.importPuttyExport"
+  | "hosts.importMobaXterm"
+  | "hosts.importSecureCrt"
+  | "hosts.importCsv"
   | "vault.open"
   | "vault.lock"
   | "history.open"
@@ -82,6 +87,11 @@ export const ACTIONS: readonly Action[] = [
   "ssh.connect",
   "hosts.toggle",
   "hosts.import",
+  "hosts.importPutty",
+  "hosts.importPuttyExport",
+  "hosts.importMobaXterm",
+  "hosts.importSecureCrt",
+  "hosts.importCsv",
   "vault.open",
   "vault.lock",
   "history.open",
@@ -133,6 +143,11 @@ const OTHER: Bindings = {
   "ssh.connect": ["ctrl+shift+o"],
   "hosts.toggle": ["ctrl+shift+h"],
   "hosts.import": [],
+  "hosts.importPutty": [],
+  "hosts.importPuttyExport": [],
+  "hosts.importMobaXterm": [],
+  "hosts.importSecureCrt": [],
+  "hosts.importCsv": [],
   "vault.open": [],
   "vault.lock": [],
   "history.open": ["ctrl+shift+r"],
@@ -181,6 +196,11 @@ const MAC: Bindings = {
   "ssh.connect": ["meta+shift+o"],
   "hosts.toggle": ["meta+shift+h"],
   "hosts.import": [],
+  "hosts.importPutty": [],
+  "hosts.importPuttyExport": [],
+  "hosts.importMobaXterm": [],
+  "hosts.importSecureCrt": [],
+  "hosts.importCsv": [],
   "vault.open": [],
   "vault.lock": [],
   "history.open": ["meta+shift+r"],

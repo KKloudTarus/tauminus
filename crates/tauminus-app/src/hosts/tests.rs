@@ -50,6 +50,33 @@ impl SshConfigSource for Config {
     }
 }
 
+/// Another client's sessions, in its own group.
+struct Putty(Vec<ConfigHost>);
+
+impl SshConfigSource for Putty {
+    fn hosts(&self) -> BoxFuture<'_, Result<Vec<ConfigHost>, std::io::Error>> {
+        let hosts = self.0.clone();
+        Box::pin(async move { Ok(hosts) })
+    }
+    fn group(&self) -> &'static str {
+        "PuTTY"
+    }
+    fn what(&self) -> &'static str {
+        "PuTTY's sessions"
+    }
+}
+
+struct Unreadable;
+
+impl SshConfigSource for Unreadable {
+    fn hosts(&self) -> BoxFuture<'_, Result<Vec<ConfigHost>, std::io::Error>> {
+        Box::pin(async { Err(std::io::Error::other("bad file")) })
+    }
+    fn what(&self) -> &'static str {
+        "sessions.ini"
+    }
+}
+
 fn entry(alias: &str, hostname: &str) -> ConfigHost {
     ConfigHost {
         alias: alias.into(),
@@ -245,4 +272,169 @@ async fn imports_agent_forwarding_and_environment() {
             .collect::<Vec<_>>(),
         [("LANG", "C"), ("TEAM", "db")]
     );
+}
+
+#[tokio::test]
+async fn another_client_s_folders_become_groups_in_its_own_group() {
+    let (_, book) = book().await;
+    let in_folder = |alias: &str, folder: &[&str]| ConfigHost {
+        folder: folder.iter().map(|f| (*f).to_owned()).collect(),
+        ..entry(alias, &format!("{alias}.internal"))
+    };
+    let source = Putty(vec![
+        in_folder("web", &["prod", "eu"]),
+        in_folder("db", &["prod", "eu"]),
+        in_folder("cache", &["prod"]),
+        in_folder("lab", &[]),
+        // Not a label: the host stays in the folder above it.
+        in_folder("odd", &["prod", " "]),
+    ]);
+    let (report, inventory) = book.import(&source).await.unwrap();
+    assert_eq!(report.added.len(), 5, "{:?}", report.skipped);
+    let path = |label: &str| {
+        let host = inventory
+            .hosts()
+            .find(|h| h.label.as_str() == label)
+            .unwrap();
+        let mut names = Vec::new();
+        let mut at = host.group.clone();
+        while let Some(id) = at {
+            let group = inventory.groups().find(|g| g.id == id).unwrap();
+            names.insert(0, group.name.as_str().to_owned());
+            at = group.parent.clone();
+        }
+        names.join("/")
+    };
+    assert_eq!(path("web"), "PuTTY/prod/eu");
+    assert_eq!(path("db"), "PuTTY/prod/eu");
+    assert_eq!(path("cache"), "PuTTY/prod");
+    assert_eq!(path("lab"), "PuTTY");
+    assert_eq!(path("odd"), "PuTTY/prod");
+    let groups = inventory.groups().count();
+    assert_eq!(groups, 3, "one group per folder, made once");
+
+    // Again, with a new host in a known folder: the groups are reused.
+    let again = Putty(vec![in_folder("api", &["prod", "eu"])]);
+    let (report, inventory) = book.import(&again).await.unwrap();
+    assert_eq!(report.added.len(), 1);
+    assert_eq!(inventory.groups().count(), groups);
+    assert_eq!(path("web"), "PuTTY/prod/eu");
+}
+
+#[tokio::test]
+async fn a_source_that_cannot_be_read_is_named_in_the_error() {
+    let (_, book) = book().await;
+    let error = book.import(&Unreadable).await.err().unwrap();
+    assert_eq!(error.to_string(), "could not read sessions.ini: bad file");
+}
+
+fn depth_of(inventory: &Inventory, label: &str) -> usize {
+    let host = inventory
+        .hosts()
+        .find(|h| h.label.as_str() == label)
+        .unwrap();
+    let mut depth = 0;
+    let mut at = host.group.clone();
+    while let Some(id) = at {
+        depth += 1;
+        at = inventory
+            .groups()
+            .find(|g| g.id == id)
+            .unwrap()
+            .parent
+            .clone();
+    }
+    depth
+}
+
+#[tokio::test]
+async fn deep_folders_stop_at_the_deepest_group_allowed() {
+    let (_, book) = book().await;
+    let folder: Vec<String> = (0..20).map(|i| format!("f{i}")).collect();
+    let source = Putty(vec![ConfigHost {
+        folder,
+        ..entry("deep", "deep.internal")
+    }]);
+    let (report, inventory) = book.import(&source).await.unwrap();
+    assert_eq!(report.added.len(), 1, "{:?}", report.skipped);
+    assert_eq!(depth_of(&inventory, "deep"), 16);
+}
+
+#[tokio::test]
+async fn a_full_group_list_keeps_every_host_in_the_deepest_group_made() {
+    let (_, book) = book().await;
+    let hosts: Vec<ConfigHost> = (0..1001)
+        .map(|i| ConfigHost {
+            folder: vec![format!("f{i}")],
+            ..entry(&format!("h{i}"), &format!("h{i}.internal"))
+        })
+        .collect();
+    let (report, inventory) = book.import(&Putty(hosts)).await.unwrap();
+    assert_eq!(report.added.len(), 1001, "{:?}", report.skipped.first());
+    assert_eq!(inventory.groups().count(), 1000);
+    // The last host found no room for its folder: it is in PuTTY itself.
+    assert_eq!(depth_of(&inventory, "h1000"), 1);
+}
+
+#[tokio::test]
+async fn a_folder_named_like_another_import_s_group_is_not_taken_for_it() {
+    let (_, book) = book().await;
+    let foreign = Putty(vec![ConfigHost {
+        folder: vec![IMPORT_GROUP.to_owned()],
+        ..entry("a", "a.internal")
+    }]);
+    book.import(&foreign).await.unwrap();
+    let (_, inventory) = book
+        .import(&Config(vec![entry("b", "b.internal")]))
+        .await
+        .unwrap();
+    let b = inventory.hosts().find(|h| h.label.as_str() == "b").unwrap();
+    let group = inventory
+        .groups()
+        .find(|g| Some(&g.id) == b.group.as_ref())
+        .unwrap();
+    assert_eq!(group.name.as_str(), IMPORT_GROUP);
+    assert_eq!(
+        group.parent, None,
+        "the top-level group, not PuTTY's folder"
+    );
+}
+
+#[tokio::test]
+async fn a_skipped_host_makes_no_group() {
+    let (_, book) = book().await;
+    let source = Putty(vec![ConfigHost {
+        folder: vec!["Empty".into()],
+        ..entry("bad", "not a host!")
+    }]);
+    let (report, inventory) = book.import(&source).await.unwrap();
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(inventory.groups().count(), 0);
+}
+
+#[tokio::test]
+async fn a_full_host_list_makes_no_group_for_hosts_it_skips() {
+    let (_, book) = book().await;
+    let fill: Vec<ConfigHost> = (0..MAX_HOSTS - 1)
+        .map(|i| entry(&format!("h{i}"), "h.internal"))
+        .collect();
+    book.import(&Config(fill)).await.unwrap();
+    let in_folder = |alias: &str, folder: &[&str]| ConfigHost {
+        folder: folder.iter().map(|f| (*f).to_owned()).collect(),
+        ..entry(alias, "p.internal")
+    };
+    let (report, inventory) = book
+        .import(&Putty(vec![
+            in_folder("p1", &["A"]),
+            in_folder("p2", &["B", "C"]),
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(report.added.len(), 1);
+    assert_eq!(
+        report.skipped,
+        [("p2".to_owned(), "the host list is full".to_owned())]
+    );
+    let names: Vec<&str> = inventory.groups().map(|g| g.name.as_str()).collect();
+    assert!(!names.contains(&"B") && !names.contains(&"C"), "{names:?}");
 }
