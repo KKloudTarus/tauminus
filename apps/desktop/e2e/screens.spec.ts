@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 // Screenshots of the main screens, light and dark, desktop and phone widths.
-// Opt-in: TAUMINUS_SCREENS=<dir> pnpm e2e screens.spec.ts writes PNGs there.
+// Opt-in: TAUMINUS_SCREENS=<dir> pnpm e2e screens.spec.ts writes PNG files there.
 // They are for review, not pixel assertions.
 
 import { type Page, expect, test } from "@playwright/test";
