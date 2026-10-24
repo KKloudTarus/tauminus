@@ -1310,6 +1310,141 @@ describe("TerminalController putting an AI's command on the line", () => {
   });
 });
 
+/** An SSH pane whose shell marks its prompt, waiting at one. */
+async function marked() {
+  const { sessions, controller } = await running("db.example");
+  const show = async (text: string) => {
+    sessions.events.onOutput(new TextEncoder().encode(text));
+    await new Promise<void>((resolve) => controller.terminal.write("", resolve));
+  };
+  await show("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+  return { sessions, controller, show };
+}
+
+describe("TerminalController completing the command being typed", () => {
+  it("offers what may follow at a marked prompt, and types the rest without Enter", async () => {
+    const { sessions, controller, show } = await marked();
+    await show("git checkou");
+    expect(await controller.complete()).toBe(true);
+    const open = controller.getCompletion();
+    expect(open?.current).toBe("checkou");
+    const names = open?.items.map((item) => item.name) ?? [];
+    expect(names).toContain("checkout");
+    controller.acceptCompletion(names.indexOf("checkout"));
+    expect(controller.getCompletion()).toBeUndefined();
+    await expect.poll(() => writtenTo(sessions)).toBe("t ");
+  });
+
+  it("takes only its own keys while open, and lets any other through", async () => {
+    const { sessions, controller, show } = await marked();
+    controller.focus();
+    await show("systemctl re");
+    expect(await controller.complete()).toBe(true);
+    await userEvent.keyboard("{ArrowDown}");
+    expect(controller.getCompletion()?.selected).toBe(1);
+    await userEvent.keyboard("{Escape}");
+    expect(controller.getCompletion()).toBeUndefined();
+    expect(writtenTo(sessions)).toBe("");
+    expect(await controller.complete()).toBe(true);
+    await userEvent.keyboard("x");
+    expect(controller.getCompletion()).toBeUndefined();
+    await expect.poll(() => writtenTo(sessions)).toBe("x");
+    // Tab takes the selection, and no tab reaches the shell.
+    await show("\r\u001b]133;A\u0007$ \u001b]133;B\u0007systemctl resta");
+    expect(await controller.complete()).toBe(true);
+    await userEvent.keyboard("{Tab}");
+    await expect.poll(() => writtenTo(sessions)).toBe("xrt ");
+  });
+
+  it("types the rest in linked panes too, as the word's start went there", async () => {
+    const { sessions, controller, show } = await marked();
+    const heard: string[] = [];
+    controller.setInputListener((data) => heard.push(data));
+    await show("git checkou");
+    expect(await controller.complete()).toBe(true);
+    controller.acceptCompletion(0);
+    await expect.poll(() => writtenTo(sessions)).toBe("t ");
+    expect(heard).toEqual(["t "]);
+  });
+
+  it("reads the line again when its echo lands while a spec loads", async () => {
+    const { controller, show } = await marked();
+    await show("helm ins");
+    const opening = controller.complete();
+    await show("t");
+    expect(await opening).toBe(true);
+    expect(controller.getCompletion()?.current).toBe("inst");
+  });
+
+  it("lets Enter through to the shell once the list no longer fits the line", async () => {
+    const { sessions, controller, show } = await marked();
+    controller.focus();
+    await show("git checkou");
+    expect(await controller.complete()).toBe(true);
+    await show("\r\n\u001b]133;A\u0007$ \u001b]133;B\u0007git status");
+    await userEvent.keyboard("{Enter}");
+    expect(controller.getCompletion()).toBeUndefined();
+    await expect.poll(() => writtenTo(sessions)).toBe("\r");
+  });
+
+  it("does not start a line at a continuation prompt", async () => {
+    const { controller, show } = await marked();
+    controller.type("git \\\r");
+    await show("git \\\r\n\u001b]133;A;k=s\u0007> \u001b]133;B\u0007ch");
+    expect(await controller.complete()).toBe(false);
+  });
+
+  it("takes nothing once the host has redrawn the line", async () => {
+    const { sessions, controller, show } = await marked();
+    await show("git checkou");
+    expect(await controller.complete()).toBe(true);
+    await show("\r\n\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    controller.acceptCompletion(0);
+    expect(writtenTo(sessions)).toBe("");
+  });
+
+  it("is not at the prompt after Enter, for a shell that sends no C mark", async () => {
+    const { controller, show } = await marked();
+    expect(controller.canInsertCommand).toBe(true);
+    controller.type("mysql\r");
+    expect(controller.canInsertCommand).toBe(false);
+    await show("mysql\r\nmysql> ");
+    expect(await controller.complete()).toBe(false);
+    await show("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    expect(controller.canInsertCommand).toBe(true);
+  });
+
+  it("takes a B mark only after a prompt's A", async () => {
+    const { controller, show } = await marked();
+    controller.type("tail -f log\r");
+    await show("tail -f log\r\n\u001b]133;C\u0007");
+    // A followed log prints a B of its own.
+    await show("planted \u001b]133;B\u0007git checkou");
+    expect(controller.canInsertCommand).toBe(false);
+    expect(await controller.complete()).toBe(false);
+  });
+
+  it("offers nothing where it would guess", async () => {
+    const { controller, show } = await marked();
+    // Text after the cursor.
+    await show("git checkou\u001b[2D");
+    expect(await controller.complete()).toBe(false);
+    // A command running: past the C mark.
+    await show("\u001b[2C\r\n\u001b]133;C\u0007");
+    expect(await controller.complete()).toBe(false);
+    expect(controller.canInsertCommand).toBe(false);
+    // A password prompt at a new prompt's place.
+    await show("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    await show("\r\n[sudo] password for ops: ");
+    expect(await controller.complete()).toBe(false);
+    // A shell that marks nothing.
+    const plain = await running("db.example");
+    plain.sessions.events.onOutput(new TextEncoder().encode("$ git checkou"));
+    await new Promise<void>((resolve) => plain.controller.terminal.write("", resolve));
+    expect(await plain.controller.complete()).toBe(false);
+  });
+});
+
 describe("mostUrgent", () => {
   it("takes the most urgent of a tab's panes", () => {
     expect(mostUrgent([])).toBe("idle");

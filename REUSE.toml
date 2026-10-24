@@ -33,3 +33,11 @@ path = ["CODE_OF_CONDUCT.md"]
 precedence = "override"
 SPDX-FileCopyrightText = "Organization for Ethical Source"
 SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# Command specs converted from withfig/autocomplete, which is MIT; the
+# commit is in specs/UPSTREAM.
+[[annotations]]
+path = ["apps/desktop/src/features/complete/specs/**"]
+precedence = "override"
+SPDX-FileCopyrightText = ["2021 Hercules Labs Inc. (Fig)", "2026 Tauminus contributors"]
+SPDX-License-Identifier = "MIT"

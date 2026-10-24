@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
 
 import { ConnectFailure } from "./ConnectFailure.tsx";
-import type { TerminalController } from "./controller.ts";
+import type { CompletionState, TerminalController } from "./controller.ts";
 import { GuardDialog } from "./GuardDialog.tsx";
 
 interface TerminalViewProps {
@@ -24,6 +24,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
   const guarded = useSyncExternalStore(controller.subscribeGuard, () => controller.guarded);
   const recording = useSyncExternalStore(controller.subscribe, controller.getRecording);
   const fill = useSyncExternalStore(controller.subscribe, controller.getFill);
+  const completion = useSyncExternalStore(controller.subscribe, controller.getCompletion);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -95,6 +96,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
             : `No password typed: ${fill.message}`}
         </p>
       )}
+      {completion && <CompletionList controller={controller} completion={completion} />}
       {fill?.kind === "offer" && (
         <button
           type="button"
@@ -185,5 +187,51 @@ function Reconnecting({
         Stop
       </button>
     </output>
+  );
+}
+
+/**
+ * The completion list, under the cursor's cell. The keys stay in the
+ * terminal, which moves the selection; a click takes an entry.
+ */
+function CompletionList({
+  controller,
+  completion,
+}: {
+  controller: TerminalController;
+  completion: CompletionState;
+}) {
+  const cell = controller.cellSize();
+  return (
+    <ul
+      aria-label="Completions"
+      data-testid="completion"
+      className="absolute z-10 max-h-64 min-w-48 overflow-auto rounded border border-current/20 bg-background py-1 font-mono text-xs shadow-lg"
+      style={{
+        left: Math.max(0, (completion.column - completion.current.length) * cell.width),
+        top: (completion.row + 1) * cell.height,
+      }}
+    >
+      {completion.items.map((item, index) => (
+        <li key={`${item.kind}:${item.name}`}>
+          <button
+            type="button"
+            tabIndex={-1}
+            data-selected={index === completion.selected}
+            className={`flex w-full gap-3 px-2 py-0.5 text-left ${
+              index === completion.selected ? "bg-current/15" : "hover:bg-current/10"
+            }`}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              controller.acceptCompletion(index);
+              controller.focus();
+            }}
+          >
+            <span className="shrink-0">{item.name}</span>
+            {item.description && <span className="truncate opacity-60">{item.description}</span>}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
