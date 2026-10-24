@@ -223,9 +223,10 @@ impl Git {
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
+        // The arguments hold no address: that is in the environment.
         Err(io::Error::other(self.redact(&format!(
             "git {}: {}",
-            args.first().copied().unwrap_or_default(),
+            args.join(" "),
             String::from_utf8_lossy(&out.stderr).trim()
         ))))
     }
