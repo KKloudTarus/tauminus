@@ -162,17 +162,15 @@ async fn the_target_holds_only_ciphertext() {
                 bytes.starts_with(b"TMS1") || bytes.starts_with(b"TMK1"),
                 "{path:?} is not sealed"
             );
-            for secret in [
-                canary,
-                "canary-label-91c",
-                "canary-body-55e",
-                "deploy",
-                "h1",
-            ] {
+            // Long enough that random ciphertext holds none by chance: a
+            // two-byte id would turn up in one object in a few dozen.
+            for secret in [canary, "canary-label-91c", "canary-body-55e"] {
                 assert!(
                     !bytes.windows(secret.len()).any(|w| w == secret.as_bytes()),
                     "{secret} in {path:?}"
                 );
+            }
+            for secret in [canary, "canary-label-91c", "deploy", "h1"] {
                 assert!(
                     !path.to_string_lossy().contains(secret),
                     "{secret} in a name"
