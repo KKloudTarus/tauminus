@@ -236,3 +236,24 @@ test("follows the system theme when the OS switches", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await expect.poll(terminalBackground).toBe("rgb(255, 255, 255)");
 });
+
+for (const [command, name] of [
+  ["Snippets", "Snippets"],
+  ["Highlight sets and triggers", "Highlight sets"],
+  ["Workspaces", "Workspaces"],
+] as const) {
+  test(`a dialog opened from the palette keeps focus: ${name}`, async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("textbox", { name: "Terminal input" })).toBeFocused();
+    await page.keyboard.press("Control+Shift+P");
+    await page.getByPlaceholder("Type a command").fill(command);
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name });
+    await expect(dialog).toBeVisible();
+    // The palette hands focus back to the terminal as it closes; the dialog must win.
+    await page.waitForTimeout(100);
+    expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+  });
+}
