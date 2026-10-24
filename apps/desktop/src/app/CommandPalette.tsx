@@ -23,7 +23,10 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
 
   const run = (action: Action) => {
     shell.setPaletteOpen(false);
-    shell.run(action);
+    // Closing, the palette's focus scope queues a task that focuses what had
+    // focus before it, the terminal. A dialog the action opens focuses itself
+    // on mount, so the action waits one task past that one.
+    setTimeout(() => setTimeout(() => shell.run(action)));
   };
 
   return (
