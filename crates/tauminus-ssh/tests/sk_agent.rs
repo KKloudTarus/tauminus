@@ -46,6 +46,11 @@ fn setup() -> Setup {
 
 /// Logs in with the agent's key that `key` names, and nothing else.
 async fn logs_in_with(key: &str) {
+    logs_in(key, vec![AuthMethod::Agent]).await;
+}
+
+/// Logs in with `methods`, `key` the only identity file.
+async fn logs_in(key: &str, methods: Vec<AuthMethod>) {
     let setup = setup();
     let scratch = Scratch::new(key);
     let connector = RusshConnector::new(
@@ -63,7 +68,7 @@ async fn logs_in_with(key: &str) {
         vec![],
         Route::Direct,
         AuthOptions {
-            methods: vec![AuthMethod::Agent],
+            methods,
             identity_files: vec![setup.keys.join(key)],
             identities_only: true,
         },
@@ -93,4 +98,16 @@ async fn an_ed25519_sk_key_in_the_agent_logs_in() {
 #[ignore = "needs an sshd and an agent holding sk- keys: TAUMINUS_SK_SSHD"]
 async fn an_ecdsa_sk_key_in_the_agent_logs_in() {
     logs_in_with("id_ecdsa-sk").await;
+}
+
+#[tokio::test]
+#[ignore = "needs an sshd and an agent holding sk- keys: TAUMINUS_SK_SSHD"]
+async fn an_sk_key_file_tried_first_leaves_the_agent_to_sign() {
+    // The key file holds no secret: only the security key can sign. With
+    // none to ask, the file's key is not offered, and the agent signs.
+    logs_in(
+        "id_ed25519-sk",
+        vec![AuthMethod::PublicKey, AuthMethod::Agent],
+    )
+    .await;
 }
