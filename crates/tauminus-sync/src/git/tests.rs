@@ -435,6 +435,10 @@ fn git_runs_in_the_clone_whatever_the_environment_names() {
     assert!(args.contains(&format!("--git-dir={}", dir.join(".git").display())));
     assert!(args.contains(&format!("--work-tree={}", dir.display())));
     assert!(args.iter().all(|a| !a.contains("example.com")), "{args:?}");
+    // No gc of git's own choosing, which would drop what a sync needs.
+    for setting in ["gc.auto=0", "maintenance.auto=false"] {
+        assert!(args.iter().any(|a| a == setting), "{setting}");
+    }
 }
 
 #[test]
@@ -495,5 +499,45 @@ fn a_branch_deleted_on_the_remote_starts_again() {
     let name = crate::target::object_name("0123456789abcdef0123456789abcdef", 2);
     git.put_new(&name, b"y").unwrap();
     git.flush().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn a_gc_the_users_settings_ask_for_drops_nothing_a_sync_needs() {
+    if !has_git() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("tauminus-sync-git-gc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // A gc after every fetch, keeping nothing unreachable.
+    let global = root.join("gitconfig");
+    std::fs::write(
+        &global,
+        "[gc]\n\tauto = 1\n\tautoPackLimit = 1\n\tpruneExpire = now\n",
+    )
+    .unwrap();
+    plain_git(&root, &["init", "--quiet", "--bare", "remote.git"]);
+    let url = root.join("remote.git").to_string_lossy().into_owned();
+    let a_git = Arc::new(Git::local(&url, root.join("a-clone"), Some(global.clone())));
+    let b_git = Arc::new(Git::local(&url, root.join("b-clone"), Some(global)));
+    let key = create(a_git.as_ref(), "correct horse", Kdf::LEAST).unwrap();
+    let b_key = join(b_git.as_ref(), "correct horse").unwrap();
+    let a = Remote::new(a_git, key, root.join("a-state.json"));
+    let b = Remote::new(b_git, b_key, root.join("b-state.json"));
+    for round in 0..3 {
+        // Both merge, B publishes first: A's push loses the race.
+        a.merge(data_with(&[("h1", &format!("a-{round}"))]))
+            .await
+            .unwrap();
+        b.merge(data_with(&[("h2", &format!("b-{round}"))]))
+            .await
+            .unwrap();
+        for remote in [&b, &a] {
+            remote.adopt(SyncPart::Hosts).await.unwrap();
+            remote.adopt(SyncPart::Snippets).await.unwrap();
+            remote.publish().await.unwrap();
+        }
+    }
     let _ = std::fs::remove_dir_all(&root);
 }

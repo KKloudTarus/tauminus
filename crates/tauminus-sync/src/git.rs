@@ -181,6 +181,12 @@ impl Git {
             "user.email=sync@tauminus.invalid",
             // No reflog keeps a replaced commit's objects from `prune`.
             "core.logAllRefUpdates=false",
+            // No gc of git's own choosing: with nothing kept, one after a
+            // fetch would drop the commit just fetched, before checkout,
+            // and trees a push that lost a race wrote, which the index
+            // still names. This clone is cleaned after each push instead.
+            "gc.auto=0",
+            "maintenance.auto=false",
             "gc.reflogExpire=now",
             "gc.reflogExpireUnreachable=now",
             "gc.pruneExpire=now",
