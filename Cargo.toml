@@ -21,6 +21,7 @@ tauminus-app = { path = "crates/tauminus-app" }
 tauminus-charset = { path = "crates/tauminus-charset" }
 tauminus-fido = { path = "crates/tauminus-fido" }
 tauminus-import = { path = "crates/tauminus-import" }
+tauminus-sync = { path = "crates/tauminus-sync" }
 tauminus-domain = { path = "crates/tauminus-domain" }
 tauminus-presence = { path = "crates/tauminus-presence" }
 tauminus-serial = { path = "crates/tauminus-serial" }
