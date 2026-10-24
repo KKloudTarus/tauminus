@@ -79,6 +79,24 @@ impl SnippetBook {
         Ok(next)
     }
 
+    /// Replaces the library with `next` if it is still `expected`, and
+    /// saves it, as [`crate::HostBook::replace_if`] does.
+    pub async fn replace_if(
+        &self,
+        expected: &Library,
+        next: Library,
+    ) -> Result<bool, SnippetBookError> {
+        let mut current = self.library.lock().await;
+        if *current != *expected {
+            return Ok(false);
+        }
+        if *current != next {
+            self.store.save(&next).await?;
+            *current = next;
+        }
+        Ok(true)
+    }
+
     /// What to type to run snippet `id` with `values`. O(n + output).
     pub async fn command(
         &self,

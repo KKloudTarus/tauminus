@@ -25,6 +25,7 @@ mod serial;
 mod session;
 mod snippets;
 mod ssh;
+mod sync;
 mod telnet;
 mod tmux;
 mod triggers;
@@ -45,6 +46,7 @@ pub use serial::SerialSessions;
 pub use session::{RECENT_OUTPUT, SessionConfig, SessionError, SessionManager, SessionSlot};
 pub use snippets::{Skipped, SnippetBook, SnippetBookError};
 pub use ssh::{SshOpenError, SshSessions};
+pub use sync::{SyncRunError, Syncer};
 pub use telnet::TelnetSessions;
 pub use tmux::{
     ControlId, Opened, TabWindow, TmuxError, TmuxSessions, TopologyEvent, TopologySink,

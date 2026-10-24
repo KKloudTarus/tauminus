@@ -118,6 +118,25 @@ impl HostBook {
         Ok(next)
     }
 
+    /// Replaces the inventory with `next` if it is still `expected`, and
+    /// saves it: a sync's merge, which must not overwrite an edit made
+    /// while it ran. `false` when the inventory changed meanwhile.
+    pub async fn replace_if(
+        &self,
+        expected: &Inventory,
+        next: Inventory,
+    ) -> Result<bool, HostBookError> {
+        let mut current = self.inventory.lock().await;
+        if *current != *expected {
+            return Ok(false);
+        }
+        if *current != next {
+            self.store.save(&next).await?;
+            *current = next;
+        }
+        Ok(true)
+    }
+
     pub async fn resolve(
         &self,
         id: &HostId,

@@ -299,6 +299,40 @@ pub(crate) fn login(id: &str, address: &str) -> Login {
     }
 }
 
+/// A host list in memory.
+#[derive(Default)]
+pub(crate) struct FakeHostStore {
+    saved: Mutex<Option<tauminus_domain::Inventory>>,
+    ids: AtomicUsize,
+}
+
+impl FakeHostStore {
+    pub(crate) fn saved(&self) -> Option<tauminus_domain::Inventory> {
+        self.saved.lock().unwrap().clone()
+    }
+}
+
+impl crate::ports::HostStore for FakeHostStore {
+    fn load(&self) -> BoxFuture<'_, Result<tauminus_domain::Inventory, crate::ports::StoreError>> {
+        let saved = self.saved().unwrap_or_default();
+        Box::pin(async move { Ok(saved) })
+    }
+
+    fn save<'a>(
+        &'a self,
+        inventory: &'a tauminus_domain::Inventory,
+    ) -> BoxFuture<'a, Result<(), crate::ports::StoreError>> {
+        Box::pin(async move {
+            *self.saved.lock().unwrap() = Some(inventory.clone());
+            Ok(())
+        })
+    }
+
+    fn new_id(&self) -> String {
+        format!("host{}", self.ids.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
 /// A snippet library in memory. `fail_next` makes the next save fail.
 #[derive(Default)]
 pub(crate) struct FakeSnippetStore {
