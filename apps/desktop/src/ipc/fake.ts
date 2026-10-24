@@ -19,7 +19,8 @@ const PROMPT = "$ ";
 
 /**
  * Lines it understands: `echo <text>`, `title <text>`, `exit [code]`,
- * `size`, `later <text>`, which prints after 1 s, `sudo`, which reads a
+ * `size`, `integrate`, after which prompts carry OSC 133 marks,
+ * `later <text>`, which prints after 1 s, `sudo`, which reads a
  * password without echo, `ask <question>`, which waits on the question's
  * line for an answer and prints it, and `drop`, which loses the
  * connection. Ctrl+C drops the line.
@@ -37,12 +38,18 @@ class FakeShell implements TerminalSession {
   #asking = false;
   #size: GridSize;
   #ended = false;
+  /** After `integrate`: prompts carry OSC 133 marks, as bash's integration. */
+  #marked = false;
+
+  get #prompt(): string {
+    return this.#marked ? `\u001b]133;A\u0007${PROMPT}\u001b]133;B\u0007` : PROMPT;
+  }
 
   constructor(id: number, size: GridSize, events: SessionEvents, banner = "") {
     this.id = id;
     this.#size = size;
     this.#events = events;
-    queueMicrotask(() => this.#print(banner + PROMPT));
+    queueMicrotask(() => this.#print(banner + this.#prompt));
   }
 
   async write(data: string): Promise<void> {
@@ -51,19 +58,19 @@ class FakeShell implements TerminalSession {
       if (char === "\r" && this.#secret) {
         this.#secret = false;
         this.#line = "";
-        this.#print(`\r\nsudo: ok\r\n${PROMPT}`);
+        this.#print(`\r\nsudo: ok\r\n${this.#prompt}`);
       } else if (char === "\r" && this.#asking) {
         this.#asking = false;
-        this.#print(`\r\nanswer: ${this.#line}\r\n${PROMPT}`);
+        this.#print(`\r\nanswer: ${this.#line}\r\n${this.#prompt}`);
         this.#line = "";
       } else if (char === "\r") {
-        this.#print("\r\n");
+        this.#print(this.#marked ? "\r\n\u001b]133;C\u0007" : "\r\n");
         this.#run(this.#line.trim());
         this.#line = "";
       } else if (char === "\u0003") {
         // As a shell does: drop the line and show a new prompt.
         this.#line = "";
-        this.#print(`^C\r\n${PROMPT}`);
+        this.#print(`^C\r\n${this.#prompt}`);
       } else if (char === "\u007f") {
         if (this.#line.length > 0) {
           this.#line = this.#line.slice(0, -1);
@@ -106,7 +113,7 @@ class FakeShell implements TerminalSession {
         return;
       case "later":
         // Output that arrives a moment after the command, as from a build.
-        setTimeout(() => this.#print(`${argument}\r\n${PROMPT}`), 1000);
+        setTimeout(() => this.#print(`${argument}\r\n${this.#prompt}`), 1000);
         return;
       case "echo":
         this.#print(`${argument}\r\n`);
@@ -114,6 +121,9 @@ class FakeShell implements TerminalSession {
       case "fail":
         // Reports its exit status as shells with OSC 133 integration do.
         this.#print(`failed: ${argument}\r\n\u001b]133;D;2\u0007`);
+        break;
+      case "integrate":
+        this.#marked = true;
         break;
       case "title":
         this.#print(`\u001b]0;${argument}\u0007`);
@@ -131,7 +141,7 @@ class FakeShell implements TerminalSession {
       default:
         this.#print(`${command}: command not found\r\n`);
     }
-    this.#print(PROMPT);
+    this.#print(this.#prompt);
   }
 
   #print(text: string) {

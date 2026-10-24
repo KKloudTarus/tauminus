@@ -55,7 +55,8 @@ export type Action =
   | "terminal.fillPassword"
   | "ai.ask"
   | "ai.explain"
-  | "ai.settings";
+  | "ai.settings"
+  | "terminal.complete";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -98,6 +99,7 @@ export const ACTIONS: readonly Action[] = [
   "ai.ask",
   "ai.explain",
   "ai.settings",
+  "terminal.complete",
 ];
 
 export type Platform = "mac" | "other";
@@ -146,6 +148,8 @@ const OTHER: Bindings = {
   "ai.ask": [],
   "ai.explain": [],
   "ai.settings": [],
+  // Not Ctrl+Space, which sends NUL (set-mark in Emacs keys); never Tab.
+  "terminal.complete": ["ctrl+shift+space"],
 };
 
 const MAC: Bindings = {
@@ -190,6 +194,8 @@ const MAC: Bindings = {
   "ai.ask": [],
   "ai.explain": [],
   "ai.settings": [],
+  // Not Ctrl+Space, which sends NUL (set-mark in Emacs keys); never Tab.
+  "terminal.complete": ["ctrl+shift+space"],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

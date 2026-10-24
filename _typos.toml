@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [files]
-extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/", "crates/tauminus-ssh/tests/fixtures/"]
+extend-exclude = ["LICENSE", "LICENSES/", "Cargo.lock", "pnpm-lock.yaml", "*.svg", "apps/desktop/src-tauri/icons/", "apps/desktop/src-tauri/gen/", "crates/tauminus-ssh/tests/fixtures/", "apps/desktop/src/features/complete/specs/"]
 
 [default.extend-words]
 # mke2fs, the ext2/3/4 formatter

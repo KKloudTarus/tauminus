@@ -102,6 +102,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "ai.ask": "Ask AI for a command",
   "ai.explain": "Explain this pane's output with AI",
   "ai.settings": "AI assistant settings",
+  "terminal.complete": "Complete the command being typed",
 };
 
 export interface AssistantOpen {
@@ -1197,6 +1198,9 @@ export class AppShell {
         return;
       case "ai.settings":
         this.openAssistant("settings");
+        return;
+      case "terminal.complete":
+        void this.#activeController()?.complete();
         return;
       case "broadcast.off":
         this.broadcast.clear();

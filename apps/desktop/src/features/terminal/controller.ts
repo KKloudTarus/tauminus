@@ -36,6 +36,9 @@ import {
 } from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
 import { ShellMarks } from "./shell-marks.ts";
+import { type Suggestion, suggest } from "@/features/complete/match.ts";
+import { COMMANDS, loadSpec } from "@/features/complete/specs.ts";
+import { tokenize } from "@/features/complete/tokenize.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
@@ -46,6 +49,18 @@ import { hardenParser } from "./repeat-guard.ts";
 import { TextareaPin } from "./textarea-pin.ts";
 import { webglBudget } from "./webgl-budget.ts";
 import { type HighlightSource, Highlighter } from "./highlighter.ts";
+
+/** The completion list a pane shows, at the cursor's cell. */
+export interface CompletionState {
+  items: Suggestion[];
+  /** The line as it was read when the list opened. */
+  line: string;
+  selected: number;
+  /** The word being completed, as typed. */
+  current: string;
+  column: number;
+  row: number;
+}
 
 /** What a pane shows about filling a password; see `TerminalController.getFill`. */
 export type FillState =
@@ -248,6 +263,7 @@ export class TerminalController {
   #inserting = false;
   /** What the shell's OSC 133 marks say. */
   readonly #marks: ShellMarks;
+  #completion: CompletionState | undefined;
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
@@ -447,6 +463,10 @@ export class TerminalController {
       () => this.terminal.registerMarker(0),
       () => this.terminal.buffer.active.cursorX,
     );
+    // The completion list's keys, until the app adds its own shortcuts.
+    this.setKeyHandler(() => false);
+    // Its place is a cell, which a resize moves.
+    this.terminal.onResize(() => this.#closeCompletion());
     this.terminal.parser.registerOscHandler(133, (data) => {
       this.#marks.handle(data);
       this.#recorder?.shellMark(data);
@@ -462,6 +482,7 @@ export class TerminalController {
     globalThis.addEventListener?.("online", this.#onWake);
     globalThis.addEventListener?.("focus", this.#onWake);
     this.terminal.onData((raw) => {
+      this.#closeCompletion();
       const data = defusePaste(raw);
       this.#noteTyping(data);
       this.#checkFill();
@@ -686,11 +707,141 @@ export class TerminalController {
   }
 
   /**
+   * Opens the completion list for the word being typed, from the command
+   * specs: only where the shell marks its prompt (OSC 133) and waits at
+   * it, on the normal screen, not at a password prompt, with the cursor at
+   * the end of the line. `false` when there is nothing to offer.
+   */
+  async complete(): Promise<boolean> {
+    let line = this.#typedLine();
+    let typed = tokenize(line ?? "");
+    let items: Suggestion[] = [];
+    // The echo of the last keys may land while a spec loads: read again,
+    // a few times, until the line holds still.
+    for (let tries = 0; line !== undefined && tries < 3; tries += 1) {
+      typed = tokenize(line);
+      // oxlint-disable-next-line no-await-in-loop -- each try reads the line it waited for
+      items = await suggest(typed, COMMANDS, loadSpec);
+      const now = this.#typedLine();
+      if (now === line) break;
+      line = now;
+      items = [];
+    }
+    if (this.#disposed || line === undefined || items.length === 0) {
+      this.#closeCompletion();
+      return false;
+    }
+    const buffer = this.terminal.buffer.active;
+    this.#completion = {
+      items,
+      line,
+      selected: 0,
+      current: typed.current,
+      column: buffer.cursorX,
+      row: buffer.cursorY,
+    };
+    this.#notify();
+    return true;
+  }
+
+  /** The completion list showing, if any. For `useSyncExternalStore`. */
+  getCompletion = (): CompletionState | undefined => this.#completion;
+
+  /** Types the rest of suggestion `index`, and a space, without Enter. */
+  acceptCompletion(index?: number): void {
+    const open = this.#completion;
+    const item = open?.items[index ?? open.selected];
+    this.#closeCompletion();
+    if (!open || !item || !item.name.startsWith(open.current)) return;
+    // The host may have redrawn the line, or asked something else, since.
+    if (this.#typedLine() !== open.line) return;
+    const rest = `${item.name.slice(open.current.length)} `;
+    // oxlint-disable-next-line no-control-regex -- control characters are what it refuses
+    if (/[\u0000-\u001f\u007f-\u009f]/u.test(rest)) return;
+    // As if typed: panes typing together get it too, as they got the rest
+    // of the word.
+    this.#onInput?.(rest);
+    this.type(rest);
+  }
+
+  /** A cell's size on screen, in CSS pixels, to place the list at the cursor. */
+  cellSize(): { width: number; height: number } {
+    const screen = this.terminal.element?.querySelector(".xterm-screen");
+    const width = screen ? screen.clientWidth / this.terminal.cols : 0;
+    const height = screen ? screen.clientHeight / this.terminal.rows : 0;
+    return { width, height };
+  }
+
+  /**
    * Keys on their way to the shell, past the guard: a line sent leaves the
    * prompt until the shell marks another, for a shell that sends no C mark.
    */
   #sent(data: string): void {
     if (/[\r\n]/u.test(data)) this.#marks.submitted();
+  }
+
+  #closeCompletion(): void {
+    if (!this.#completion) return;
+    this.#completion = undefined;
+    this.#notify();
+  }
+
+  /** The keys the list takes while it shows; `true` when one was taken. */
+  #completionKey(event: KeyboardEvent): boolean {
+    const open = this.#completion;
+    if (!open) return false;
+    if (["Shift", "Control", "Alt", "Meta"].includes(event.key)) return false;
+    const plain = !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+    if (plain && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      const count = open.items.length;
+      this.#completion = { ...open, selected: (open.selected + step + count) % count };
+      this.#notify();
+      event.preventDefault();
+      return true;
+    }
+    if (plain && (event.key === "Enter" || event.key === "Tab")) {
+      // The line moved on since the list opened: the key is the shell's.
+      if (this.#typedLine() !== open.line) {
+        this.#closeCompletion();
+        return false;
+      }
+      event.preventDefault();
+      this.acceptCompletion();
+      return true;
+    }
+    if (plain && event.key === "Escape") {
+      event.preventDefault();
+      this.#closeCompletion();
+      return true;
+    }
+    // Anything else closes the list and goes to the shell as it would.
+    this.#closeCompletion();
+    return false;
+  }
+
+  /**
+   * The command line typed so far, from where the shell said input starts
+   * to the cursor, when the cursor ends it; `undefined` when completing
+   * would guess.
+   */
+  #typedLine(): string | undefined {
+    const screen = this.terminal.buffer.active;
+    const input = this.#marks.input;
+    if (screen.type === "alternate" || !input || this.atSecretPrompt) return undefined;
+    const row = screen.baseY + screen.cursorY;
+    if (input.line > row || row - input.line > 16) return undefined;
+    let text = "";
+    for (let y = input.line; y <= row; y += 1) {
+      const line = screen.getLine(y);
+      if (!line) return undefined;
+      if (y > input.line && !line.isWrapped) return undefined;
+      const from = y === input.line ? input.x : 0;
+      const to = y === row ? screen.cursorX : this.terminal.cols;
+      if (y === row && line.translateToString(true, to).trim() !== "") return undefined;
+      text += line.translateToString(false, from, to);
+    }
+    return text;
   }
 
   /**
@@ -1065,7 +1216,7 @@ export class TerminalController {
    */
   setKeyHandler(handle: (event: KeyboardEvent) => boolean): void {
     this.terminal.attachCustomKeyEventHandler(
-      (event) => !(event.type === "keydown" && handle(event)),
+      (event) => !(event.type === "keydown" && (this.#completionKey(event) || handle(event))),
     );
   }
 
