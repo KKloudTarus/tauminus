@@ -16,7 +16,7 @@ use support::*;
 use tauminus_app::ports::{
     Answer, ConnectError, Prompt, Prompter, SshConnector, TerminalEvent, TerminalInput,
 };
-use tauminus_domain::{AuthMethod, AuthOptions, Route, TerminalSize};
+use tauminus_domain::{AuthMethod, AuthOptions, IdentityAgent, Route, TerminalSize};
 use tauminus_ssh::{AgentSource, HostKeyStore, RusshConnector};
 
 struct Client {
@@ -282,6 +282,7 @@ async fn unauthorized_key_reports_what_was_tried() {
         methods: vec![AuthMethod::PublicKey, AuthMethod::Password],
         identity_files: vec![key],
         identities_only: true,
+        identity_agent: None,
     };
     let target = target(sshd.endpoint(), vec![], Route::Direct, options);
     let error = client
@@ -299,11 +300,41 @@ async fn unauthorized_key_reports_what_was_tried() {
 
 #[tokio::test]
 async fn agent_keys_log_in() {
+    agent_key_logs_in(&["-t", "ed25519"], false).await;
+}
+
+/// The key types an agent holding hardware keys serves: Secretive's
+/// Secure Enclave keys are `ecdsa-sha2-nistp256`.
+#[tokio::test]
+async fn agent_ecdsa_and_rsa_keys_log_in() {
+    agent_key_logs_in(&["-t", "ecdsa", "-b", "256"], false).await;
+    agent_key_logs_in(&["-t", "ecdsa", "-b", "384"], false).await;
+    agent_key_logs_in(&["-t", "rsa", "-b", "3072"], false).await;
+}
+
+/// Secretive's setup: `IdentityFile` names the public key, the private
+/// half is only in the agent, and `IdentitiesOnly` picks that one key.
+#[tokio::test]
+async fn an_identity_file_that_is_a_public_key_picks_the_agent_key() {
+    agent_key_logs_in(&["-t", "ecdsa", "-b", "256"], true).await;
+}
+
+/// Logs in with a key of `kind` that only an agent holds. `public_only`:
+/// with `IdentitiesOnly` and the key's `.pub` file as the identity file,
+/// after a decoy key in the agent the server does not take.
+async fn agent_key_logs_in(kind: &[&str], public_only: bool) {
     let Some(sshd_bin) = sshd_binary() else {
         return;
     };
     let client = Client::new("");
-    let key = client.user_key("id", "");
+    let mut args = vec!["-q", "-N", "", "-f", "id"];
+    args.extend_from_slice(kind);
+    keygen(&client.scratch.0, &args);
+    let key = client.scratch.path("id");
+    keygen(
+        &client.scratch.0,
+        &["-q", "-t", "ed25519", "-N", "", "-f", "decoy"],
+    );
     let socket = client.scratch.path("agent.sock");
     let mut agent = std::process::Command::new("ssh-agent")
         .args(["-D", "-a"])
@@ -317,33 +348,57 @@ async fn agent_keys_log_in() {
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    let added = std::process::Command::new("ssh-add")
-        .arg(&key)
-        .env("SSH_AUTH_SOCK", &socket)
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(added.success());
-    std::fs::remove_file(&key).unwrap(); // only the agent has the key now
+    // The decoy goes first: under `IdentitiesOnly` it must be passed over.
+    for added in [client.scratch.path("decoy"), key.clone()] {
+        let status = std::process::Command::new("ssh-add")
+            .arg(&added)
+            .env("SSH_AUTH_SOCK", &socket)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::remove_file(&added).unwrap(); // only the agent has it now
+    }
 
     let sshd = Sshd::start(
         &sshd_bin,
         &[&client.scratch.path("id.pub")],
         None,
-        SshdOptions::default(),
+        // One try: the decoy offered first would end the sign-in.
+        SshdOptions {
+            extra: if public_only {
+                vec!["MaxAuthTries 1".into()]
+            } else {
+                vec![]
+            },
+            ..SshdOptions::default()
+        },
     );
-    let client = client.with_agent(socket);
-    let options = AuthOptions {
-        methods: vec![AuthMethod::Agent],
-        identity_files: vec![],
-        identities_only: false,
+    let public = client.scratch.path("id.pub");
+    // Secretive's agent is the host's `IdentityAgent`; the app has none.
+    let (client, options) = if public_only {
+        let options = AuthOptions {
+            methods: vec![AuthMethod::Agent, AuthMethod::PublicKey],
+            identity_files: vec![public],
+            identities_only: true,
+            identity_agent: Some(IdentityAgent::Path(socket)),
+        };
+        (client, options)
+    } else {
+        let options = AuthOptions {
+            methods: vec![AuthMethod::Agent],
+            identity_files: vec![],
+            identities_only: false,
+            identity_agent: None,
+        };
+        (client.with_agent(socket), options)
     };
     let target = target(sshd.endpoint(), vec![], Route::Direct, options);
     let mut stream = client
         .connector
         .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{kind:?}: {e}"));
     let (_, code) = run_shell(&mut stream, "exit 0\n").await;
     assert_eq!(code, Some(0));
     let _ = agent.kill();
@@ -721,6 +776,213 @@ async fn an_abandoned_connect_never_records_the_key_it_was_asking_about() {
     );
 }
 
+/// `IdentityAgent none` turns off the app's agent for that host.
+#[tokio::test]
+async fn identity_agent_none_turns_the_agent_off() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &key).await;
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let client = client.with_agent(socket);
+    for (named, signs) in [(None, true), (Some(IdentityAgent::None), false)] {
+        let options = AuthOptions {
+            methods: vec![AuthMethod::Agent],
+            identity_files: vec![],
+            identities_only: false,
+            identity_agent: named.clone(),
+        };
+        let target = target(sshd.endpoint(), vec![], Route::Direct, options);
+        let result = client
+            .connector
+            .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+            .await;
+        assert_eq!(result.is_ok(), signs, "{named:?}");
+    }
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+/// `IdentityAgent none` forwards nothing, though the app has an agent and
+/// forwarding is on; a key file signs the login.
+#[tokio::test]
+async fn identity_agent_none_forwards_nothing() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let login = client.user_key("login", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &key).await;
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[
+            &client.scratch.path("id.pub"),
+            &client.scratch.path("login.pub"),
+        ],
+        None,
+        SshdOptions::default(),
+    );
+    let client = client.with_agent(socket);
+    let options = AuthOptions {
+        methods: vec![AuthMethod::Agent, AuthMethod::PublicKey],
+        identity_files: vec![login],
+        identities_only: true,
+        identity_agent: Some(IdentityAgent::None),
+    };
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, options);
+    target.session.forward_agent = true;
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    // `ssh-add -l` exits 2 with no agent to ask.
+    let (output, code) = run_shell(&mut stream, "ssh-add -l; exit $?\n").await;
+    assert_eq!(code, Some(2), "{output}");
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+/// A jump host signs with the host's agent too, as `ssh -J` does.
+#[tokio::test]
+async fn a_jump_host_signs_with_the_host_s_agent() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &key).await;
+    let public = client.scratch.path("id.pub");
+    let bastion = Sshd::start(&sshd_bin, &[&public], None, SshdOptions::default());
+    let inner = Sshd::start(&sshd_bin, &[&public], None, SshdOptions::default());
+    // The app has no agent; the host names one.
+    let options = AuthOptions {
+        methods: vec![AuthMethod::Agent],
+        identity_files: vec![],
+        identities_only: false,
+        identity_agent: Some(IdentityAgent::Path(socket)),
+    };
+    let target = target(
+        inner.endpoint(),
+        vec![bastion.endpoint()],
+        Route::Direct,
+        options,
+    );
+    let answers = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: true },
+        Answer::TrustHostKey { remember: true },
+    ]);
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&answers))
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let (_, code) = run_shell(&mut stream, "exit 0\n").await;
+    assert_eq!(code, Some(0));
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+/// Through the forwarded agent the server lists keys and gets a
+/// signature, as `git` and `ssh` there need; adding a key is refused.
+#[tokio::test]
+async fn a_forwarded_agent_lists_and_signs_but_takes_no_keys() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    let (mut agent, socket) = start_agent(&client.scratch.0, &key).await;
+    let extra = client.user_key("extra", "");
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let public = client.scratch.path("id.pub");
+    let client = client.with_agent(socket);
+    let options = AuthOptions {
+        methods: vec![AuthMethod::Agent],
+        identity_files: vec![],
+        identities_only: false,
+        identity_agent: None,
+    };
+    let mut target = target(sshd.endpoint(), vec![], Route::Direct, options);
+    target.session.forward_agent = true;
+    let mut stream = client
+        .connector
+        .connect(&target, SIZE(), prompter(&ScriptedPrompter::trust()))
+        .await
+        .unwrap();
+    let script = format!(
+        "ssh-add -l | wc -l; echo data | ssh-keygen -Y sign -n file -f {} 2>/dev/null | head -1; \
+         ssh-add {} 2>/dev/null; echo added=$?; exit 0\n",
+        public.display(),
+        extra.display()
+    );
+    let (output, code) = run_shell(&mut stream, &script).await;
+    assert_eq!(code, Some(0), "{output}");
+    assert!(output.contains("-----BEGIN SSH SIGNATURE-----"), "{output}");
+    assert!(!output.contains("added=0"), "{output}");
+    let _ = agent.kill();
+    let _ = agent.wait();
+}
+
+/// With no agent, a public key as the identity file has nothing to sign
+/// with: it is not offered, and no passphrase is asked for it.
+#[tokio::test]
+async fn a_public_key_identity_file_with_no_agent_is_passed_over() {
+    let Some(sshd_bin) = sshd_binary() else {
+        return;
+    };
+    let client = Client::new("");
+    let key = client.user_key("id", "");
+    std::fs::remove_file(&key).unwrap();
+    let sshd = Sshd::start(
+        &sshd_bin,
+        &[&client.scratch.path("id.pub")],
+        None,
+        SshdOptions::default(),
+    );
+    let options = AuthOptions {
+        methods: vec![AuthMethod::PublicKey],
+        identity_files: vec![client.scratch.path("id.pub")],
+        identities_only: true,
+        identity_agent: None,
+    };
+    let target = target(sshd.endpoint(), vec![], Route::Direct, options);
+    let asked = ScriptedPrompter::trust();
+    let error = client
+        .connector
+        .connect(&target, SIZE(), prompter(&asked))
+        .await
+        .err()
+        .unwrap();
+    assert!(
+        matches!(&error, ConnectError::AuthFailed { tried, .. } if tried.is_empty()),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains("with nothing to offer"),
+        "{error}"
+    );
+    assert!(
+        !asked
+            .asked()
+            .iter()
+            .any(|p| matches!(p, Prompt::Passphrase { .. }))
+    );
+}
+
 #[tokio::test]
 async fn identities_only_with_no_files_uses_the_default_key_names() {
     let Some(sshd_bin) = sshd_binary() else {
@@ -743,6 +1005,7 @@ async fn identities_only_with_no_files_uses_the_default_key_names() {
         methods: vec![AuthMethod::PublicKey],
         identity_files: vec![],
         identities_only: true,
+        identity_agent: None,
     };
     let target = target(sshd.endpoint(), vec![], Route::Direct, options);
     let mut stream = client
@@ -803,6 +1066,7 @@ async fn the_agent_reaches_the_server_only_when_forwarding_is_on() {
         methods: vec![AuthMethod::Agent],
         identity_files: vec![],
         identities_only: false,
+        identity_agent: None,
     };
     for forward in [true, false] {
         let mut target = target(sshd.endpoint(), vec![], Route::Direct, options.clone());
@@ -997,6 +1261,7 @@ async fn an_identity_key_logs_in_from_memory_without_prompts() {
             methods: vec![AuthMethod::PublicKey],
             identity_files: vec![client.scratch.path("absent")],
             identities_only: true,
+            identity_agent: None,
         };
         let target = target(sshd.endpoint(), vec![], Route::Direct, options);
         let asked = ScriptedPrompter::trust();
@@ -1052,6 +1317,7 @@ async fn the_identity_key_goes_before_an_agent_full_of_other_keys() {
         methods: vec![AuthMethod::Agent, AuthMethod::PublicKey],
         identity_files: vec![],
         identities_only: false,
+        identity_agent: None,
     };
     let target = target(sshd.endpoint(), vec![], Route::Direct, options);
     let mut stream = client
@@ -1088,6 +1354,7 @@ async fn a_jump_host_never_gets_the_identity() {
         methods: vec![AuthMethod::PublicKey],
         identity_files: vec![client.scratch.path("absent")],
         identities_only: true,
+        identity_agent: None,
     };
     let target = target(
         inner.endpoint(),
@@ -1167,6 +1434,7 @@ async fn a_generated_key_installed_by_script_then_logs_in() {
             methods: vec![AuthMethod::PublicKey],
             identity_files: vec![client.scratch.path("absent")],
             identities_only: true,
+            identity_agent: None,
         };
         let only_new = target(sshd.endpoint(), vec![], Route::Direct, options);
         let mut stream = client

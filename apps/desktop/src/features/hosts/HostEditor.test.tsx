@@ -36,6 +36,14 @@ describe("withEdits", () => {
       jumps: ["a", "b"],
     });
     expect(withEdits({}, { user: "", port: "", jumps: "a", direct: true }).jumps).toEqual([]);
+    // A blank agent inherits; one not shown keeps what was set.
+    const base = { identityAgent: "none" };
+    const fields = { user: "", port: "", jumps: "" };
+    expect(withEdits(base, { ...fields, identityAgent: " " }).identityAgent).toBeNull();
+    expect(withEdits(base, { ...fields, identityAgent: " ~/a.sock " }).identityAgent).toBe(
+      "~/a.sock",
+    );
+    expect(withEdits(base, fields).identityAgent).toBe("none");
   });
 });
 
@@ -217,11 +225,13 @@ describe("EditorDialog", () => {
     );
     await expect.element(screen.getByText(/Connects through ProxyCommand nc %h %p/)).toBeVisible();
     await screen.getByLabelText("Port").fill("2200");
+    await screen.getByLabelText(/Agent socket/).fill("~/secretive/socket.ssh");
     await screen.getByRole("button", { name: "Save" }).click();
     await expect.poll(() => closed).toBe(true);
     const saved = store.getSnapshot().view.hosts[0]!;
     expect(saved.settings).toMatchObject({
       port: 2200,
+      identityAgent: "~/secretive/socket.ssh",
       route: { kind: "proxyCommand", command: "nc %h %p" },
       methods: ["agent"],
     });

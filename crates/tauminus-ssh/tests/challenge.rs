@@ -274,6 +274,7 @@ fn target(port: u16, methods: Vec<AuthMethod>) -> SshTarget {
         methods,
         identity_files: vec![],
         identities_only: true,
+        identity_agent: None,
     };
     SshTarget::new(destination, vec![], Route::Direct, auth).unwrap()
 }

@@ -13,7 +13,9 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::{Answer, BoxFuture, ConnectError, Credentials, Prompt, Prompter};
 use tauminus_app::{Forwards, Login, LoginError, SshOpenError, SshSessions};
-use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, HostName, Route, SshTarget, UserName};
+use tauminus_domain::{
+    AuthMethod, AuthOptions, Endpoint, HostName, IdentityAgent, Route, SshTarget, UserName,
+};
 use tauri::State;
 use tauri::ipc::Channel;
 use tokio::sync::oneshot;
@@ -148,6 +150,11 @@ impl From<&SshTarget> for SshTargetSpec {
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect(),
             identities_only: target.auth.identities_only,
+            identity_agent: target
+                .auth
+                .identity_agent
+                .as_ref()
+                .map(IdentityAgent::to_config),
         }
     }
 }
@@ -178,6 +185,10 @@ pub(crate) struct SshTargetSpec {
     pub(crate) identity_files: Vec<String>,
     #[serde(default)]
     pub(crate) identities_only: bool,
+    /// `IdentityAgent`: `none`, `SSH_AUTH_SOCK` or a socket path; absent
+    /// is the app's default agent.
+    #[serde(default)]
+    pub(crate) identity_agent: Option<String>,
 }
 
 /// Most auth methods a target can list; there are four kinds.
@@ -226,6 +237,11 @@ impl TryFrom<SshTargetSpec> for SshTarget {
         }
         auth.identity_files = spec.identity_files.into_iter().map(PathBuf::from).collect();
         auth.identities_only = spec.identities_only;
+        auth.identity_agent = spec
+            .identity_agent
+            .map(|a| IdentityAgent::parse(&a))
+            .transpose()
+            .map_err(invalid)?;
         let jumps = spec
             .jumps
             .into_iter()

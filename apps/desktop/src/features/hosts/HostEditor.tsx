@@ -49,7 +49,14 @@ function port(text: string): number | null | undefined {
  */
 export function withEdits(
   base: SettingsSpec,
-  fields: { user: string; port: string; jumps: string; direct?: boolean; identityFiles?: string },
+  fields: {
+    user: string;
+    port: string;
+    jumps: string;
+    direct?: boolean;
+    identityFiles?: string;
+    identityAgent?: string;
+  },
 ): SettingsSpec {
   const settings: SettingsSpec = { ...base };
   settings.user = fields.user.trim() || null;
@@ -57,6 +64,8 @@ export function withEdits(
   settings.jumps = fields.direct ? [] : (list(fields.jumps) ?? null);
   if (fields.identityFiles !== undefined)
     settings.identityFiles = list(fields.identityFiles) ?? null;
+  if (fields.identityAgent !== undefined)
+    settings.identityAgent = fields.identityAgent.trim() || null;
   return settings;
 }
 
@@ -314,6 +323,7 @@ function HostForm({
   const [identityFiles, setIdentityFiles] = useState(
     host?.settings.identityFiles?.join(", ") ?? "",
   );
+  const [identityAgent, setIdentityAgent] = useState(host?.settings.identityAgent ?? "");
   const [guard, setGuard] = useState(() => guardFields(host?.settings.guard));
   const [session, setSession] = useState(() => sessionFields(host?.settings));
   const [rules, setRules] = useState(() => (host?.forwards ?? []).map(ruleRow));
@@ -354,6 +364,7 @@ function HostForm({
               jumps,
               direct,
               identityFiles,
+              identityAgent,
             }),
             guard,
           ),
@@ -493,6 +504,15 @@ function HostForm({
           value={identityFiles}
           onChange={(e) => setIdentityFiles(e.target.value)}
           placeholder="~/.ssh/id_work"
+          spellCheck={false}
+          className={`${FIELD} font-mono`}
+        />
+      </Field>
+      <Field label="Agent socket (IdentityAgent; blank inherits, else the default agent; none turns it off)">
+        <input
+          value={identityAgent}
+          onChange={(e) => setIdentityAgent(e.target.value)}
+          placeholder="~/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
           spellCheck={false}
           className={`${FIELD} font-mono`}
         />

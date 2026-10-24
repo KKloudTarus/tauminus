@@ -261,6 +261,7 @@ pub(crate) fn resolve(items: &[Item], alias: &str) -> ConfigHost {
         hostname: None,
         identities_only: None,
         forward_agent_seen: false,
+        identity_agent_seen: false,
         set_env_seen: false,
         in_condition: false,
         unsure: false,
@@ -309,6 +310,7 @@ struct Resolving {
     hostname: Option<String>,
     identities_only: Option<bool>,
     forward_agent_seen: bool,
+    identity_agent_seen: bool,
     set_env_seen: bool,
     /// Inside a `Match` block other than `Match all`.
     in_condition: bool,
@@ -379,6 +381,10 @@ impl Resolving {
                 {
                     host.identity_files.push(file);
                 }
+            }
+            "identityagent" if !self.identity_agent_seen => {
+                self.identity_agent_seen = true;
+                host.identity_agent = first.map(str::to_owned);
             }
             "identitiesonly" if self.identities_only.is_none() => {
                 self.identities_only = first.map(|v| v.eq_ignore_ascii_case("yes"));

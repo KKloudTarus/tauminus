@@ -218,6 +218,94 @@ pub struct AuthOptions {
     /// Offer only the key files, never other keys the agent holds, like
     /// OpenSSH `IdentitiesOnly`. With none listed, the default names.
     pub identities_only: bool,
+    /// The agent to sign with and to forward, like OpenSSH `IdentityAgent`;
+    /// `None` is the app's default (`SSH_AUTH_SOCK`, or the Windows agents).
+    pub identity_agent: Option<IdentityAgent>,
+}
+
+/// Which agent signs, as OpenSSH's `IdentityAgent` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityAgent {
+    /// `none`: no agent at all.
+    None,
+    /// `SSH_AUTH_SOCK`: the agent the environment names.
+    Environment,
+    /// A socket, or a named pipe on Windows, such as Secretive's: absolute,
+    /// or under `~`.
+    Path(PathBuf),
+    /// `$NAME` or `${NAME}`: the path that variable holds when connecting,
+    /// as ssh reads it then; unset or empty, no agent.
+    Variable(String),
+}
+
+/// Longest agent path taken, in bytes.
+const MAX_AGENT_PATH: usize = 4096;
+
+impl IdentityAgent {
+    /// Reads `IdentityAgent`'s value: `none`, `SSH_AUTH_SOCK`, `$NAME` or
+    /// `${NAME}`, or a path, kept as written (`~` included).
+    ///
+    /// # Errors
+    /// An empty value, a control character, a path over 4096 bytes, a
+    /// variable whose name is not one, or a path that is relative: it would
+    /// name a socket wherever the app happens to run.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("the agent is empty".into());
+        }
+        if text.len() > MAX_AGENT_PATH || text.chars().any(char::is_control) {
+            return Err("the agent path is not one".into());
+        }
+        if let Some(name) = text.strip_prefix('$') {
+            let name = name
+                .strip_prefix('{')
+                .and_then(|n| n.strip_suffix('}'))
+                .unwrap_or(name);
+            let valid = name
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            return if valid {
+                Ok(Self::Variable(name.to_owned()))
+            } else {
+                Err(format!("{text} is not a variable name"))
+            };
+        }
+        Ok(match text {
+            // ssh reads `none` in any case.
+            none if none.eq_ignore_ascii_case("none") => Self::None,
+            "SSH_AUTH_SOCK" => Self::Environment,
+            path if is_absolute(path) => Self::Path(PathBuf::from(path)),
+            path => return Err(format!("{path} is not an absolute path")),
+        })
+    }
+
+    /// As `IdentityAgent` writes it; `parse` reads it back.
+    #[must_use]
+    pub fn to_config(&self) -> String {
+        match self {
+            Self::None => "none".into(),
+            Self::Environment => "SSH_AUTH_SOCK".into(),
+            Self::Path(path) => path.display().to_string(),
+            Self::Variable(name) => format!("${name}"),
+        }
+    }
+}
+
+/// Absolute on any OS the hosts file may come from: `/…`, `~` or `~/…`, a
+/// Windows pipe or UNC path (`\\…`), or a drive (`C:\…`).
+fn is_absolute(path: &str) -> bool {
+    let drive = path.as_bytes();
+    path.starts_with('/')
+        || path == "~"
+        || path.starts_with("~/")
+        || path.starts_with("\\\\")
+        || (drive.len() > 2
+            && drive[0].is_ascii_alphabetic()
+            && drive[1] == b':'
+            && matches!(drive[2], b'\\' | b'/'))
 }
 
 impl Default for AuthOptions {
@@ -231,6 +319,7 @@ impl Default for AuthOptions {
             ],
             identity_files: Vec::new(),
             identities_only: false,
+            identity_agent: None,
         }
     }
 }

@@ -97,6 +97,68 @@ fn the_nearest_setting_wins_and_defaults_fill_the_rest() {
 }
 
 #[test]
+fn the_identity_agent_comes_from_the_nearest_level() {
+    let mut root = group("root", None);
+    root.settings.identity_agent = Some(IdentityAgent::Path("~/secretive.ssh".into()));
+    let inherits = host("a", Some("root"));
+    let mut off = host("b", Some("root"));
+    off.settings.identity_agent = Some(IdentityAgent::None);
+    let unset = host("c", None);
+    let inventory = Inventory::new(vec![root], vec![inherits, off, unset]).unwrap();
+    let agent = |id: &str| {
+        inventory
+            .resolve(&hid(id), &user("me"))
+            .unwrap()
+            .auth
+            .identity_agent
+    };
+    assert_eq!(
+        agent("a"),
+        Some(IdentityAgent::Path("~/secretive.ssh".into()))
+    );
+    assert_eq!(agent("b"), Some(IdentityAgent::None));
+    assert_eq!(agent("c"), None, "unset is the app's default agent");
+}
+
+#[test]
+fn identity_agent_values_read_as_ssh_config_writes_them() {
+    for (text, agent) in [
+        ("none", IdentityAgent::None),
+        ("SSH_AUTH_SOCK", IdentityAgent::Environment),
+        (" /run/a.sock ", IdentityAgent::Path("/run/a.sock".into())),
+    ] {
+        assert_eq!(IdentityAgent::parse(text), Ok(agent.clone()));
+        assert_eq!(IdentityAgent::parse(&agent.to_config()), Ok(agent));
+    }
+    assert_eq!(
+        IdentityAgent::parse("$SECRETIVE_SOCK"),
+        Ok(IdentityAgent::Variable("SECRETIVE_SOCK".into()))
+    );
+    assert_eq!(
+        IdentityAgent::parse("${SSH_AUTH_SOCK}"),
+        Ok(IdentityAgent::Variable("SSH_AUTH_SOCK".into()))
+    );
+    for absolute in ["~", "~/a.sock", r"\\.\pipe\agent", r"C:\agent", "/run/a"] {
+        assert!(IdentityAgent::parse(absolute).is_ok(), "{absolute}");
+    }
+    // Not a name, or not absolute: refused, never guessed at.
+    for bad in [
+        "$",
+        "$1X",
+        "$HOME/agent.sock",
+        "${A",
+        "agent.sock",
+        "%d/agent",
+        "~user/a",
+    ] {
+        assert!(IdentityAgent::parse(bad).is_err(), "{bad}");
+    }
+    assert!(IdentityAgent::parse(" ").is_err());
+    assert!(IdentityAgent::parse("a\u{7}b").is_err());
+    assert!(IdentityAgent::parse(&"a".repeat(4097)).is_err());
+}
+
+#[test]
 fn an_empty_jump_list_overrides_a_group_s() {
     let mut root = group("root", None);
     root.settings.jumps = Some(vec![Hop {

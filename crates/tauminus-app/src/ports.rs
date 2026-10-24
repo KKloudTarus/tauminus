@@ -201,6 +201,15 @@ pub trait Prompter: Send + Sync + 'static {
     fn ask(&self, prompt: Prompt) -> BoxFuture<'_, Answer>;
 }
 
+/// The methods an `AuthFailed` tried, or that none could be.
+fn tried_text(tried: &[String]) -> String {
+    if tried.is_empty() {
+        "with nothing to offer: no key, agent key or password the server takes".to_owned()
+    } else {
+        format!("after trying {}", tried.join(", "))
+    }
+}
+
 /// Why an SSH session could not start. Each variant says enough for the UI
 /// to explain the cause and suggest a fix.
 #[derive(Debug, Error)]
@@ -235,7 +244,7 @@ pub enum ConnectError {
     },
     #[error("the host key for {host}:{port} was not trusted")]
     HostKeyRejected { host: String, port: u16 },
-    #[error("authentication to {endpoint} failed after trying {}", tried.join(", "))]
+    #[error("authentication to {endpoint} failed {}", tried_text(tried))]
     AuthFailed {
         endpoint: String,
         tried: Vec<String>,
@@ -556,6 +565,10 @@ pub struct ConfigHost {
     pub identities_only: bool,
     /// `ForwardAgent`; a socket path counts as yes.
     pub forward_agent: Option<bool>,
+    /// `IdentityAgent` as written: `none`, `SSH_AUTH_SOCK`, a path, or a
+    /// `$NAME` read when connecting, as ssh reads it, so a path that moves
+    /// each login is never saved stale.
+    pub identity_agent: Option<String>,
     /// `SetEnv`, as `NAME=value` pairs in order.
     pub set_env: Vec<(String, String)>,
     /// Why this alias could not be read, for example OpenSSH rejecting the

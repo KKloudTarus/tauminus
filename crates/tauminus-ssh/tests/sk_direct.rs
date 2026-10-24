@@ -164,6 +164,7 @@ async fn connect(
             methods: vec![AuthMethod::PublicKey],
             identity_files: vec![keys.join(key)],
             identities_only: true,
+            identity_agent: None,
         },
     )
     .unwrap();

@@ -40,6 +40,9 @@ pub(crate) const OPENSSH_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
 pub(crate) enum Candidate {
     /// A named pipe of an OpenSSH-style agent.
     Pipe(PathBuf),
+    /// A host's `IdentityAgent` pipe: the user's own only, since the name
+    /// is the host's to choose and a service's pipe is not an agent.
+    OwnPipe(PathBuf),
     /// Pageant's per-user pipe, from PuTTY 0.75 on.
     Pageant,
 }
@@ -55,7 +58,7 @@ impl Candidate {
     pub(crate) const fn owners(&self) -> Owners {
         match self {
             Self::Pipe(_) => Owners::UserOrSystem,
-            Self::Pageant => Owners::User,
+            Self::OwnPipe(_) | Self::Pageant => Owners::User,
         }
     }
 }
@@ -70,7 +73,7 @@ pub(crate) fn candidates(source: &AgentSource, auth_sock: Option<OsString>) -> V
                 Candidate::Pageant,
             ],
         },
-        AgentSource::Path(path) => vec![Candidate::Pipe(path.clone())],
+        AgentSource::Path(path) => vec![Candidate::OwnPipe(path.clone())],
         AgentSource::Pageant => vec![Candidate::Pageant],
         AgentSource::None => vec![],
     }
@@ -179,8 +182,10 @@ mod sys {
     /// Opens the candidate's pipe and checks its owner.
     pub(crate) async fn connect(candidate: &Candidate) -> io::Result<NamedPipeClient> {
         let path = match candidate {
-            Candidate::Pipe(path) if is_local_pipe(path) => path.clone().into_os_string(),
-            Candidate::Pipe(_) => {
+            Candidate::Pipe(path) | Candidate::OwnPipe(path) if is_local_pipe(path) => {
+                path.clone().into_os_string()
+            }
+            Candidate::Pipe(_) | Candidate::OwnPipe(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "only pipes on this machine (\\\\.\\pipe\\name) can be agents",
@@ -419,7 +424,7 @@ mod tests {
         );
         assert_eq!(
             candidates(&AgentSource::Path(r"\\.\pipe\x".into()), sock.clone()),
-            [Candidate::Pipe(r"\\.\pipe\x".into())]
+            [Candidate::OwnPipe(r"\\.\pipe\x".into())]
         );
         assert_eq!(candidates(&AgentSource::None, sock), []);
     }
@@ -460,6 +465,12 @@ mod tests {
         assert_eq!(
             Candidate::Pipe(OPENSSH_AGENT_PIPE.into()).owners(),
             Owners::UserOrSystem
+        );
+        // A host's IdentityAgent may name a service's pipe: only the
+        // user's own passes.
+        assert_eq!(
+            Candidate::OwnPipe(r"\\.\pipe\docker_engine".into()).owners(),
+            Owners::User
         );
     }
 
