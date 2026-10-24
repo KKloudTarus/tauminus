@@ -91,8 +91,8 @@ already sent still comes, up to the SSH window. The pump drops it until
 the user has typed (Ctrl+C aside, which users press again and again)
 and a chunk reads as text (UTF-8, no ZDLE, only the control characters
 a shell prints), the host is quiet for 300 ms, or 30 s pass. What the
-shell printed as `sz` exited goes with it; the banner says Enter brings
-the prompt back. A file's text read with no ZDLE in it still shows if
+shell printed as `sz` exited goes with it; the banner says Ctrl+C
+brings the prompt back. A file's text read with no ZDLE in it still shows if
 the user types something other than Ctrl+C just before it comes. A session closing mid-transfer shows none of it.
 After a complete transfer only `sz`'s closing `OO` and line ends are
 dropped.

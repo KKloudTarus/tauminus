@@ -181,7 +181,7 @@ people who run production servers.
 | 7 | Kerberos/GSSAPI, PIV smart cards, short-lived certificates from Vault or step-ca | SecureCRT, Xshell, Teleport | `russh` `GssapiAuthenticator`, `cryptoki` 0.12.1 | v1.0+ |
 | 8 | Inventory plugins: GCP, Kubernetes, Docker, custom scripts | Royal TSX, Teleport, Tabby | `kube` 4.2.0, `bollard` 0.21.1 | v1.0+ |
 | 9 | Credentials from 1Password, Bitwarden, HashiCorp Vault at connect time | Royal TSX | Provider CLIs or APIs | v1.0+ |
-| 10 | Zmodem and trzsz, serial hex view, instant Ctrl+C on broadcast | SecureCRT, Xshell, Electerm | `zmodem2` 0.7.3, `trzsz` 1.1.6 (npm) | v0.4 |
+| 10 | Zmodem and trzsz, serial hex view, instant Ctrl+C on broadcast | SecureCRT, Xshell, Electerm | `zmodem2` 0.7.3 in Rust (ADRs 0025, 0026); trzsz in Rust later, not the npm library, whose bytes would cross the webview | v0.4, trzsz v0.5 |
 
 Lower priority, tracked for later: RDP (`ironrdp` 0.17.0), VNC (`vnc-rs` 0.6.0),
 scripting API, FIPS crypto mode (`aws-lc-rs` FIPS build), per-line timestamps,

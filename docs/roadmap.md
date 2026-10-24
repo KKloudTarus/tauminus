@@ -165,7 +165,7 @@ Goal: beat Termius Pro.
 - [ ] FIDO2 `sk-` keys through the agent, then direct signing with `ctap-hid-fido2`
 - [ ] Keys bound to Secure Enclave (macOS) and Windows Hello
 - [x] Zmodem receive: files a host sends with `sz`, asked first (ADR 0025)
-- [ ] Zmodem send (`rz`) and trzsz transfers
+- [x] Zmodem send: files chosen in the system dialog go to `rz` (ADR 0026)
 
 ### Exit criteria
 
@@ -179,6 +179,7 @@ Goal: Termius Pro sync without a Termius account.
 
 ### Scope
 
+- [ ] trzsz transfers, in Rust (moved from v0.4: ADR 0026)
 - [ ] End-to-end encrypted sync with `age` to a git remote, S3-compatible storage, or a synced folder
 - [ ] Conflict handling with a CRDT (`automerge` or `yrs`, decided by ADR)
 - [ ] Per-item flag to keep credentials off the sync target
