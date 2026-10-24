@@ -369,6 +369,15 @@ impl Host {
     }
 }
 
+/// What [`Inventory::repaired`] changed to make merged lists valid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Repair {
+    /// The group lost its parent: gone, closing a cycle, or too deep.
+    GroupToRoot(GroupId),
+    /// The host's group was gone.
+    HostToRoot(HostId),
+}
+
 /// Every saved host and group. Each change keeps four invariants: ids are
 /// unique, every referenced group exists, groups form a forest no deeper
 /// than [`MAX_GROUP_DEPTH`], and the counts stay under their limits.
@@ -379,6 +388,80 @@ pub struct Inventory {
 }
 
 impl Inventory {
+    /// Groups and hosts that two valid lists merged into, made valid: a
+    /// group whose parent is gone, that closes a cycle, or that nests too
+    /// deep moves to the root; a host whose group is gone moves to the
+    /// root. Deterministic, so every device that merges the same lists
+    /// repairs them alike: a cycle loses the parent of its lowest group
+    /// id. More groups or hosts than the limits is an error, never a cut.
+    /// O(G·d + H) for depth d ≤ 16.
+    ///
+    /// # Errors
+    /// Too many groups or hosts, or what [`Inventory::new`] refuses.
+    pub fn repaired(
+        mut groups: Vec<Group>,
+        mut hosts: Vec<Host>,
+    ) -> Result<(Self, Vec<Repair>), HostsError> {
+        if groups.len() > MAX_GROUPS || hosts.len() > MAX_HOSTS {
+            return Err(HostsError::TooMany);
+        }
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut repairs = Vec::new();
+        let at: BTreeMap<GroupId, usize> = groups
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.id.clone(), i))
+            .collect();
+        for group in &mut groups {
+            if let Some(parent) = &group.parent
+                && !at.contains_key(parent)
+            {
+                group.parent = None;
+                repairs.push(Repair::GroupToRoot(group.id.clone()));
+            }
+        }
+        // Each group's walk to the root: a revisit is a cycle, which loses
+        // its lowest member's parent; a walk past the depth limit loses
+        // the group's own. Each fix removes one parent, so at most G fixes.
+        for i in 0..groups.len() {
+            loop {
+                let mut walk = vec![i];
+                let mut current = i;
+                let fix = loop {
+                    let Some(parent) = &groups[current].parent else {
+                        break None;
+                    };
+                    let next = at[parent];
+                    if let Some(start) = walk.iter().position(|&w| w == next) {
+                        let lowest = walk[start..]
+                            .iter()
+                            .copied()
+                            .min_by(|&a, &b| groups[a].id.cmp(&groups[b].id))
+                            .unwrap_or(next);
+                        break Some(lowest);
+                    }
+                    walk.push(next);
+                    if walk.len() > MAX_GROUP_DEPTH {
+                        break Some(i);
+                    }
+                    current = next;
+                };
+                let Some(fix) = fix else { break };
+                groups[fix].parent = None;
+                repairs.push(Repair::GroupToRoot(groups[fix].id.clone()));
+            }
+        }
+        for host in &mut hosts {
+            if let Some(group) = &host.group
+                && !at.contains_key(group)
+            {
+                host.group = None;
+                repairs.push(Repair::HostToRoot(host.id.clone()));
+            }
+        }
+        Ok((Self::new(groups, hosts)?, repairs))
+    }
+
     /// Builds an inventory, checking every invariant. O((H + G) log(H + G) + G·d).
     pub fn new(groups: Vec<Group>, hosts: Vec<Host>) -> Result<Self, HostsError> {
         if groups.len() > MAX_GROUPS || hosts.len() > MAX_HOSTS {
