@@ -188,7 +188,7 @@ Goal: Termius Pro sync without a Termius account.
 - [ ] Conflict handling with a CRDT (`automerge` or `yrs`, decided by ADR)
 - [ ] Per-item flag to keep credentials off the sync target
 - [ ] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP
-- [ ] Import CSV, PuTTY, MobaXterm, SecureCRT
+- [x] Import CSV, PuTTY, MobaXterm, SecureCRT, with their folders and jump hosts (ADR 0029)
 - [ ] Runbooks: snippets with variables shared through the git sync target
 - [ ] Code signing for macOS (Developer ID, notarization)
 - [ ] Native keys bound to the Secure Enclave (signed builds, data protection keychain) and to Windows Hello (NCrypt, Passport provider), each after a spike on real hardware (moved from v0.4: ADR 0028)
