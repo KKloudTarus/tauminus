@@ -674,6 +674,21 @@ fn the_ai_reads_output_only_where_the_nearest_level_turns_it_on() {
 }
 
 #[test]
+fn tmux_tabs_are_off_unless_the_nearest_level_turns_them_on() {
+    let mut root = group("root", None);
+    root.settings.tmux_tabs = Some(true);
+    let on = host("on", Some("root"));
+    let mut off = host("off", Some("root"));
+    off.settings.tmux_tabs = Some(false);
+    let free = host("free", None);
+    let inventory = Inventory::new(vec![root], vec![on, off, free]).unwrap();
+    let tabs = |id: &str| inventory.shows_tmux_tabs(&hid(id)).unwrap();
+    assert!(tabs("on"));
+    assert!(!tabs("off"));
+    assert!(!tabs("free"));
+}
+
+#[test]
 fn a_host_starts_with_at_most_8_snippets_each_once() {
     use crate::{MAX_STARTUP, SnippetId};
     let id = |n: usize| SnippetId::parse(&format!("s{n}")).unwrap();
@@ -819,6 +834,10 @@ fn a_host_joins_its_groups_tmux_session_unless_it_turns_it_off() {
     assert_eq!(
         tmux("web").unwrap().command(false),
         r#"exec "$SHELL" -lc 'exec tmux new-session -A -s work'"#
+    );
+    assert_eq!(
+        tmux("web").unwrap().control_command(),
+        r#"exec "$SHELL" -lc 'exec tmux -u -C new-session -A -s work'"#
     );
     assert_eq!(tmux("db"), None);
     let id = |id: &str| HostId::parse(id).unwrap();

@@ -136,6 +136,11 @@ impl HostBook {
         self.inventory.lock().await.records_history(id)
     }
 
+    /// Whether a host's tmux windows show as tabs. O(d).
+    pub async fn shows_tmux_tabs(&self, id: &HostId) -> Result<bool, HostsError> {
+        self.inventory.lock().await.shows_tmux_tabs(id)
+    }
+
     /// Whether the AI assistant may read what a host printed. O(d).
     pub async fn sends_output_to_ai(&self, id: &HostId) -> Result<bool, HostsError> {
         self.inventory.lock().await.sends_output_to_ai(id)

@@ -15,7 +15,7 @@ import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
 import type { RecordingsClient } from "./recordings.ts";
-import type { SessionClient } from "./sessions.ts";
+import type { SessionClient, TmuxClient } from "./sessions.ts";
 
 export {
   type GroupInput,
@@ -131,8 +131,13 @@ export {
   type SessionEvents,
   type SessionSpec,
   type SshTargetSpec,
+  type TabWindowView,
   type TerminalSession,
+  type TmuxClient,
+  type TmuxEvents,
+  type TopologyView,
   tauriSessions,
+  tauriTmux,
 } from "./sessions.ts";
 
 /**
@@ -262,4 +267,12 @@ export async function aiClient(): Promise<AiClient> {
     return (await import("./fake-ai.ts")).fakeAi();
   }
   return (await import("./ai.ts")).tauriAi;
+}
+
+/** tmux sessions as tabs; the `e2e` build's fake shows two windows. */
+export async function tmuxClient(): Promise<TmuxClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake.ts")).fakeTmux;
+  }
+  return (await import("./sessions.ts")).tauriTmux;
 }

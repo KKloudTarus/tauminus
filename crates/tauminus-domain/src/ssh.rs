@@ -405,6 +405,17 @@ impl TmuxSession {
             self.0
         )
     }
+
+    /// The same, as a control mode client (`-C`), for a channel with no
+    /// PTY: tmux takes commands on stdin and writes its notifications to
+    /// stdout, with no echo and nothing to strip. Closing the channel
+    /// detaches; the session goes on.
+    pub fn control_command(&self) -> String {
+        format!(
+            "exec \"$SHELL\" -lc 'exec tmux -u -C new-session -A -s {}'",
+            self.0
+        )
+    }
 }
 
 /// A host's or group's tmux setting.

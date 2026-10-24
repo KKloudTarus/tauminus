@@ -361,6 +361,13 @@ pub trait SshConnection: Send + Sync + 'static {
         forward: &'a Forward,
     ) -> BoxFuture<'a, Result<ForwardHandle, TunnelError>>;
 
+    /// Runs `command` on a channel with no PTY, its bytes passed as they
+    /// are: a tmux control client (`tauminus_domain::TmuxCommand`).
+    fn open_control<'a>(
+        &'a self,
+        command: &'a str,
+    ) -> BoxFuture<'a, Result<TerminalStream, ConnectError>>;
+
     /// Starts the SFTP subsystem on a channel of its own.
     fn open_sftp(&self) -> BoxFuture<'_, Result<Arc<dyn SftpPort>, ConnectError>>;
 

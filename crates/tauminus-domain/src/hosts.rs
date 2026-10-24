@@ -290,6 +290,9 @@ pub struct Settings {
     pub encoding: Option<Encoding>,
     /// A tmux session to join on every connect; `None` inherits.
     pub tmux: Option<Tmux>,
+    /// Shows that session's windows as tabs, through tmux control mode;
+    /// `None` inherits, and the root default is off.
+    pub tmux_tabs: Option<bool>,
     /// Highlight and trigger sets, nearest first; they add up from the
     /// host through every group, the host's taking precedence.
     pub triggers: Vec<TriggerSetId>,
@@ -678,6 +681,16 @@ impl Inventory {
             .unwrap_or(true))
     }
 
+    /// Whether a host's tmux windows show as tabs. Off unless the host or a
+    /// group turns it on. O(d).
+    pub fn shows_tmux_tabs(&self, id: &HostId) -> Result<bool, HostsError> {
+        Ok(self
+            .chain(id)?
+            .iter()
+            .find_map(|s| s.tmux_tabs)
+            .unwrap_or(false))
+    }
+
     /// Whether the AI assistant may read what a host printed. Off unless the
     /// host or a group turns it on, unlike the history. O(d).
     pub fn sends_output_to_ai(&self, id: &HostId) -> Result<bool, HostsError> {
@@ -869,7 +882,8 @@ fn inherit(child: &mut Settings, parent: &Settings) -> Result<(), HostsError> {
         history,
         ai_output,
         encoding,
-        tmux
+        tmux,
+        tmux_tabs
     );
     let mut env = child.env.clone();
     env.extend(parent.env.iter().cloned());

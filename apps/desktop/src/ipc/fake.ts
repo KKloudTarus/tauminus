@@ -12,6 +12,8 @@ import {
   type SessionEvents,
   type SessionSpec,
   type TerminalSession,
+  type TmuxClient,
+  type TopologyView,
 } from "./sessions.ts";
 
 const encoder = new TextEncoder();
@@ -198,7 +200,11 @@ function fail(code: CommandError["code"], message: string): SessionCommandError 
 async function fakeSsh(
   spec: Exclude<
     SessionSpec,
-    { kind: "local" } | { kind: "telnet" } | { kind: "mosh" } | { kind: "serial" }
+    | { kind: "local" }
+    | { kind: "telnet" }
+    | { kind: "mosh" }
+    | { kind: "serial" }
+    | { kind: "tmux" }
   >,
   events: SessionEvents,
 ): Promise<string> {
@@ -254,18 +260,68 @@ async function fakeSsh(
   throw fail("auth_failed", `authentication to ${endpoint} failed after trying password`);
 }
 
+/**
+ * A tmux session as tabs, for a host whose address is `tmux.test`: two
+ * windows, `shell` and `logs`; any other host's tmux is too old, and it
+ * is joined the plain way.
+ */
+async function fakeTmuxBanner(
+  spec: Extract<SessionSpec, { kind: "tmux" }>,
+  events: SessionEvents,
+): Promise<string> {
+  if (spec.pane !== undefined) return `tmux pane %${spec.pane}\r\n`;
+  const { fakeHostAddress } = await import("./fake-hosts.ts");
+  if (fakeHostAddress(spec.hostId) !== "tmux.test") {
+    events.tmux?.fellBack(
+      "tmux 3.1c is too old to show its windows as tabs: 3.2 or later is needed",
+    );
+    return `Connected to ${spec.label}, in tmux\r\n`;
+  }
+  tmuxControls += 1;
+  events.tmux?.opened(tmuxControls, { window: 1, pane: 1, name: "shell" }, [
+    { window: 2, pane: 2, name: "logs" },
+  ]);
+  return "tmux pane %1\r\n";
+}
+
+let tmuxControls = 0;
+let tmuxWindows = 2;
+/** The topology handler of each fake control client, for new windows. */
+const tmuxTopologies = new Map<number, (event: TopologyView) => void>();
+
+export const fakeTmux: TmuxClient = {
+  async newWindow(control) {
+    tmuxWindows += 1;
+    tmuxTopologies.get(control)?.({
+      kind: "window",
+      window: tmuxWindows,
+      pane: tmuxWindows,
+      name: "new",
+    });
+  },
+  async detach(control) {
+    tmuxTopologies.get(control)?.({ kind: "ended", reason: "detached", lost: false });
+  },
+};
+
 export const fakeSessions: SessionClient = {
   async open(spec, size, events) {
+    if (spec.kind === "tmux" && spec.control === undefined && events.tmux) {
+      const tmux = events.tmux;
+      tmuxTopologies.set(tmuxControls + 1, (event) => tmux.topology(event));
+    }
     const banner =
-      spec.kind === "local"
-        ? ""
-        : spec.kind === "telnet"
-          ? `Connected to ${spec.label} over Telnet\r\n`
-          : spec.kind === "mosh"
-            ? `Connected to ${spec.label} over Mosh\r\n`
-            : spec.kind === "serial"
-              ? `Opened ${spec.port.path} at ${spec.port.baud} baud\r\n`
-              : await fakeSsh(spec, events);
+      spec.kind === "tmux"
+        ? await fakeTmuxBanner(spec, events)
+        : spec.kind === "local"
+          ? ""
+          : spec.kind === "telnet"
+            ? `Connected to ${spec.label} over Telnet\r\n`
+            : spec.kind === "mosh"
+              ? `Connected to ${spec.label} over Mosh\r\n`
+              : spec.kind === "serial"
+                ? `Opened ${spec.port.path} at ${spec.port.baud} baud\r\n`
+                : await fakeSsh(spec, events);
     const id = nextId;
     nextId += 1;
     const shell = new FakeShell(id, size, events, banner);

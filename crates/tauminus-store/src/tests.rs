@@ -319,6 +319,25 @@ async fn the_ai_s_leave_to_read_output_loads_back_at_version_9() {
 }
 
 #[tokio::test]
+async fn tmux_tabs_load_back_at_version_10() {
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut prod = inventory
+        .groups()
+        .find(|g| g.id.as_str() == "prod")
+        .unwrap()
+        .clone();
+    prod.settings.tmux_tabs = Some(true);
+    inventory.put_group(prod).unwrap();
+    store.save(&inventory).await.unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.0.join("hosts.json")).unwrap()).unwrap();
+    assert_eq!(json["version"], 10);
+    assert_eq!(store.load().await.unwrap(), inventory);
+}
+
+#[tokio::test]
 async fn nothing_saved_yet_is_an_empty_list() {
     let dir = Dir::new();
     assert_eq!(dir.store().load().await.unwrap(), Inventory::default());
@@ -331,7 +350,7 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 10, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 11, "hosts": []}"#.to_owned()),
         (
             "highlight set id",
             r#"{"version": 8, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"triggers": ["no spaces"]}}]}"#.to_owned(),

@@ -75,6 +75,10 @@ pub(crate) struct SettingsSpec {
     /// at the root).
     #[serde(default)]
     pub(crate) ai_output: Option<bool>,
+    /// Show the tmux session's windows as tabs; `null` inherits (off at
+    /// the root).
+    #[serde(default)]
+    pub(crate) tmux_tabs: Option<bool>,
     /// Variables sent before the shell starts. A host's value for a name
     /// wins over its groups'.
     #[serde(default)]
@@ -207,6 +211,10 @@ pub(crate) struct GroupView {
 
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the host list shows about each host"
+)]
 pub(crate) struct HostView {
     pub(crate) id: String,
     pub(crate) label: String,
@@ -228,6 +236,9 @@ pub(crate) struct HostView {
     pub(crate) protocol: ProtocolSpec,
     /// Each connect joins a tmux session, by the host's setting or a group's.
     pub(crate) joins_tmux: bool,
+    /// That session's windows show as tabs, by the host's setting or a
+    /// group's.
+    pub(crate) tmux_tabs: bool,
 }
 
 /// How a saved host is reached.
@@ -392,6 +403,9 @@ fn view(inventory: &Inventory) -> HostsView {
                     protocol: h.protocol.into(),
                     joins_tmux: h.protocol == Protocol::Ssh
                         && inventory.tmux(&h.id).is_ok_and(|t| t.is_some()),
+                    tmux_tabs: h.protocol == Protocol::Ssh
+                        && inventory.tmux(&h.id).is_ok_and(|t| t.is_some())
+                        && inventory.shows_tmux_tabs(&h.id).unwrap_or(false),
                 }
             })
             .collect(),
@@ -421,6 +435,7 @@ fn settings_spec(s: &Settings) -> SettingsSpec {
         forward_agent: s.forward_agent,
         history: s.history,
         ai_output: s.ai_output,
+        tmux_tabs: s.tmux_tabs,
         encoding: s.encoding.map(EncodingSpec::from),
         tmux: s.tmux.as_ref().map(|t| {
             t.session()
@@ -585,6 +600,7 @@ fn settings(spec: SettingsSpec) -> Result<Settings, CommandError> {
         forward_agent: spec.forward_agent,
         history: spec.history,
         ai_output: spec.ai_output,
+        tmux_tabs: spec.tmux_tabs,
         encoding: spec.encoding.map(Encoding::from),
         tmux: tmux(spec.tmux)?,
         triggers: spec
