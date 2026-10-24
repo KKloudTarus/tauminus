@@ -10,6 +10,7 @@ Cargo.toml                 virtual workspace manifest
 crates/
   tauminus-domain/         rules and types, no I/O, no runtime
   tauminus-app/            use cases (SessionManager, LocalShells) and ports
+  tauminus-fido/           port and adapter: FIDO2 assertions from USB security keys (ctap-hid-fido2)
   tauminus-presence/       adapter: Touch ID, Windows Hello, polkit before the keychain unlocks
   tauminus-pty/            adapter: local shells over portable-pty
   tauminus-ssh/            adapter: SSH shells over russh, known_hosts, auth, proxies, ssh_config import
