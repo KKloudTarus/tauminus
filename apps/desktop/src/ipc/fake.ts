@@ -4,8 +4,8 @@
 // An in-memory shell for end-to-end tests of the UI in a plain browser. Only
 // the `e2e` build mode loads this module; production bundles do not contain it.
 
-import type { CommandError, ReceiveView } from "./bindings.ts";
-import type { ReceiveClient } from "./receive.ts";
+import type { CommandError, ZmodemView } from "./bindings.ts";
+import type { ZmodemClient } from "./zmodem.ts";
 import {
   type GridSize,
   type SessionClient,
@@ -31,16 +31,39 @@ const PROMPT = "$ ";
 /** What fake sessions print, by session, for the fake recordings. */
 export const fakeOutputTaps = new Map<number, (text: string) => void>();
 
-/** The receive handler, and each fake shell offering a file by `sz`. */
-let receiveHandler: ((event: ReceiveView) => void) | undefined;
+/** The Zmodem handler, and each fake shell waiting in `sz` or `rz`. */
+let receiveHandler: ((event: ZmodemView) => void) | undefined;
 const offers = new Map<number, { name: string; done: () => void }>();
 
-/** Answers `sz NAME` as the backend would: `NAME` comes, 3 MB, unless the user declines. */
-export const fakeReceive: ReceiveClient = {
+/**
+ * Answers as the backend would. `sz NAME`: `NAME` comes, 3 MB, unless the
+ * user declines. `rz`: the "dialog" picks `notes.txt` and it goes.
+ */
+export const fakeZmodem: ZmodemClient = {
   async listen(handler) {
     receiveHandler = handler;
   },
-  async answer(session, _offer, accept) {
+  async choose(session) {
+    const offer = offers.get(session);
+    if (!offer) return false;
+    offers.delete(session);
+    receiveHandler?.({ kind: "started", session, folder: null });
+    receiveHandler?.({ kind: "file", session, name: "notes.txt", size: 2048 });
+    setTimeout(() => {
+      receiveHandler?.({
+        kind: "finished",
+        session,
+        folder: null,
+        files: ["notes.txt"],
+        moreFiles: 0,
+        skipped: [],
+        moreSkipped: 0,
+      });
+      offer.done();
+    }, 300);
+    return true;
+  },
+  async receive(session, _offer, accept) {
     const offer = offers.get(session);
     if (!offer) return;
     offers.delete(session);
@@ -190,7 +213,16 @@ class FakeShell implements TerminalSession {
           name: argument || "file.bin",
           done: () => this.#print(`\r\n${this.#prompt}`),
         });
-        receiveHandler?.({ kind: "offered", session: this.id, offer: 1 });
+        receiveHandler?.({ kind: "offered", session: this.id, offer: 1, wants: "receive" });
+        return;
+      case "rz":
+        // As `rz` does: it says it waits, then waits for files.
+        this.#print("rz waiting to receive.");
+        offers.set(this.id, {
+          name: "",
+          done: () => this.#print(`\r\n${this.#prompt}`),
+        });
+        receiveHandler?.({ kind: "offered", session: this.id, offer: 1, wants: "send" });
         return;
       case "drop":
         // As a network going away: the session ends without an exit.

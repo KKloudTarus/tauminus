@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use tauminus_domain::{
     FlowControl, FlowSignal, OutputBatcher, PROMPT_TAIL, SessionId, SessionMeta, TerminalSize,
-    Watermarks,
+    Wants, Watermarks,
 };
 use thiserror::Error;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -17,8 +17,8 @@ use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::ports::{
-    LaunchError, OutputSink, OutputTap, ReceiveFolder, Secret, TerminalEvent, TerminalInput,
-    TerminalStream, Terminator, TransferHost,
+    LaunchError, OutputSink, OutputTap, Secret, TerminalEvent, TerminalInput, TerminalStream,
+    Terminator, TransferAnswer, TransferHost,
 };
 
 /// Limits and timings for terminal sessions.
@@ -60,13 +60,6 @@ pub enum SessionError {
     Launch(#[source] LaunchError),
     #[error("a file transfer runs in this session: Ctrl+C cancels it")]
     Transferring,
-}
-
-/// The user's answer to a transfer's offer.
-#[derive(Debug)]
-enum TransferAnswer {
-    Receive(Box<dyn ReceiveFolder>),
-    Decline,
 }
 
 /// A reserved place for one session. Reserve before starting a process or a
@@ -138,8 +131,12 @@ struct SessionControl {
     /// pump; a cancel names the one it was asked for, so one asked as a
     /// transfer ends never stops the next.
     transfer_offer: AtomicU64,
+    /// What the waiting offer asks, as `wants_code`; 0 when none waits.
+    transfer_waiting: AtomicU8,
     transfer_cancel_offer: AtomicU64,
     transfer_cancel: Notify,
+    /// The writer task took what was queued for the host: a send goes on.
+    transfer_drained: Arc<Notify>,
     /// Writes that went to the stream: after a transfer stops, a key
     /// typed means what comes next is the shell's.
     inputs: Arc<AtomicU64>,
@@ -229,14 +226,14 @@ impl SessionManager {
     }
 
     /// The user's answer to offer `offer` of session `id`'s host: a
-    /// folder to receive into, or none to decline. An answer to any other
+    /// folder to receive into, files to send, or no. An answer to any other
     /// offer (a second click, or one that came after the offer went) is
     /// ignored.
     pub fn answer_transfer(
         &self,
         id: SessionId,
         offer: u64,
-        folder: Option<Box<dyn ReceiveFolder>>,
+        answer: TransferAnswer,
     ) -> Result<(), SessionError> {
         let control = self.control(id)?;
         // Only the offer waiting now: none is kept for one still to come.
@@ -245,15 +242,24 @@ impl SessionManager {
         {
             return Ok(());
         }
-        *lock(&control.transfer_answer) = Some((
-            offer,
-            match folder {
-                Some(folder) => TransferAnswer::Receive(folder),
-                None => TransferAnswer::Decline,
-            },
-        ));
+        *lock(&control.transfer_answer) = Some((offer, answer));
         control.transfer_answered.notify_one();
         Ok(())
+    }
+
+    /// The offer session `id`'s host made that waits for the user: its
+    /// number and what it asks.
+    pub fn waiting_offer(&self, id: SessionId) -> Result<Option<(u64, Wants)>, SessionError> {
+        let control = self.control(id)?;
+        let wants = match control.transfer_waiting.load(Ordering::Acquire) {
+            1 => Wants::Receive,
+            2 => Wants::Send,
+            _ => return Ok(None),
+        };
+        Ok(Some((
+            control.transfer_offer.load(Ordering::Relaxed),
+            wants,
+        )))
     }
 
     /// Stops session `id`'s transfer, or declines its offer. Nothing when
@@ -302,26 +308,39 @@ impl SessionManager {
         let control = Arc::new(SessionControl::default());
         let transfer = match (meta.transfers, self.transfers.get()) {
             (true, Some(host)) => {
-                // The protocol's replies, in order, without the pump waiting;
-                // `pending` counts what is queued, which the transfer caps.
-                let (to_host, mut replies) = mpsc::unbounded_channel::<Vec<u8>>();
+                // The protocol's bytes, in order, without the pump waiting;
+                // `pending` counts what is queued, which the transfer
+                // bounds, and items of an epoch before the current one are
+                // dropped (see `transfer::Wire`).
+                let (to_host, mut queued) = mpsc::unbounded_channel::<(u64, Vec<u8>)>();
                 let pending = Arc::new(AtomicUsize::new(0));
+                let epoch = Arc::new(AtomicU64::new(0));
                 let input = input.clone();
-                let sent = Arc::clone(&pending);
+                let (sent, current) = (Arc::clone(&pending), Arc::clone(&epoch));
+                let drained = Arc::clone(&control.transfer_drained);
                 tokio::spawn(async move {
-                    while let Some(reply) = replies.recv().await {
-                        let len = reply.len();
-                        if input.send(TerminalInput::Data(reply)).await.is_err() {
+                    while let Some((of, bytes)) = queued.recv().await {
+                        let len = bytes.len();
+                        if of >= current.load(Ordering::Relaxed)
+                            && input.send(TerminalInput::Data(bytes)).await.is_err()
+                        {
                             return;
                         }
-                        sent.fetch_sub(len, Ordering::Relaxed);
+                        if sent.fetch_sub(len, Ordering::Relaxed).saturating_sub(len)
+                            < transfer::LOW
+                        {
+                            drained.notify_one();
+                        }
                     }
                 });
                 Some(transfer::Transfer::new(
                     id,
                     Arc::clone(host),
-                    to_host,
-                    pending,
+                    transfer::Wire {
+                        to_host,
+                        pending,
+                        epoch,
+                    },
                     Arc::clone(&control.inputs),
                 ))
             }
@@ -543,6 +562,16 @@ impl SessionManager {
     }
 }
 
+/// What a waiting offer asks, as `SessionControl::transfer_waiting` keeps
+/// it.
+fn wants_code(waiting: Option<(u64, Wants)>) -> u8 {
+    match waiting {
+        None => 0,
+        Some((_, Wants::Receive)) => 1,
+        Some((_, Wants::Send)) => 2,
+    }
+}
+
 /// A poisoned lock only means another thread panicked while holding it. The
 /// map holds no invariant that a panic can break halfway, so keep using it.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -608,12 +637,7 @@ impl<S: OutputSink> Pump<S> {
                 () = self.control.transfer_answered.notified(), if self.offered() => {
                     let answer = lock(&self.control.transfer_answer).take();
                     let shown = match (self.transfer.as_mut(), answer) {
-                        (Some(transfer), Some((offer, TransferAnswer::Receive(folder)))) => {
-                            transfer.answer(offer, Some(folder))
-                        }
-                        (Some(transfer), Some((offer, TransferAnswer::Decline))) => {
-                            transfer.answer(offer, None)
-                        }
+                        (Some(transfer), Some((offer, answer))) => transfer.answer(offer, answer),
                         _ => Vec::new(),
                     };
                     self.rearm(idle.as_mut());
@@ -625,6 +649,11 @@ impl<S: OutputSink> Pump<S> {
                         Some(transfer) if transfer.offer() == asked => transfer.cancel(),
                         _ => Vec::new(),
                     };
+                    self.rearm(idle.as_mut());
+                    self.after_transfer(shown)
+                }
+                () = self.control.transfer_drained.notified(), if self.transfer_sending() => {
+                    let shown = self.transfer.as_mut().map(transfer::Transfer::drained).unwrap_or_default();
                     self.rearm(idle.as_mut());
                     self.after_transfer(shown)
                 }
@@ -686,11 +715,20 @@ impl<S: OutputSink> Pump<S> {
             .and_then(transfer::Transfer::deadline)
     }
 
-    /// Restarts the transfer's timer from now, while it has one.
+    /// Restarts the transfer's timer from now, while it has one; a send's
+    /// is fixed by when the host last moved it on.
     fn rearm(&self, idle: std::pin::Pin<&mut tokio::time::Sleep>) {
-        if let Some(after) = self.transfer_deadline() {
+        if let Some(at) = self.transfer.as_ref().and_then(transfer::Transfer::due) {
+            idle.reset(Instant::from_std(at));
+        } else if let Some(after) = self.transfer_deadline() {
             idle.reset(Instant::now() + after);
         }
+    }
+
+    fn transfer_sending(&self) -> bool {
+        self.transfer
+            .as_ref()
+            .is_some_and(transfer::Transfer::sending)
     }
 
     fn transfer_busy(&self) -> bool {
@@ -703,6 +741,9 @@ impl<S: OutputSink> Pump<S> {
             self.control
                 .transfer_offer
                 .store(transfer.offer(), Ordering::Relaxed);
+            self.control
+                .transfer_waiting
+                .store(wants_code(transfer.waiting()), Ordering::Release);
             self.control
                 .transferring
                 .store(transfer.busy(), Ordering::Release);
@@ -766,6 +807,9 @@ impl<S: OutputSink> Pump<S> {
                 self.control
                     .transfer_offer
                     .store(transfer.offer(), Ordering::Relaxed);
+                self.control
+                    .transfer_waiting
+                    .store(wants_code(transfer.waiting()), Ordering::Release);
                 self.control
                     .transferring
                     .store(transfer.busy(), Ordering::Release);

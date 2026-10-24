@@ -13,7 +13,7 @@ import {
   type SessionSpec,
   type TerminalSession,
 } from "@/ipc/index.ts";
-import type { ReceiveClient, ReceiveView } from "@/ipc/receive.ts";
+import type { ZmodemClient, ZmodemView } from "@/ipc/zmodem.ts";
 
 // The app's styles, so views get the layout they have in the app; without
 // them a pane takes its size from the terminal inside it.
@@ -22,7 +22,7 @@ import "@/app/styles.css";
 import { ACK_THRESHOLD_BYTES } from "./ack-batcher.ts";
 import { TerminalController, mostUrgent } from "./controller.ts";
 import { OutputScheduler } from "./output-scheduler.ts";
-import { ReceiveHub, SETTLE } from "./receive.ts";
+import { ZmodemHub, SETTLE } from "./zmodem.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
 /** A session client the test drives by hand. */
@@ -1510,17 +1510,18 @@ describe("mostUrgent", () => {
 });
 
 function hub() {
-  let send: ((event: ReceiveView) => void) | undefined;
+  let send: ((event: ZmodemView) => void) | undefined;
   const client = {
-    listen: vi.fn<ReceiveClient["listen"]>(async (handler) => {
+    listen: vi.fn<ZmodemClient["listen"]>(async (handler) => {
       send = handler;
     }),
-    answer: vi.fn<ReceiveClient["answer"]>(async () => {}),
-    cancel: vi.fn<ReceiveClient["cancel"]>(async () => {}),
-    reveal: vi.fn<ReceiveClient["reveal"]>(async () => {}),
+    receive: vi.fn<ZmodemClient["receive"]>(async () => {}),
+    choose: vi.fn<ZmodemClient["choose"]>(async () => true),
+    cancel: vi.fn<ZmodemClient["cancel"]>(async () => {}),
+    reveal: vi.fn<ZmodemClient["reveal"]>(async () => {}),
   };
-  const receive = new ReceiveHub(client);
-  return { receive, client, send: (event: ReceiveView) => send?.(event) };
+  const receive = new ZmodemHub(client);
+  return { receive, client, send: (event: ZmodemView) => send?.(event) };
 }
 
 const banner = (screen: Awaited<ReturnType<typeof mount>>) =>
@@ -1528,7 +1529,7 @@ const banner = (screen: Awaited<ReturnType<typeof mount>>) =>
 
 async function receiving() {
   const { receive, client, send } = hub();
-  const { sessions, controller } = setup({ spec: sshTo("db"), receive });
+  const { sessions, controller } = setup({ spec: sshTo("db"), zmodem: receive });
   const screen = await mount(controller);
   sessions.resolveOpen();
   await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
@@ -1538,25 +1539,25 @@ async function receiving() {
 describe("files the host sends", () => {
   it("asks first, and sends the answer for this session only", async () => {
     const { controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 2, offer: 1 });
-    expect(controller.getReceive()).toBeUndefined();
-    send({ kind: "offered", session: 1, offer: 1 });
+    send({ kind: "offered", session: 2, offer: 1, wants: "receive" });
+    expect(controller.getZmodem()).toBeUndefined();
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
     await expect.poll(() => banner(screen)).toContain("wants to send files");
     // A click as it appears was meant for what was there before.
-    controller.answerReceive(true);
-    expect(client.answer).not.toHaveBeenCalled();
+    controller.answerZmodem(true);
+    expect(client.receive).not.toHaveBeenCalled();
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Receive" }).click();
-    expect(client.answer).toHaveBeenCalledWith(1, 1, true);
+    expect(client.receive).toHaveBeenCalledWith(1, 1, true);
     // One answer per offer: a second click does nothing.
     await expect.element(screen.getByRole("button", { name: "Receive" })).toBeDisabled();
-    controller.answerReceive(true);
-    expect(client.answer).toHaveBeenCalledTimes(1);
+    controller.answerZmodem(true);
+    expect(client.receive).toHaveBeenCalledTimes(1);
   });
 
   it("keeps keys from the host while files come, and Ctrl+C stops them", async () => {
     const { sessions, controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 1, offer: 1 });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
     send({ kind: "started", session: 1, folder: "/d" });
     send({ kind: "file", session: 1, name: "big.bin", size: 4096 });
     send({ kind: "progress", session: 1, bytes: 1024, size: 4096 });
@@ -1573,27 +1574,55 @@ describe("files the host sends", () => {
     await vi.waitFor(() => expect(sessions.session.write).toHaveBeenCalledWith("x"));
   });
 
+  it("lets the user choose files for rz, and says what went", async () => {
+    const { controller, screen, client, send } = await receiving();
+    send({ kind: "offered", session: 1, offer: 1, wants: "send" });
+    await expect.poll(() => banner(screen)).toContain("waits for files (rz)");
+    await new Promise((resolve) => setTimeout(resolve, SETTLE));
+    await screen.getByRole("button", { name: "Choose files…" }).click();
+    expect(client.choose).toHaveBeenCalledWith(1, 1);
+    expect(client.receive).not.toHaveBeenCalled();
+    send({ kind: "started", session: 1, folder: null });
+    send({ kind: "file", session: 1, name: "notes.txt", size: 4096 });
+    await expect.poll(() => banner(screen)).toContain("Sending notes.txt");
+    send({
+      kind: "finished",
+      session: 1,
+      folder: null,
+      files: ["notes.txt"],
+      moreFiles: 0,
+      skipped: ["old.log"],
+      moreSkipped: 0,
+    });
+    await expect.poll(() => banner(screen)).toContain("Sent notes.txt");
+    await expect.poll(() => banner(screen)).toContain("the host skipped: old.log");
+    await expect
+      .element(screen.getByRole("button", { name: "Show folder" }))
+      .not.toBeInTheDocument();
+    controller.dismissZmodem();
+  });
+
   it("says why an answer failed, and declines the offer", async () => {
     const { controller, screen, client, send } = await receiving();
-    client.answer.mockRejectedValueOnce(new Error("could not open Downloads/Tauminus"));
-    send({ kind: "offered", session: 1, offer: 1 });
+    client.receive.mockRejectedValueOnce(new Error("could not open Downloads/Tauminus"));
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Receive" }).click();
     await expect.poll(() => banner(screen)).toContain("could not open Downloads/Tauminus");
     expect(client.cancel).toHaveBeenCalledWith(1);
     await screen.getByRole("button", { name: "Close" }).click();
-    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
+    await vi.waitFor(() => expect(controller.getZmodem()).toBeUndefined());
   });
 
   it("names what came and what was skipped, and a decline shows nothing", async () => {
     const { controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 1, offer: 1 });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Decline" }).click();
-    expect(client.answer).toHaveBeenCalledWith(1, 1, false);
+    expect(client.receive).toHaveBeenCalledWith(1, 1, false);
     send({ kind: "declined", session: 1 });
-    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
-    send({ kind: "offered", session: 1, offer: 1 });
+    await vi.waitFor(() => expect(controller.getZmodem()).toBeUndefined());
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
     send({ kind: "started", session: 1, folder: "/d" });
     send({
       kind: "finished",
@@ -1609,6 +1638,6 @@ describe("files the host sends", () => {
     await screen.getByRole("button", { name: "Show folder" }).click();
     expect(client.reveal).toHaveBeenCalled();
     await screen.getByRole("button", { name: "Close" }).click();
-    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
+    await vi.waitFor(() => expect(controller.getZmodem()).toBeUndefined());
   });
 });

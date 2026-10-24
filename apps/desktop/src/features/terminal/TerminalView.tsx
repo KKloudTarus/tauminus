@@ -8,7 +8,7 @@ import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
 import { ConnectFailure } from "./ConnectFailure.tsx";
 import type { CompletionState, TerminalController } from "./controller.ts";
 import { GuardDialog } from "./GuardDialog.tsx";
-import { type ReceiveState, SETTLE, formatBytes } from "./receive.ts";
+import { type ZmodemState, SETTLE, formatBytes } from "./zmodem.ts";
 
 interface TerminalViewProps {
   controller: TerminalController;
@@ -29,7 +29,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
   const recording = useSyncExternalStore(controller.subscribe, controller.getRecording);
   const fill = useSyncExternalStore(controller.subscribe, controller.getFill);
   const completion = useSyncExternalStore(controller.subscribe, controller.getCompletion);
-  const receive = useSyncExternalStore(controller.subscribe, controller.getReceive);
+  const receive = useSyncExternalStore(controller.subscribe, controller.getZmodem);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -159,7 +159,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
  * Files the host sends with `sz`: asked first, then their progress, then
  * where they went. Nothing goes back to the host before Receive.
  */
-function Receive({ controller, state }: { controller: TerminalController; state: ReceiveState }) {
+function Receive({ controller, state }: { controller: TerminalController; state: ZmodemState }) {
   // An offer's buttons wait a moment: a click meant for what was there
   // before must not answer it.
   const shownAt = state.kind === "offered" ? state.shownAt : 0;
@@ -178,31 +178,32 @@ function Receive({ controller, state }: { controller: TerminalController; state:
       {state.kind === "offered" && (
         <>
           <span className="min-w-0 flex-1">
-            {controller.defaultTitle} wants to send files (Zmodem). They go to Downloads/Tauminus;
-            Ctrl+C declines.
+            {state.wants === "receive"
+              ? `${controller.defaultTitle} wants to send files (Zmodem). They go to Downloads/Tauminus; Ctrl+C declines.`
+              : `${controller.defaultTitle} waits for files (rz). Ctrl+C declines.`}
           </span>
           <button
             type="button"
             className="btn btn-primary btn-xs"
             disabled={state.answered || !settled}
-            onClick={() => controller.answerReceive(true)}
+            onClick={() => controller.answerZmodem(true)}
           >
-            Receive
+            {state.wants === "receive" ? "Receive" : "Choose files…"}
           </button>
           <button
             type="button"
             className="btn btn-ghost btn-xs"
             disabled={state.answered || !settled}
-            onClick={() => controller.answerReceive(false)}
+            onClick={() => controller.answerZmodem(false)}
           >
             Decline
           </button>
         </>
       )}
-      {state.kind === "receiving" && (
+      {state.kind === "moving" && (
         <>
           <span className="min-w-0 flex-1 truncate">
-            Receiving {state.name ?? "files"}
+            {state.folder === null ? "Sending" : "Receiving"} {state.name ?? "files"}
             {state.size === null
               ? ` · ${formatBytes(state.bytes)}`
               : ` · ${formatBytes(state.bytes)} of ${formatBytes(state.size)}`}
@@ -219,7 +220,7 @@ function Receive({ controller, state }: { controller: TerminalController; state:
           <button
             type="button"
             className="btn btn-ghost btn-xs"
-            onClick={() => controller.cancelReceive()}
+            onClick={() => controller.cancelZmodem()}
           >
             Stop
           </button>
@@ -229,26 +230,31 @@ function Receive({ controller, state }: { controller: TerminalController; state:
         <>
           <span className="min-w-0 flex-1 truncate">
             {state.files.length === 0
-              ? "No file was received"
-              : `Received ${names(state.files, state.moreFiles)}`}
+              ? `No file was ${state.folder === null ? "sent" : "received"}`
+              : `${state.folder === null ? "Sent" : "Received"} ${names(state.files, state.moreFiles)}`}
             {state.skipped.length > 0 && (
               <span className="text-error">
                 {" "}
-                · skipped, names that cannot be saved: {names(state.skipped, state.moreSkipped)}
+                {state.folder === null
+                  ? " · the host skipped: "
+                  : " · skipped, names that cannot be saved: "}
+                {names(state.skipped, state.moreSkipped)}
               </span>
             )}
           </span>
+          {state.folder !== null && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => controller.revealReceived()}
+            >
+              Show folder
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-ghost btn-xs"
-            onClick={() => controller.revealReceived()}
-          >
-            Show folder
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            onClick={() => controller.dismissReceive()}
+            onClick={() => controller.dismissZmodem()}
           >
             Close
           </button>
@@ -257,12 +263,12 @@ function Receive({ controller, state }: { controller: TerminalController; state:
       {state.kind === "failed" && (
         <>
           <span className="min-w-0 flex-1 text-error">
-            Transfer stopped: {state.reason}. Enter brings the prompt back.
+            Transfer stopped: {state.reason}. Ctrl+C clears the line and brings the prompt back.
           </span>
           <button
             type="button"
             className="btn btn-ghost btn-xs"
-            onClick={() => controller.dismissReceive()}
+            onClick={() => controller.dismissZmodem()}
           >
             Close
           </button>

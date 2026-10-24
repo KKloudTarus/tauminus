@@ -20,13 +20,13 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use support::{Scratch, ScriptedPrompter};
 use tauminus_app::ports::{
-    Answer, OutputSink, PartFile, Prompter, ReceiveFolder, SinkClosed, SshConnector, TransferEvent,
-    TransferHost,
+    Answer, OutputSink, PartFile, Prompter, ReceiveFolder, SinkClosed, SshConnector,
+    TransferAnswer, TransferEvent, TransferHost,
 };
 use tauminus_app::{SessionConfig, SessionManager};
 use tauminus_domain::{
     AuthMethod, AuthOptions, Endpoint, HostName, Route, SessionId, SessionKind, SessionMeta,
-    SshTarget, TerminalSize, UserName,
+    SshTarget, TerminalSize, UserName, Wants,
 };
 use tauminus_ssh::{AgentSource, HostKeyStore, RusshConnector};
 
@@ -37,7 +37,7 @@ struct Host {
 }
 
 impl TransferHost for Host {
-    fn offered(&self, _id: SessionId, _offer: u64) {
+    fn offered(&self, _id: SessionId, _offer: u64, _wants: Wants) {
         self.offers.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -180,7 +180,7 @@ async fn sz_over_ssh_arrives_whole_and_the_shell_comes_back() {
     assert!(sessions.write_text(id, "x".into()).await.is_err());
     let folder = Folder::default();
     sessions
-        .answer_transfer(id, 1, Some(Box::new(folder.clone())))
+        .answer_transfer(id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
         .unwrap();
     until("the end", || {
         matches!(
@@ -227,7 +227,7 @@ async fn ctrl_c_stops_sz_and_leaves_the_shell_usable() {
         .unwrap();
     until("the offer", || host.offers.load(Ordering::Relaxed) == 1).await;
     sessions
-        .answer_transfer(id, 1, Some(Box::new(Folder::default())))
+        .answer_transfer(id, 1, TransferAnswer::Receive(Box::new(Folder::default())))
         .unwrap();
     until("a file", || {
         host.events
@@ -274,7 +274,7 @@ async fn a_file_too_large_to_take_stops_sz_at_once() {
     until("the offer", || host.offers.load(Ordering::Relaxed) == 1).await;
     let folder = Folder::default();
     sessions
-        .answer_transfer(id, 1, Some(Box::new(folder.clone())))
+        .answer_transfer(id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
         .unwrap();
     until("the stop", || {
         matches!(
@@ -286,5 +286,316 @@ async fn a_file_too_large_to_take_stops_sz_at_once() {
     // The host heard the cancel: `sz` ends without retrying for minutes.
     until("sz ended", || screen.text().contains("sz-ended-")).await;
     assert!(folder.0.lock().unwrap().is_empty());
+    sessions.close(id).unwrap();
+}
+
+/// A local file in memory, as the desktop's opened file would be.
+#[derive(Debug)]
+struct MemFile(&'static str, Vec<u8>);
+
+impl tauminus_app::ports::OutgoingFile for MemFile {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn size(&self) -> u64 {
+        self.1.len() as u64
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let from = usize::try_from(offset).unwrap().min(self.1.len());
+        let n = buf.len().min(self.1.len() - from);
+        buf[..n].copy_from_slice(&self.1[from..from + n]);
+        Ok(n)
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        })
+}
+
+/// Runs `rz` in a fresh folder, and waits for its offer.
+async fn rz_waiting(sessions: &SessionManager, id: SessionId, host: &Host, dir: &str) {
+    sessions
+        .write_text(id, format!("rm -rf {dir}; mkdir {dir}; cd {dir} && rz\n"))
+        .await
+        .unwrap();
+    until("rz", || host.offers.load(Ordering::Relaxed) == 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with lrzsz: TAUMINUS_SZ_SSHD"]
+async fn files_sent_to_rz_arrive_whole_and_an_existing_one_is_skipped() {
+    let scratch = Scratch::new("zmodem-rz");
+    let (sessions, id, host, screen) = shell(&scratch).await;
+    let big: Vec<u8> = (0..3_000_000u32)
+        .map(|i| (i * 7 + i / 3).to_le_bytes()[0])
+        .collect();
+    sessions
+        .write_text(
+            id,
+            "rm -rf /tmp/rzt; mkdir /tmp/rzt; echo old > /tmp/rzt/old.txt; cd /tmp/rzt && rz\n"
+                .into(),
+        )
+        .await
+        .unwrap();
+    until("rz", || host.offers.load(Ordering::Relaxed) == 1).await;
+    let files: Vec<Box<dyn tauminus_app::ports::OutgoingFile>> = vec![
+        Box::new(MemFile("big.bin", big.clone())),
+        Box::new(MemFile("old.txt", b"new\n".to_vec())),
+        Box::new(MemFile("small.txt", b"hello\n".to_vec())),
+    ];
+    sessions
+        .answer_transfer(id, 1, TransferAnswer::Send(files))
+        .unwrap();
+    until("the end", || {
+        matches!(
+            host.events.lock().unwrap().last(),
+            Some(TransferEvent::Finished { .. } | TransferEvent::Failed { .. })
+        )
+    })
+    .await;
+    let events = host.events.lock().unwrap().clone();
+    assert!(
+        matches!(
+            events.last(),
+            Some(TransferEvent::Finished { folder: None, files, skipped, .. })
+                if files == &["big.bin", "small.txt"] && skipped == &["old.txt"]
+        ),
+        "{events:?}"
+    );
+    sessions
+        .write_text(id, "sha256sum big.bin; cat old.txt small.txt\n".into())
+        .await
+        .unwrap();
+    let want = hex(&big);
+    until("the hash", || screen.text().contains(&want)).await;
+    until("the files", || screen.text().contains("old\r\nhello")).await;
+    sessions.close(id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with lrzsz: TAUMINUS_SZ_SSHD"]
+async fn a_stop_mid_send_runs_none_of_the_file_on_the_host() {
+    let scratch = Scratch::new("zmodem-rz-stop");
+    let (sessions, id, host, screen) = shell(&scratch).await;
+    sessions
+        .write_text(id, "rm -f /tmp/pwned\n".into())
+        .await
+        .unwrap();
+    rz_waiting(&sessions, id, &host, "/tmp/rzs").await;
+    // Text lines that would run, were they typed into the shell.
+    let lines = b"touch /tmp/pwned\n".repeat(400_000);
+    let files: Vec<Box<dyn tauminus_app::ports::OutgoingFile>> =
+        vec![Box::new(MemFile("lines.txt", lines))];
+    sessions
+        .answer_transfer(id, 1, TransferAnswer::Send(files))
+        .unwrap();
+    until("a file", || {
+        host.events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, TransferEvent::Progress { .. }))
+    })
+    .await;
+    sessions.write_text(id, "\u{3}".into()).await.unwrap();
+    until("the stop", || {
+        matches!(
+            host.events.lock().unwrap().last(),
+            Some(TransferEvent::Failed { .. })
+        )
+    })
+    .await;
+    // Give whatever was on its way time to land, then ask.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    for _ in 0..50 {
+        if sessions
+            .write_text(
+                id,
+                "\nls /tmp/pwned 2>&1 | tail -1; echo checked-$((6*7))\n".into(),
+            )
+            .await
+            .is_ok()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    until("the check", || screen.text().contains("checked-42")).await;
+    let text = screen.text();
+    assert!(
+        text.contains("No such file"),
+        "{}",
+        &text[text.len().saturating_sub(600)..]
+    );
+    sessions.close(id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with lrzsz: TAUMINUS_SZ_SSHD"]
+async fn rz_killed_mid_send_runs_none_of_the_file_on_the_host() {
+    let scratch = Scratch::new("zmodem-rz-killed");
+    let (sessions, id, host, screen) = shell(&scratch).await;
+    // As the view does: it acknowledges what it showed, so a shell that
+    // echoes what reached it does not hold the session back.
+    let sessions = Arc::new(sessions);
+    let acking = {
+        let (sessions, screen) = (Arc::clone(&sessions), screen.clone());
+        tokio::spawn(async move {
+            let mut acked = 0;
+            loop {
+                let shown = screen.0.lock().unwrap().len();
+                let _ = sessions.acknowledge(id, shown - acked);
+                acked = shown;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+    };
+    sessions
+        .write_text(
+            id,
+            "rm -rf /tmp/rzk /tmp/killed-pwned; mkdir /tmp/rzk && cd /tmp/rzk && timeout --foreground 2 rz\n"
+                .into(),
+        )
+        .await
+        .unwrap();
+    until("rz", || host.offers.load(Ordering::Relaxed) == 1).await;
+    // Lines that would run, were the shell to read them, and more than
+    // goes in 2 s.
+    let lines = b"touch /tmp/killed-pwned\n".repeat(4_000_000);
+    let files: Vec<Box<dyn tauminus_app::ports::OutgoingFile>> =
+        vec![Box::new(MemFile("lines.txt", lines))];
+    sessions
+        .answer_transfer(id, 1, TransferAnswer::Send(files))
+        .unwrap();
+    until("the stop", || {
+        matches!(
+            host.events.lock().unwrap().last(),
+            Some(TransferEvent::Failed { .. } | TransferEvent::Finished { .. })
+        )
+    })
+    .await;
+    let events = host.events.lock().unwrap().clone();
+    assert!(
+        matches!(events.last(), Some(TransferEvent::Failed { .. })),
+        "{events:?}"
+    );
+    // What was on its way still reaches the tty, which echoes it: wait
+    // until the screen is still, as a user would.
+    let mut seen = 0;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let now = screen.0.lock().unwrap().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+    }
+    // Ctrl+C clears what reached the line, then the shell answers.
+    for _ in 0..50 {
+        if sessions.write_text(id, "\u{3}".into()).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sessions
+        .write_text(
+            id,
+            "ls /tmp/killed-pwned 2>&1 | tail -1; echo checked-$((6*7))\n".into(),
+        )
+        .await
+        .unwrap();
+    until("the check", || screen.text().contains("checked-42")).await;
+    let text = screen.text();
+    assert!(
+        text.contains("No such file"),
+        "{}",
+        &text[text.len().saturating_sub(800)..]
+    );
+    acking.abort();
+    sessions.close(id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with lrzsz: TAUMINUS_SZ_SSHD"]
+async fn in_bash_rz_killed_mid_send_leaves_no_line_for_enter() {
+    let scratch = Scratch::new("zmodem-rz-bash");
+    let (sessions, id, host, screen) = shell(&scratch).await;
+    let sessions = Arc::new(sessions);
+    let acking = {
+        let (sessions, screen) = (Arc::clone(&sessions), screen.clone());
+        tokio::spawn(async move {
+            let mut acked = 0;
+            loop {
+                let shown = screen.0.lock().unwrap().len();
+                let _ = sessions.acknowledge(id, shown - acked);
+                acked = shown;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+    };
+    // bash, with readline: its `C-x C-x` and `C-u` are what the cancel
+    // must get right.
+    sessions
+        .write_text(id, "exec bash --norc -i\n".into())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sessions
+        .write_text(
+            id,
+            "rm -rf /tmp/rzb /tmp/bash-pwned*; mkdir /tmp/rzb && cd /tmp/rzb && timeout --foreground 2 rz\n"
+                .into(),
+        )
+        .await
+        .unwrap();
+    until("rz", || host.offers.load(Ordering::Relaxed) == 1).await;
+    let lines = b"touch /tmp/bash-pwned\n".repeat(4_000_000);
+    let files: Vec<Box<dyn tauminus_app::ports::OutgoingFile>> =
+        vec![Box::new(MemFile("lines.txt", lines))];
+    sessions
+        .answer_transfer(id, 1, TransferAnswer::Send(files))
+        .unwrap();
+    until("the stop", || {
+        matches!(
+            host.events.lock().unwrap().last(),
+            Some(TransferEvent::Failed { .. })
+        )
+    })
+    .await;
+    let mut seen = 0;
+    for _ in 0..60 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let now = screen.0.lock().unwrap().len();
+        if now == seen {
+            break;
+        }
+        seen = now;
+    }
+    // Enter, with no Ctrl+C first: whatever was left on the line runs.
+    sessions.write_text(id, "\r".into()).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    sessions
+        .write_text(
+            id,
+            "ls /tmp/bash-pwned* 2>&1 | tail -1; echo checked-$((6*7))\n".into(),
+        )
+        .await
+        .unwrap();
+    until("the check", || screen.text().contains("checked-42")).await;
+    let text = screen.text();
+    assert!(
+        text.contains("No such file"),
+        "{}",
+        &text[text.len().saturating_sub(800)..]
+    );
+    acking.abort();
     sessions.close(id).unwrap();
 }

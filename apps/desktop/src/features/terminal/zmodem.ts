@@ -2,19 +2,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { messageOf } from "@/features/hosts/hosts-store.ts";
-import type { ReceiveClient, ReceiveView } from "@/ipc/receive.ts";
+import type { ZmodemClient, ZmodemView } from "@/ipc/zmodem.ts";
 
-/** What a pane shows of files its host sends. */
-export type ReceiveState =
+/** Which way an offer's files go: `receive` from `sz`, `send` to `rz`. */
+export type Direction = "receive" | "send";
+
+/** What a pane shows of files its host sends or takes. */
+export type ZmodemState =
   /**
    * `answered` once the user chose: one answer per offer. `shownAt` is
    * when it appeared: a click before {@link SETTLE} ms later was meant
    * for what was there before.
    */
-  | { kind: "offered"; offer: number; answered: boolean; shownAt: number }
+  | { kind: "offered"; offer: number; wants: Direction; answered: boolean; shownAt: number }
   | {
-      kind: "receiving";
-      folder: string;
+      /** Files come into `folder`, or, with none, go to the host. */
+      kind: "moving";
+      folder: string | null;
       name: string | null;
       bytes: number;
       size: number | null;
@@ -22,7 +26,7 @@ export type ReceiveState =
     }
   | {
       kind: "finished";
-      folder: string;
+      folder: string | null;
       files: string[];
       moreFiles: number;
       skipped: string[];
@@ -40,12 +44,12 @@ export const SETTLE = 400;
  * Each state is a new object when it changes, so a pane's snapshot stays
  * the same between events. O(1) per event, plus one call per listener.
  */
-export class ReceiveHub {
-  readonly client: ReceiveClient;
-  readonly #states = new Map<number, ReceiveState>();
+export class ZmodemHub {
+  readonly client: ZmodemClient;
+  readonly #states = new Map<number, ZmodemState>();
   readonly #listeners = new Set<Listener>();
 
-  constructor(client: ReceiveClient) {
+  constructor(client: ZmodemClient) {
     this.client = client;
     client
       .listen((event) => this.apply(event))
@@ -54,7 +58,7 @@ export class ReceiveHub {
       });
   }
 
-  state(session: number | undefined): ReceiveState | undefined {
+  state(session: number | undefined): ZmodemState | undefined {
     return session === undefined ? undefined : this.#states.get(session);
   }
 
@@ -63,7 +67,10 @@ export class ReceiveHub {
     return () => this.#listeners.delete(listener);
   }
 
-  /** The user's answer to `session`'s offer, sent once. */
+  /**
+   * The user's answer to `session`'s offer, sent once: to `sz`, receive or
+   * not; to `rz`, choose files (in the system's dialog) or not.
+   */
   answer(session: number, accept: boolean): Promise<void> {
     const state = this.#states.get(session);
     if (state?.kind !== "offered" || state.answered || performance.now() - state.shownAt < SETTLE) {
@@ -71,7 +78,11 @@ export class ReceiveHub {
     }
     this.#states.set(session, { ...state, answered: true });
     this.#notify();
-    return this.client.answer(session, state.offer, accept).catch((error: unknown) => {
+    const sent =
+      state.wants === "send" && accept
+        ? this.client.choose(session, state.offer).then(() => {})
+        : this.client.receive(session, state.offer, accept && state.wants === "receive");
+    return sent.catch((error: unknown) => {
       // Nothing went to the host: the offer is declined, and the user told.
       this.client.cancel(session).catch(() => {});
       this.apply({ kind: "failed", session, reason: messageOf(error) });
@@ -83,7 +94,7 @@ export class ReceiveHub {
     if (this.#states.delete(session)) this.#notify();
   }
 
-  apply(event: ReceiveView): void {
+  apply(event: ZmodemView): void {
     const before = this.#states.get(event.session);
     const next = advance(before, event);
     if (next === before) return;
@@ -97,17 +108,23 @@ export class ReceiveHub {
   }
 }
 
-function advance(state: ReceiveState | undefined, event: ReceiveView): ReceiveState | undefined {
+function advance(state: ZmodemState | undefined, event: ZmodemView): ZmodemState | undefined {
   switch (event.kind) {
     case "offered":
       return event.offer === null
         ? state
-        : { kind: "offered", offer: event.offer, answered: false, shownAt: performance.now() };
+        : {
+            kind: "offered",
+            offer: event.offer,
+            wants: event.wants,
+            answered: false,
+            shownAt: performance.now(),
+          };
     case "declined":
       return undefined;
     case "started":
       return {
-        kind: "receiving",
+        kind: "moving",
         folder: event.folder,
         name: null,
         bytes: 0,
@@ -115,11 +132,11 @@ function advance(state: ReceiveState | undefined, event: ReceiveView): ReceiveSt
         files: 0,
       };
     case "file":
-      return state?.kind === "receiving"
+      return state?.kind === "moving"
         ? { ...state, name: event.name, bytes: 0, size: event.size, files: state.files + 1 }
         : state;
     case "progress":
-      return state?.kind === "receiving"
+      return state?.kind === "moving"
         ? { ...state, bytes: event.bytes ?? state.bytes, size: event.size }
         : state;
     case "finished":

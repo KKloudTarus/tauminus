@@ -18,7 +18,6 @@ mod ipc;
 mod links;
 mod mosh;
 mod notices;
-mod receive;
 mod recordings;
 mod serial;
 mod snippets;
@@ -27,6 +26,7 @@ mod telnet;
 mod tmux;
 mod triggers;
 mod vault;
+mod zmodem;
 
 use std::sync::Arc;
 
@@ -59,10 +59,11 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         tmux::tmux_pane_attach,
         tmux::tmux_new_window,
         tmux::tmux_detach,
-        receive::receive_listen,
-        receive::receive_answer,
-        receive::receive_cancel,
-        receive::receive_reveal,
+        zmodem::zmodem_listen,
+        zmodem::zmodem_receive,
+        zmodem::zmodem_choose::<tauri::Wry>,
+        zmodem::zmodem_cancel,
+        zmodem::zmodem_reveal,
         ai::ai_settings_get,
         ai::ai_settings_set,
         ai::ai_key_set,
@@ -199,11 +200,12 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         downloads,
     } = paths;
     let sessions = Arc::new(SessionManager::new(SessionConfig::default()));
-    let transfers = Arc::new(receive::Transfers::default());
+    let transfers = Arc::new(zmodem::Transfers::default());
     sessions
         .set_transfer_host(Arc::clone(&transfers) as Arc<dyn tauminus_app::ports::TransferHost>);
     app.manage(transfers);
-    app.manage(receive::ReceiveRoot(
+    app.manage(zmodem::Choosing::default());
+    app.manage(zmodem::ReceiveRoot(
         downloads
             .or_else(|| home.as_ref().map(|home| home.join("Downloads")))
             .unwrap_or_else(|| config_dir.join("received"))
@@ -366,6 +368,7 @@ pub fn run() -> anyhow::Result<()> {
         // Called from Rust only (`notices`); the window has none of its
         // permissions.
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let paths = Paths {

@@ -60,6 +60,9 @@ tauri-build = "2.7.4"
 # OS notifications for trigger matches, raised from Rust only: the webview
 # gets none of the plugin's permissions.
 tauri-plugin-notification = "2.7.0"
+# The native file picker for files sent to `rz` (ADR 0026), opened from
+# Rust only: the webview is granted none of its commands.
+tauri-plugin-dialog = "2.8.3"
 # Opens http and https links from the terminal in the default browser.
 open = "5.4.4"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }

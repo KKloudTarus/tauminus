@@ -1,11 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Receiving files a host sends with Zmodem (`sz`), sans I/O. See ADR 0025.
+//! Zmodem file transfers in a terminal, sans I/O: files a host sends with
+//! `sz` (ADR 0025), and files sent to `rz` on the host ([`Transmit`],
+//! ADR 0026).
 //!
 //! `zmodem2` runs the protocol; this module adds what a terminal needs
-//! around it: finding the moment `sz` asks to start, a name the host sent
-//! made safe to save, and a size the host declared held to.
+//! around it: finding the moment the host asks to start, names made safe
+//! to save or to send, and sizes held to.
 
 use std::sync::LazyLock;
 
@@ -14,23 +16,47 @@ use zmodem2::{Action, Event, Receiver};
 
 use crate::sftp::{LocalOs, local_name};
 
-/// How `sz` asks a terminal to start receiving: a ZRQINIT hex header.
-const OFFER: &[u8] = b"**\x18B00";
-/// Bytes after [`OFFER`] in the header: flags, CRC, then CR.
-const OFFER_TAIL: usize = 12;
+/// How a host starts a transfer: a hex header, its type's first digit 0.
+const OFFER: &[u8] = b"**\x18B0";
+/// Bytes after [`OFFER`] in the header: the type's second digit, then
+/// flags and CRC.
+const OFFER_TAIL: usize = 13;
 
-/// Where a ZRQINIT header starts in `bytes`, if one does, whole: the hex
-/// digits of its flags and CRC all there. A header cut at the end of
-/// `bytes` is not found; [`OFFER_KEEP`] bytes kept for the next read find
-/// it then. O(n).
-pub fn find_offer(bytes: &[u8]) -> Option<usize> {
+/// What a host's offer asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wants {
+    /// ZRQINIT: `sz` on the host sends files.
+    Receive,
+    /// ZRINIT: `rz` on the host waits for files.
+    Send,
+}
+
+/// An offer found in output: where its header starts, and what it asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offer {
+    pub at: usize,
+    pub wants: Wants,
+}
+
+/// Where a ZRQINIT or ZRINIT header starts in `bytes`, if one does, whole:
+/// the hex digits of its flags and CRC all there. A header cut at the end
+/// of `bytes` is not found; [`OFFER_KEEP`] bytes kept for the next read
+/// find it then. O(n).
+pub fn find_offer(bytes: &[u8]) -> Option<Offer> {
     // SIMD search, about 25 GB/s: every output chunk of a session that can
     // transfer passes here.
     static FINDER: LazyLock<Finder<'static>> = LazyLock::new(|| Finder::new(OFFER));
-    FINDER.find_iter(bytes).find(|&at| {
-        bytes
-            .get(at + OFFER.len()..at + OFFER.len() + OFFER_TAIL)
-            .is_some_and(|tail| tail.iter().all(u8::is_ascii_hexdigit))
+    FINDER.find_iter(bytes).find_map(|at| {
+        let tail = bytes.get(at + OFFER.len()..at + OFFER.len() + OFFER_TAIL)?;
+        let wants = match tail[0] {
+            b'0' => Wants::Receive,
+            b'1' => Wants::Send,
+            _ => return None,
+        };
+        tail[1..]
+            .iter()
+            .all(u8::is_ascii_hexdigit)
+            .then_some(Offer { at, wants })
     })
 }
 
@@ -289,6 +315,10 @@ impl Receive {
         true
     }
 }
+
+mod send;
+
+pub use send::{MAX_SEND_NAME, Need, Sent, Transmit, TransmitError, TransmitOutput};
 
 #[cfg(test)]
 mod tests;

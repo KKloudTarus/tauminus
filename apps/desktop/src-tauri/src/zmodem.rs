@@ -1,25 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Files a host sends with Zmodem (`sz`), over IPC (ADR 0025). They go to
-//! `Downloads/Tauminus`; the view asks the user first, and only names the
-//! host sent, checked in the domain, are joined to that folder.
+//! Zmodem over IPC. Files a host sends with `sz` (ADR 0025) go to
+//! `Downloads/Tauminus`: the view asks the user first, and only names the
+//! host sent, checked in the domain, are joined to that folder. Files sent
+//! to `rz` (ADR 0026) are chosen in a native dialog this module opens: no
+//! path comes from the view.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
 use specta::Type;
 use tauminus_app::SessionManager;
-use tauminus_app::ports::{PartFile, ReceiveFolder, TransferEvent, TransferHost};
-use tauminus_domain::{LocalOs, SessionId, local_name};
+use tauminus_app::ports::{
+    OutgoingFile, PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost,
+};
+use tauminus_domain::{LocalOs, SessionId, Wants, local_name};
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::ipc::{CommandError, ErrorCode, SessionHandle};
+
+mod outgoing;
 
 const PART: &str = ".tauminus-part";
 /// Numbered names tried before a file is refused: `a (1).txt` and on.
@@ -29,16 +36,19 @@ const BUFFER: usize = 64 << 10;
 /// What a session's transfer tells the view.
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase", tag = "kind")]
-pub(crate) enum ReceiveView {
-    /// The host offers files; nothing is sent back until the user answers
-    /// this offer, by its number.
+pub(crate) enum ZmodemView {
+    /// The host offers to send files (`sz`) or to take them (`rz`);
+    /// nothing is sent back until the user answers this offer, by its
+    /// number.
     Offered {
         session: SessionHandle,
         offer: f64,
+        wants: Direction,
     },
+    /// Files come into `folder`, or, with none, go to the host.
     Started {
         session: SessionHandle,
-        folder: String,
+        folder: Option<String>,
     },
     File {
         session: SessionHandle,
@@ -54,7 +64,7 @@ pub(crate) enum ReceiveView {
     #[serde(rename_all = "camelCase")]
     Finished {
         session: SessionHandle,
-        folder: String,
+        folder: Option<String>,
         files: Vec<String>,
         more_files: f64,
         skipped: Vec<String>,
@@ -69,10 +79,20 @@ pub(crate) enum ReceiveView {
     },
 }
 
+/// Which way an offer's files go.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Direction {
+    /// The host sends (`sz`): the user receives.
+    Receive,
+    /// The host takes (`rz`): the user sends.
+    Send,
+}
+
 /// Where transfer events go: the view's one channel, once it listens.
 #[derive(Default)]
 pub(crate) struct Transfers {
-    channel: Mutex<Option<Channel<ReceiveView>>>,
+    channel: Mutex<Option<Channel<ZmodemView>>>,
 }
 
 impl std::fmt::Debug for Transfers {
@@ -82,7 +102,7 @@ impl std::fmt::Debug for Transfers {
 }
 
 impl Transfers {
-    fn send(&self, view: ReceiveView) {
+    fn send(&self, view: ZmodemView) {
         let channel = self
             .channel
             .lock()
@@ -101,11 +121,15 @@ fn number(bytes: u64) -> f64 {
 }
 
 impl TransferHost for Transfers {
-    fn offered(&self, id: SessionId, offer: u64) {
+    fn offered(&self, id: SessionId, offer: u64, wants: Wants) {
         if let Ok(session) = SessionHandle::try_from(id) {
-            self.send(ReceiveView::Offered {
+            self.send(ZmodemView::Offered {
                 session,
                 offer: number(offer),
+                wants: match wants {
+                    Wants::Receive => Direction::Receive,
+                    Wants::Send => Direction::Send,
+                },
             });
         }
     }
@@ -115,13 +139,13 @@ impl TransferHost for Transfers {
             return;
         };
         self.send(match event {
-            TransferEvent::Started { folder } => ReceiveView::Started { session, folder },
-            TransferEvent::File { name, size } => ReceiveView::File {
+            TransferEvent::Started { folder } => ZmodemView::Started { session, folder },
+            TransferEvent::File { name, size } => ZmodemView::File {
                 session,
                 name,
                 size: size.map(number),
             },
-            TransferEvent::Progress { bytes, size } => ReceiveView::Progress {
+            TransferEvent::Progress { bytes, size } => ZmodemView::Progress {
                 session,
                 bytes: number(bytes),
                 size: size.map(number),
@@ -132,7 +156,7 @@ impl TransferHost for Transfers {
                 more_files,
                 skipped,
                 more_skipped,
-            } => ReceiveView::Finished {
+            } => ZmodemView::Finished {
                 session,
                 folder,
                 files,
@@ -140,8 +164,8 @@ impl TransferHost for Transfers {
                 skipped,
                 more_skipped: number(more_skipped),
             },
-            TransferEvent::Failed { reason } => ReceiveView::Failed { session, reason },
-            TransferEvent::Declined => ReceiveView::Declined { session },
+            TransferEvent::Failed { reason } => ZmodemView::Failed { session, reason },
+            TransferEvent::Declined => ZmodemView::Declined { session },
         });
     }
 }
@@ -341,7 +365,7 @@ fn mark_downloaded(_path: &Path) {}
     clippy::needless_pass_by_value,
     reason = "Tauri injects State by value into command handlers"
 )]
-pub(crate) fn receive_listen(transfers: State<'_, Arc<Transfers>>, on_event: Channel<ReceiveView>) {
+pub(crate) fn zmodem_listen(transfers: State<'_, Arc<Transfers>>, on_event: Channel<ZmodemView>) {
     *transfers
         .channel
         .lock()
@@ -356,7 +380,7 @@ pub(crate) fn receive_listen(transfers: State<'_, Arc<Transfers>>, on_event: Cha
     clippy::needless_pass_by_value,
     reason = "Tauri injects State by value into command handlers"
 )]
-pub(crate) fn receive_answer(
+pub(crate) fn zmodem_receive(
     sessions: State<'_, Arc<SessionManager>>,
     root: State<'_, ReceiveRoot>,
     session: SessionHandle,
@@ -369,24 +393,120 @@ pub(crate) fn receive_answer(
             "an offer is a whole number",
         ));
     }
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a whole number in range, checked above"
-    )]
-    let offer = offer as u64;
-    let folder: Option<Box<dyn ReceiveFolder>> = if accept {
+    let offer = offer_number(offer)?;
+    let answer = if accept {
         let folder = DiskFolder::open(&root.0).map_err(|error| {
             CommandError::new(
                 ErrorCode::Internal,
                 format!("could not open {}: {error}", root.0.display()),
             )
         })?;
-        Some(Box::new(folder))
+        TransferAnswer::Receive(Box::new(folder))
     } else {
-        None
+        TransferAnswer::Decline
     };
-    Ok(sessions.answer_transfer(session.into(), offer, folder)?)
+    Ok(sessions.answer_transfer(session.into(), offer, answer)?)
+}
+
+/// An offer's number from the view: a whole number from 1.
+fn offer_number(offer: f64) -> Result<u64, CommandError> {
+    if !(offer >= 1.0 && offer.fract() == 0.0 && offer < 2f64.powi(53)) {
+        return Err(CommandError::new(
+            ErrorCode::InvalidArgument,
+            "an offer is a whole number",
+        ));
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a whole number in range, checked above"
+    )]
+    Ok(offer as u64)
+}
+
+/// One file dialog at a time, in the whole app: a host cannot stack them.
+#[derive(Debug, Default)]
+pub(crate) struct Choosing(AtomicBool);
+
+/// Opens the system's file dialog for `rz` waiting in `session` (offer
+/// `offer`), and sends what the user chose; nothing chosen declines. The
+/// paths never reach the view. `true` when files went to the session.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn zmodem_choose<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    sessions: State<'_, Arc<SessionManager>>,
+    choosing: State<'_, Choosing>,
+    session: SessionHandle,
+    offer: f64,
+) -> Result<bool, CommandError> {
+    let offer = offer_number(offer)?;
+    let id = SessionId::from(session);
+    // Only for `rz` waiting now, with this number.
+    let waits = || -> Result<(), CommandError> {
+        if sessions.waiting_offer(id)? == Some((offer, Wants::Send)) {
+            Ok(())
+        } else {
+            Err(CommandError::new(
+                ErrorCode::NotFound,
+                "rz is not waiting for files in this session",
+            ))
+        }
+    };
+    waits()?;
+    if choosing.0.swap(true, Ordering::AcqRel) {
+        return Err(CommandError::new(
+            ErrorCode::NotAllowed,
+            "a file dialog is open already",
+        ));
+    }
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        app.dialog()
+            .file()
+            .set_title("Send files to rz (Zmodem)")
+            .blocking_pick_files()
+    })
+    .await;
+    choosing.0.store(false, Ordering::Release);
+    let paths: Vec<PathBuf> = picked
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| path.into_path().ok())
+        .collect();
+    // The offer may have gone while the dialog was open.
+    waits()?;
+    if paths.is_empty() {
+        sessions.answer_transfer(id, offer, TransferAnswer::Decline)?;
+        return Ok(false);
+    }
+    let files = tauri::async_runtime::spawn_blocking(move || open_outgoing(&paths))
+        .await
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()));
+    match files {
+        Ok(Ok(files)) => {
+            sessions.answer_transfer(id, offer, TransferAnswer::Send(files))?;
+            Ok(true)
+        }
+        Ok(Err(message)) | Err(CommandError { message, .. }) => {
+            sessions.answer_transfer(id, offer, TransferAnswer::Decline)?;
+            Err(CommandError::new(ErrorCode::InvalidArgument, message))
+        }
+    }
+}
+
+/// Opens every chosen file, or says which cannot be sent.
+fn open_outgoing(paths: &[PathBuf]) -> Result<Vec<Box<dyn OutgoingFile>>, String> {
+    if paths.len() > outgoing::MAX_FILES {
+        return Err(format!("at most {} files go at once", outgoing::MAX_FILES));
+    }
+    paths
+        .iter()
+        .map(|path| {
+            outgoing::DiskOutgoing::open(path).map(|file| Box::new(file) as Box<dyn OutgoingFile>)
+        })
+        .collect()
 }
 
 /// Stops `session`'s transfer, or declines its offer.
@@ -396,7 +516,7 @@ pub(crate) fn receive_answer(
     clippy::needless_pass_by_value,
     reason = "Tauri injects State by value into command handlers"
 )]
-pub(crate) fn receive_cancel(
+pub(crate) fn zmodem_cancel(
     sessions: State<'_, Arc<SessionManager>>,
     session: SessionHandle,
 ) -> Result<(), CommandError> {
@@ -406,7 +526,7 @@ pub(crate) fn receive_cancel(
 /// Opens the folder files are received into.
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn receive_reveal(root: State<'_, ReceiveRoot>) -> Result<(), CommandError> {
+pub(crate) async fn zmodem_reveal(root: State<'_, ReceiveRoot>) -> Result<(), CommandError> {
     let root = root.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         std::fs::create_dir_all(&root)?;
