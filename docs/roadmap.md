@@ -164,7 +164,8 @@ Goal: beat Termius Pro.
 - [x] `tmux` control mode: `tmux` windows as native tabs (tmux 3.2+, one pane per window)
 - [ ] FIDO2 `sk-` keys through the agent, then direct signing with `ctap-hid-fido2`
 - [ ] Keys bound to Secure Enclave (macOS) and Windows Hello
-- [ ] Zmodem and trzsz transfers
+- [x] Zmodem receive: files a host sends with `sz`, asked first (ADR 0025)
+- [ ] Zmodem send (`rz`) and trzsz transfers
 
 ### Exit criteria
 
