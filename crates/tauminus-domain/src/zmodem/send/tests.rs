@@ -51,13 +51,14 @@ fn run(files: &[(&str, Vec<u8>)], host: Host, chunk: usize) -> Run {
             }
             Need::Ended => {
                 steps_seen.append(&mut out.sent);
+                wire.append(&mut out.wire);
                 break;
             }
             Need::Wait => {}
         }
         let steps = std::mem::take(&mut out.sent);
         for step in steps {
-            if step == Sent::FileDone {
+            if matches!(step, Sent::FileDone | Sent::FileSkipped) {
                 index += 1;
                 if let Some((name, data)) = files.get(index) {
                     send.start(name, data.len() as u64).unwrap();
@@ -161,13 +162,22 @@ fn several_files_go_in_order_through_small_reads() {
 }
 
 #[test]
-fn a_skipped_file_is_reported_done_and_the_next_goes() {
-    let files = [("a", bytes(10)), ("b", bytes(20_000)), ("c", bytes(30))];
+fn a_skipped_file_is_reported_skipped_and_the_next_goes() {
+    // Empty: nothing read cannot tell a skip from a send.
+    let files = [("a", bytes(10)), ("b", Vec::new()), ("c", bytes(30))];
     let run = run(&files, Host::SkipSecond, 4096);
     let names: Vec<&str> = run.files.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["a", "c"]);
     assert_eq!(run.files[1].1, bytes(30));
-    assert_eq!(run.sent.last(), Some(&Sent::Done));
+    assert_eq!(
+        run.sent,
+        [
+            Sent::FileDone,
+            Sent::FileSkipped,
+            Sent::FileDone,
+            Sent::Done
+        ]
+    );
 }
 
 #[test]
@@ -180,7 +190,8 @@ fn the_host_s_cancel_ends_the_send() {
         Some(&Sent::Aborted {
             reason: "the host stopped the transfer"
         })
-    );
+    ); // Then Ctrl+E Ctrl+U, for a shell that may read what follows.
+    assert!(run.wire.ends_with(&[0x05, 0x15]));
 }
 
 #[test]
@@ -311,4 +322,76 @@ fn overhead() {
         let ratio = run.wire.len() as f64 / file.len() as f64;
         eprintln!("{what}: {ratio:.3}");
     }
+}
+
+/// `rz` as lrzsz runs it: its ZRINIT (a stream), then ZRPOS 0.
+const ZRINIT: &[u8] = b"**\x18B0100000023be50\r\x8a\x11";
+const ZRPOS_0: &[u8] = b"**\x18B0900000000a87c\r\x8a\x11";
+
+/// A send `rz` has answered: it asked for the first bytes of a file of
+/// `size`.
+fn answered(out: &mut TransmitOutput, size: u64) -> Transmit {
+    let mut send = Transmit::new();
+    send.start("a", size).unwrap();
+    send.poll(out);
+    send.feed(ZRINIT, out);
+    send.poll(out);
+    send.feed(ZRPOS_0, out);
+    assert!(matches!(send.poll(out), Need::Read { .. }));
+    assert!(send.answered());
+    send
+}
+
+fn reason(out: &TransmitOutput) -> &'static str {
+    match out.sent.last() {
+        Some(Sent::Aborted { reason }) => reason,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn an_rz_that_answered_then_went_quiet_is_given_up_after_three_timeouts() {
+    let mut out = TransmitOutput::default();
+    let mut send = answered(&mut out, 1 << 20);
+    for _ in 0..3 {
+        send.timeout(&mut out);
+        assert!(!send.ended());
+    }
+    send.timeout(&mut out);
+    assert_eq!(reason(&out), "the host stopped answering");
+}
+
+#[test]
+fn a_shell_that_echoes_what_comes_is_taken_for_rz_gone() {
+    let mut out = TransmitOutput::default();
+    let mut send = answered(&mut out, 1 << 20);
+    let echo = b"^XJtouch /tmp/x^XJ".repeat(4096);
+    send.feed(&echo, &mut out);
+    assert_eq!(reason(&out), "rz on the host stopped");
+}
+
+#[test]
+fn a_damaged_reply_once_files_go_ends_the_send_with_no_znak() {
+    let mut out = TransmitOutput::default();
+    // One byte: once it went, the sender reads the host's reply.
+    let mut send = answered(&mut out, 1);
+    send.provide(&[7], &mut out);
+    assert_eq!(send.poll(&mut out), Need::Wait);
+    out.wire.clear();
+    // ZRPOS 0 with a wrong CRC.
+    send.feed(b"**\x18B0900000000ffff\r\x8a\x11", &mut out);
+    send.poll(&mut out);
+    assert_eq!(reason(&out), "the host's replies were damaged");
+    // No ZNAK (type 03): its CR would reach a shell as Enter.
+    assert!(!out.wire.windows(6).any(|w| w == b"**\x18B03"));
+}
+
+#[test]
+fn a_shell_echo_shown_with_echoctl_gives_rz_gone_away() {
+    let mut send = Transmit::new();
+    let mut out = TransmitOutput::default();
+    send.start("a", 10).unwrap();
+    send.poll(&mut out);
+    send.feed(b"**^XB00000000000000\r\n", &mut out);
+    assert!(send.ended());
 }

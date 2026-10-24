@@ -602,11 +602,11 @@ impl Transfer {
             };
             sending.moved_at = Instant::now();
             match step {
-                Sent::FileDone => {
+                Sent::FileDone | Sent::FileSkipped => {
                     if let Some(file) = sending.current.take() {
                         let name = file.name().to_owned();
-                        // A host that skipped it asked for none of it.
-                        if sending.reached < file.size() {
+                        // Skipped: the host said so, or asked for none of it.
+                        if step == Sent::FileSkipped || sending.reached < file.size() {
                             list(&mut sending.skipped, &mut sending.more_skipped, name);
                         } else {
                             list(&mut sending.files, &mut sending.more_files, name);

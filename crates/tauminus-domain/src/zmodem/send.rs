@@ -29,6 +29,8 @@ const MAX_REWINDS: u32 = 16;
 /// raw or as a tty with ECHOCTL shows CAN.
 const OWN_HEADER: &[u8] = b"**\x18B00";
 const OWN_HEADER_SHOWN: &[u8] = b"**^XB00";
+/// The host's ZSKIP, a hex header of type 05.
+const ZSKIP_HEADER: &[u8] = b"**\x18B05";
 const ZDLE: u8 = 0x18;
 /// After our cancel, for a shell that reads what we sent: Ctrl+E then
 /// Ctrl+U drop the line instead of keeping it for the next Enter. Ctrl+U
@@ -121,8 +123,10 @@ pub enum Need {
 /// A step of a send the caller acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sent {
-    /// The host has the current file, or skipped it.
+    /// The host has the current file.
     FileDone,
+    /// The host skipped it (ZSKIP): `rz` does for a name it has.
+    FileSkipped,
     /// Every file went.
     Done,
     Aborted {
@@ -174,6 +178,8 @@ pub struct Transmit {
     /// The sender read a damaged header: it would answer with ZNAK, whose
     /// CR a shell takes for Enter.
     damaged: bool,
+    /// The host skipped the current file: `zmodem2` reports it complete.
+    skipping: bool,
 }
 
 impl std::fmt::Debug for Transmit {
@@ -213,6 +219,7 @@ impl Transmit {
             escaper: Escaper::default(),
             heard: 0,
             damaged: false,
+            skipping: false,
         }
     }
 
@@ -294,7 +301,11 @@ impl Transmit {
                     self.heard = 0;
                     self.reached = 0;
                     self.rewinds = 0;
-                    out.sent.push(Sent::FileDone);
+                    out.sent.push(if std::mem::take(&mut self.skipping) {
+                        Sent::FileSkipped
+                    } else {
+                        Sent::FileDone
+                    });
                 }
                 Action::Event(Event::SessionCompleted) => {
                     self.drain(out);
@@ -355,6 +366,9 @@ impl Transmit {
             self.drain_cancel(out);
             self.end(out, "the host stopped the transfer");
             return;
+        }
+        if input.windows(ZSKIP_HEADER.len()).any(|w| w == ZSKIP_HEADER) {
+            self.skipping = true;
         }
         // `rz` that died without a cancel leaves a shell echoing what
         // still comes: far more than `rz` would say.
