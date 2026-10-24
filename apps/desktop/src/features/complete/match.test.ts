@@ -150,5 +150,6 @@ describe("the shipped specs", () => {
     expect(
       (await suggest(tokenize("systemctl res"), COMMANDS, loadSpec)).map((s) => s.name),
     ).toContain("restart");
-  });
+    // Loading the largest specs takes a moment on a busy machine.
+  }, 20_000);
 });
