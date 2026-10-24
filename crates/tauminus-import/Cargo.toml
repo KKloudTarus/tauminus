@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-import"
+description = "Hosts from other SSH clients' files: CSV, PuTTY, MobaXterm, SecureCRT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+tauminus-app.workspace = true
+tauminus-domain.workspace = true
+# Text in UTF-16 or Windows-1252, as Windows tools write it.
+tauminus-charset.workspace = true
+
+# PuTTY's sessions in the registry, read only.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Registry"] }
+
+[lints]
+workspace = true

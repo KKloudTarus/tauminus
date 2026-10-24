@@ -574,11 +574,33 @@ pub struct ConfigHost {
     /// Why this alias could not be read, for example OpenSSH rejecting the
     /// config. Such an entry is reported, not imported.
     pub problem: Option<String>,
+    /// The folder the other client kept it in, outermost first: it becomes
+    /// groups inside the import's group.
+    pub folder: Vec<String>,
 }
 
-/// Reads the hosts an OpenSSH client config defines.
+/// Reads the hosts another client keeps: an OpenSSH config, or a file
+/// another SSH client wrote.
 pub trait SshConfigSource: Send + Sync + 'static {
     fn hosts(&self) -> BoxFuture<'_, Result<Vec<ConfigHost>, std::io::Error>>;
+
+    /// The group its hosts go into.
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "a source may name itself from what it read"
+    )]
+    fn group(&self) -> &str {
+        "SSH config"
+    }
+
+    /// What it reads, as an error names it.
+    #[expect(
+        clippy::unnecessary_literal_bound,
+        reason = "a source may name itself from what it read"
+    )]
+    fn what(&self) -> &str {
+        "~/.ssh/config"
+    }
 }
 
 /// What a directory entry on the server is.

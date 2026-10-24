@@ -69,4 +69,43 @@ describe("HostsStore", () => {
     store.dismissNotice();
     expect(store.getSnapshot().notice).toBeUndefined();
   });
+
+  it("names another client in its import, and does nothing when nothing was picked", async () => {
+    const client = fakeHosts();
+    const store = new HostsStore(client);
+    await store.load();
+    await store.importFrom("mobaXterm");
+    const state = store.getSnapshot();
+    expect(state.notice).toBe(
+      "Imported 1 host from MobaXterm; skipped 1: desk (a RDP session, not SSH)",
+    );
+    const group = state.view.groups.find((g) => g.name === "MobaXterm");
+    expect(state.view.hosts.find((h) => h.label === "moba-web")?.group).toBe(group?.id);
+
+    store.dismissNotice();
+    const picked: HostsClient = { ...client, importFrom: async () => null };
+    const cancelled = new HostsStore(picked);
+    await cancelled.load();
+    await cancelled.importFrom("csv");
+    expect(cancelled.getSnapshot().notice).toBeUndefined();
+  });
+
+  it("counts every skipped host, though only the first are listed", async () => {
+    const client = fakeHosts();
+    const listed = Array.from({ length: 50 }, (_, i) => ({ alias: `h${i}`, reason: "x" }));
+    const store = new HostsStore({
+      ...client,
+      importFrom: async () => ({
+        added: 0,
+        skipped: listed,
+        skippedCount: 60,
+        view: await client.list(),
+      }),
+    });
+    await store.load();
+    await store.importFrom("csv");
+    const notice = store.getSnapshot().notice ?? "";
+    expect(notice).toMatch(/^Imported 0 hosts from a CSV file; skipped 60: h0 \(x\)/);
+    expect(notice).toMatch(/h49 \(x\), and 10 more$/);
+  });
 });

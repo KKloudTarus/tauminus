@@ -475,6 +475,21 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     }
 }
 
+/// A right-to-left mark, as Hebrew and Arabic input methods type, in a
+/// saved label: it loads as it was saved.
+#[tokio::test]
+async fn a_label_with_a_direction_mark_loads() {
+    let dir = Dir::new();
+    std::fs::create_dir_all(&dir.0).unwrap();
+    std::fs::write(
+        dir.0.join("hosts.json"),
+        "{\"version\": 1, \"hosts\": [{\"id\": \"a\", \"label\": \"\u{5e9}\u{5e8}\u{5ea}\u{200f} 1\", \"address\": \"a\"}]}",
+    )
+    .unwrap();
+    let inventory = dir.store().load().await.unwrap();
+    assert_eq!(inventory.hosts().count(), 1);
+}
+
 #[tokio::test]
 async fn a_relative_identity_agent_is_reported_and_kept() {
     let dir = Dir::new();

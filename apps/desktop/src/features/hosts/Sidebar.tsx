@@ -14,7 +14,8 @@ import type {
 } from "@/ipc/index.ts";
 
 import { type Editing, EditorDialog } from "./HostEditor.tsx";
-import type { HostsStore } from "./hosts-store.ts";
+import { type HostsStore, messageOf } from "./hosts-store.ts";
+import { ImportMenu } from "./ImportMenu.tsx";
 import { searchHosts } from "./search.ts";
 
 interface SidebarProps {
@@ -164,6 +165,12 @@ export function Sidebar({
             <Icon name="key" />
           </button>
         )}
+        <ImportMenu
+          onImport={(kind) => {
+            const run = kind === "sshConfig" ? store.importConfig() : store.importFrom(kind);
+            run.catch((error: unknown) => store.notify(`Import failed: ${messageOf(error)}`));
+          }}
+        />
         <button
           type="button"
           onClick={() => setEditing({ kind: "group", group: undefined })}

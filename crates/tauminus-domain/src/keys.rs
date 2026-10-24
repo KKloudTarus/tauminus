@@ -133,5 +133,26 @@ pub fn install_script(key: &PublicKeyLine) -> String {
     )
 }
 
+/// Whether a key path names a file on another machine, in Windows'
+/// terms: `\\server\share`, `//server`, or any device path
+/// (`\\?\`, `\\.\`, `\??\`) but one on a drive letter. Looking such
+/// a file up makes Windows sign in to that machine with the user's
+/// credentials, so a key path never may. O(1).
+#[must_use]
+pub fn names_another_machine(path: &str) -> bool {
+    let path = path.replace('/', "\\");
+    let device = ["\\\\?\\", "\\\\.\\", "\\??\\"]
+        .iter()
+        .find_map(|prefix| path.strip_prefix(prefix));
+    match device {
+        // A device path is local only when it names a drive: `C:\`.
+        Some(rest) => {
+            let rest = rest.as_bytes();
+            !(rest.len() >= 2 && rest[0].is_ascii_alphabetic() && rest[1] == b':')
+        }
+        None => path.starts_with("\\\\"),
+    }
+}
+
 #[cfg(test)]
 mod tests;

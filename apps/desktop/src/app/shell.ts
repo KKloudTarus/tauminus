@@ -30,6 +30,7 @@ import type { FiredBatch, TriggerSource } from "@/features/terminal/trigger-watc
 import { visibleText } from "@/features/terminal/visible-text.ts";
 import type { HighlightSource } from "@/features/terminal/highlighter.ts";
 import type {
+  ImportKind,
   AiClient,
   FilesClient,
   ForwardsClient,
@@ -89,6 +90,11 @@ export const ACTION_LABELS: Record<Action, string> = {
   "ssh.connect": "Connect to SSH host",
   "hosts.toggle": "Show or hide saved hosts",
   "hosts.import": "Import hosts from ~/.ssh/config",
+  "hosts.importPutty": "Import hosts from PuTTY on this computer",
+  "hosts.importPuttyExport": "Import hosts from a PuTTY .reg export",
+  "hosts.importMobaXterm": "Import hosts from MobaXterm",
+  "hosts.importSecureCrt": "Import hosts from SecureCRT",
+  "hosts.importCsv": "Import hosts from a CSV file",
   "vault.open": "Open the vault",
   "vault.lock": "Lock the vault",
   "history.open": "Search the command history",
@@ -149,6 +155,15 @@ interface ShellState {
   sidebarOpen: boolean;
   theme: ThemePreference;
 }
+
+/** The palette's import commands, and the source each reads. */
+const IMPORT_ACTIONS = {
+  "hosts.importPutty": "putty",
+  "hosts.importPuttyExport": "puttyExport",
+  "hosts.importMobaXterm": "mobaXterm",
+  "hosts.importSecureCrt": "secureCrt",
+  "hosts.importCsv": "csv",
+} as const satisfies Record<string, ImportKind>;
 
 /**
  * The app outside React: the workspace, the keymap, and UI state that
@@ -1355,6 +1370,16 @@ export class AppShell {
         this.hosts
           .importConfig()
           .catch((error: unknown) => this.hosts.notify(`Import failed: ${String(error)}`));
+        return;
+      case "hosts.importPutty":
+      case "hosts.importPuttyExport":
+      case "hosts.importMobaXterm":
+      case "hosts.importSecureCrt":
+      case "hosts.importCsv":
+        this.setSidebarOpen(true);
+        this.hosts
+          .importFrom(IMPORT_ACTIONS[action])
+          .catch((error: unknown) => this.hosts.notify(`Import failed: ${messageOf(error)}`));
         return;
       case "tab.new":
         w.newTab();

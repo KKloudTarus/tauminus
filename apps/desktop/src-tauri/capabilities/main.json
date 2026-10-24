@@ -67,6 +67,7 @@
     "allow-group-delete",
     "allow-ssh-config-aliases",
     "allow-hosts-import-ssh-config",
+    "allow-hosts-import-from",
     "allow-host-connect",
     "allow-forward-start",
     "allow-forward-stop",

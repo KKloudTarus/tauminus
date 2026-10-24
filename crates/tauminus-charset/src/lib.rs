@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Converts a shell's bytes to UTF-8 for the terminal view, and typed text
-//! back, for hosts whose character set is not UTF-8.
+//! back, for hosts whose character set is not UTF-8; and reads the text of
+//! files other tools wrote.
 
 use encoding_rs::{CoderResult, Decoder, EncoderResult};
+
+mod file;
+
+pub use file::decode_file;
 use tauminus_domain::Encoding;
 
 /// One session's converter. UTF-8 passes through untouched.

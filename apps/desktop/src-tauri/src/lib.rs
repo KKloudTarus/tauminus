@@ -14,6 +14,7 @@ mod fill;
 mod forwards;
 mod history;
 mod hosts;
+mod import;
 mod ipc;
 mod links;
 mod mosh;
@@ -113,6 +114,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         serial::serial_ports,
         serial::serial_open,
         hosts::hosts_import_ssh_config,
+        import::hosts_import_from::<tauri::Wry>,
         ssh::host_connect,
         forwards::forward_start,
         forwards::forward_stop,

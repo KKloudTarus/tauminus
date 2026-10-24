@@ -50,7 +50,7 @@ pub use hosts::{
     MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_STARTUP, MAX_TAGS, PROD_TAG, Protocol, Settings,
     SnippetId, Tag, TriggerSetId,
 };
-pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script};
+pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script, names_another_machine};
 pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
 pub use output::{OutputBatcher, ReadyBatches};
 pub use password_prompt::{PROMPT_TAIL, PasswordPrompt, last_line, password_prompt};

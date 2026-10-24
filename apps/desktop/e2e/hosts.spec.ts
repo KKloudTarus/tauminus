@@ -53,6 +53,28 @@ test("offers to import ~/.ssh/config on first run", async ({ page }) => {
   await expect(sidebar(page)).not.toContainText("No saved hosts yet.");
 });
 
+test("imports another client's sessions from the menu and the palette", async ({ page }) => {
+  await sidebar(page).getByRole("button", { name: "Import hosts" }).click();
+  const menu = sidebar(page).getByRole("menu", { name: "Import hosts" });
+  await menu.getByRole("menuitem", { name: /MobaXterm/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(sidebar(page).getByRole("status")).toHaveText(
+    "Imported 1 host from MobaXterm; skipped 1: desk (a RDP session, not SSH)",
+  );
+  const tree = sidebar(page).getByRole("list", { name: "Saved hosts" });
+  await expect(tree.getByRole("button", { name: "MobaXterm", exact: true })).toBeVisible();
+  await expect(tree.getByRole("button", { name: /^moba-web/ })).toBeVisible();
+
+  // Again from the palette: the host is already saved.
+  await page.keyboard.press("Control+Shift+P");
+  const input = page.getByPlaceholder("Type a command");
+  await input.fill("Import hosts from SecureCRT");
+  await input.press("Enter");
+  await expect(sidebar(page).getByRole("status")).toHaveText(
+    /skipped 2: .*moba-web \(already saved\)/,
+  );
+});
+
 test("connects to a saved host through its prompts", async ({ page }) => {
   await importConfig(page);
   await sidebar(page)
