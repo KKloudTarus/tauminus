@@ -129,6 +129,7 @@ dependencies = [
  "blake2",
  "cpufeatures 0.3.1",
  "password-hash",
+ "zeroize",
 ]
 
 [[package]]
@@ -5788,6 +5789,28 @@ dependencies = [
  "tracing-subscriber",
  "windows-native-keyring-store",
  "zbus-secret-service-keyring-store",
+ "zeroize",
+]
+
+[[package]]
+name = "tauminus-sync"
+version = "0.0.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "flate2",
+ "hkdf",
+ "libc",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tauminus-app",
+ "tauminus-domain",
+ "tauminus-store",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
  "zeroize",
 ]
 
