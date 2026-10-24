@@ -963,7 +963,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -5623,7 +5623,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arboard",
- "nix 0.28.0",
+ "nix 0.31.3",
  "open",
  "serde",
  "serde_json",
@@ -5713,7 +5713,7 @@ dependencies = [
 name = "tauminus-pty"
 version = "0.0.0"
 dependencies = [
- "nix 0.28.0",
+ "nix 0.31.3",
  "portable-pty",
  "tauminus-app",
  "tauminus-domain",
@@ -5742,7 +5742,7 @@ dependencies = [
  "data-encoding",
  "ed25519-dalek",
  "hmac",
- "nix 0.28.0",
+ "nix 0.31.3",
  "p256",
  "rand 0.10.3",
  "russh",
