@@ -35,6 +35,7 @@ import {
   isPasswordPrompt,
 } from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
+import { ShellMarks } from "./shell-marks.ts";
 import { startUnannouncedCompositions } from "./ime.ts";
 import { InputQueue, binaryStringToBytes } from "./input-queue.ts";
 import { asksToOpen, isOpenableLink } from "./links.ts";
@@ -245,6 +246,8 @@ export class TerminalController {
   #fromPointer = false;
   /** Set while a command an AI suggested is pasted: it is for this pane. */
   #inserting = false;
+  /** What the shell's OSC 133 marks say. */
+  readonly #marks: ShellMarks;
   #status: TerminalStatus = { kind: "starting" };
   #title = "";
   #session: TerminalSession | undefined;
@@ -395,6 +398,7 @@ export class TerminalController {
       ? new CommandGuard(options.guard, {
           // The history hears what the guard lets through, not what it holds back.
           send: (data) => {
+            this.#sent(data);
             this.#recorder?.input(data);
             this.#input.push({ kind: "text", data });
           },
@@ -439,7 +443,12 @@ export class TerminalController {
       : undefined;
     // Shell integration (OSC 133): where prompts, commands, and output start,
     // and how each command ended. Other handlers still see the sequence.
+    this.#marks = new ShellMarks(
+      () => this.terminal.registerMarker(0),
+      () => this.terminal.buffer.active.cursorX,
+    );
     this.terminal.parser.registerOscHandler(133, (data) => {
+      this.#marks.handle(data);
       this.#recorder?.shellMark(data);
       // A new prompt waits for input; a command that ended with a
       // non-zero status failed.
@@ -673,7 +682,15 @@ export class TerminalController {
    * copied.
    */
   get canInsertCommand(): boolean {
-    return this.canSendFromTrigger && this.#recorder?.atPrompt !== false;
+    return this.canSendFromTrigger && this.#marks.atPrompt !== false;
+  }
+
+  /**
+   * Keys on their way to the shell, past the guard: a line sent leaves the
+   * prompt until the shell marks another, for a shell that sends no C mark.
+   */
+  #sent(data: string): void {
+    if (/[\r\n]/u.test(data)) this.#marks.submitted();
   }
 
   /**
@@ -744,6 +761,7 @@ export class TerminalController {
     if (this.#guard) {
       this.#guard.input(data);
     } else {
+      this.#sent(data);
       this.#recorder?.input(data);
       this.#input.push({ kind: "text", data });
     }
@@ -1141,6 +1159,7 @@ export class TerminalController {
       return;
     }
     this.#disposed = true;
+    this.#marks.dispose();
     this.detach();
     clearTimeout(this.#ackRetry);
     clearTimeout(this.#reconnectTimer);

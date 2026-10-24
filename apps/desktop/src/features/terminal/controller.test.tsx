@@ -981,6 +981,24 @@ describe("TerminalController with the prod guard", () => {
       .toContain("\r");
   });
 
+  it("keeps the shell at its prompt when it holds a line back", async () => {
+    const { sessions, controller } = guarded();
+    const view = await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    controller.terminal.write("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    controller.focus();
+    await userEvent.keyboard("rm -rf /srv");
+    await userEvent.keyboard("{Enter}");
+    await expect.element(view.getByTestId("guard-dialog")).toBeVisible();
+    await userEvent.keyboard("{Enter}");
+    await expect.element(view.getByTestId("guard-dialog")).not.toBeInTheDocument();
+    controller.focus();
+    // Ctrl+U clears the line the guard kept: the shell still waits.
+    await userEvent.keyboard("{Control>}u{/Control}");
+    await vi.waitFor(() => expect(controller.canInsertCommand).toBe(true));
+  });
+
   it("shows the prod frame while the host is guarded", async () => {
     const { controller, source } = guarded();
     const view = await mount(controller);
@@ -1254,6 +1272,25 @@ describe("TerminalController putting an AI's command on the line", () => {
     // A paste of the user's own still goes to every linked pane.
     controller.terminal.paste("x");
     expect(heard).toEqual(["x"]);
+  });
+
+  it("knows the prompt from the shell's marks with the history off", async () => {
+    const { sessions, controller } = await running("db.example");
+    const show = async (text: string) => {
+      sessions.events.onOutput(new TextEncoder().encode(text));
+      await new Promise<void>((resolve) => controller.terminal.write("", resolve));
+    };
+    await show("\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    expect(controller.canInsertCommand).toBe(true);
+    // A shell that sends no C mark: Enter ends the prompt.
+    controller.type("mysql\r");
+    await show("mysql\r\nmysql> ");
+    expect(controller.canInsertCommand).toBe(false);
+    // A B printed by the running program, with no prompt's A, counts for nothing.
+    await show("\u001b]133;B\u0007");
+    expect(controller.canInsertCommand).toBe(false);
+    await show("\r\n\u001b]133;A\u0007$ \u001b]133;B\u0007");
+    expect(controller.canInsertCommand).toBe(true);
   });
 
   it("waits for the prompt where the shell marks it", async () => {
