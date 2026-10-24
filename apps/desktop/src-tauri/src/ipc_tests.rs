@@ -36,6 +36,7 @@ fn app(name: &str) -> (App<tauri::test::MockRuntime>, Scratch) {
         Paths {
             config_dir: dir.join("config"),
             home: Some(dir.join("home")),
+            downloads: Some(dir.join("downloads")),
         },
     );
     (app, Scratch(dir))
@@ -169,6 +170,7 @@ fn an_unreadable_host_file_is_reported_and_left_alone() {
         Paths {
             config_dir: dir.join("config"),
             home: None,
+            downloads: None,
         },
     );
     let error = call(&app, "hosts_list", json!({})).unwrap_err();

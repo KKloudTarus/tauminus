@@ -712,3 +712,63 @@ pub trait AiTransport: Send + Sync + 'static {
         prompt: &'a tauminus_domain::AiPrompt,
     ) -> BoxFuture<'a, Result<String, AiTransportError>>;
 }
+
+/// Where a session's file transfers ask the user and keep files (ADR 0025).
+pub trait TransferHost: Send + Sync + fmt::Debug + 'static {
+    /// The host behind session `id` offers files, its offer number
+    /// `offer`. The answer comes back through
+    /// `SessionManager::answer_transfer` with that number; until then the
+    /// session shows nothing more and takes no keys.
+    fn offered(&self, id: tauminus_domain::SessionId, offer: u64);
+    fn event(&self, id: tauminus_domain::SessionId, event: TransferEvent);
+}
+
+/// A folder the user chose to receive into. Only names a host sent,
+/// checked, are joined to it.
+pub trait ReceiveFolder: Send + fmt::Debug + 'static {
+    /// A new file for `name`, never over one there: a taken name gets a
+    /// number. The name it is saved as, and the file, written beside it
+    /// under a temporary name until [`PartFile::finish`].
+    fn create(&mut self, name: &str) -> std::io::Result<(String, Box<dyn PartFile>)>;
+    /// The folder, as the user knows it.
+    fn shown(&self) -> String;
+}
+
+/// A file being received.
+pub trait PartFile: Send + 'static {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+    /// Moves it to its name, never over a file there.
+    fn finish(self: Box<Self>) -> std::io::Result<()>;
+    /// Removes what was written.
+    fn discard(self: Box<Self>);
+}
+
+/// What a transfer tells the view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransferEvent {
+    Started {
+        folder: String,
+    },
+    File {
+        name: String,
+        size: Option<u64>,
+    },
+    Progress {
+        bytes: u64,
+        size: Option<u64>,
+    },
+    /// The first 100 names of what came and what was skipped, and how
+    /// many more.
+    Finished {
+        folder: String,
+        files: Vec<String>,
+        more_files: u64,
+        skipped: Vec<String>,
+        more_skipped: u64,
+    },
+    Failed {
+        reason: String,
+    },
+    /// The offer was declined, or came too soon after one was.
+    Declined,
+}

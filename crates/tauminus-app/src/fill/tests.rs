@@ -152,6 +152,7 @@ impl World {
                 )
                 .unwrap(),
             }),
+            transfers: false,
         }
     }
 }

@@ -13,6 +13,7 @@ import {
   type SessionSpec,
   type TerminalSession,
 } from "@/ipc/index.ts";
+import type { ReceiveClient, ReceiveView } from "@/ipc/receive.ts";
 
 // The app's styles, so views get the layout they have in the app; without
 // them a pane takes its size from the terminal inside it.
@@ -21,6 +22,7 @@ import "@/app/styles.css";
 import { ACK_THRESHOLD_BYTES } from "./ack-batcher.ts";
 import { TerminalController, mostUrgent } from "./controller.ts";
 import { OutputScheduler } from "./output-scheduler.ts";
+import { ReceiveHub, SETTLE } from "./receive.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
 /** A session client the test drives by hand. */
@@ -1504,5 +1506,109 @@ describe("mostUrgent", () => {
     expect(mostUrgent(["unread", "idle"])).toBe("unread");
     expect(mostUrgent(["unread", "error", "waiting"])).toBe("error");
     expect(mostUrgent(["waiting", "unread"])).toBe("waiting");
+  });
+});
+
+function hub() {
+  let send: ((event: ReceiveView) => void) | undefined;
+  const client = {
+    listen: vi.fn<ReceiveClient["listen"]>(async (handler) => {
+      send = handler;
+    }),
+    answer: vi.fn<ReceiveClient["answer"]>(async () => {}),
+    cancel: vi.fn<ReceiveClient["cancel"]>(async () => {}),
+    reveal: vi.fn<ReceiveClient["reveal"]>(async () => {}),
+  };
+  const receive = new ReceiveHub(client);
+  return { receive, client, send: (event: ReceiveView) => send?.(event) };
+}
+
+const banner = (screen: Awaited<ReturnType<typeof mount>>) =>
+  screen.getByTestId("receive").query()?.textContent ?? "";
+
+async function receiving() {
+  const { receive, client, send } = hub();
+  const { sessions, controller } = setup({ spec: sshTo("db"), receive });
+  const screen = await mount(controller);
+  sessions.resolveOpen();
+  await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+  return { sessions, controller, screen, client, send };
+}
+
+describe("files the host sends", () => {
+  it("asks first, and sends the answer for this session only", async () => {
+    const { controller, screen, client, send } = await receiving();
+    send({ kind: "offered", session: 2, offer: 1 });
+    expect(controller.getReceive()).toBeUndefined();
+    send({ kind: "offered", session: 1, offer: 1 });
+    await expect.poll(() => banner(screen)).toContain("wants to send files");
+    // A click as it appears was meant for what was there before.
+    controller.answerReceive(true);
+    expect(client.answer).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, SETTLE));
+    await screen.getByRole("button", { name: "Receive" }).click();
+    expect(client.answer).toHaveBeenCalledWith(1, 1, true);
+    // One answer per offer: a second click does nothing.
+    await expect.element(screen.getByRole("button", { name: "Receive" })).toBeDisabled();
+    controller.answerReceive(true);
+    expect(client.answer).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps keys from the host while files come, and Ctrl+C stops them", async () => {
+    const { sessions, controller, screen, client, send } = await receiving();
+    send({ kind: "offered", session: 1, offer: 1 });
+    send({ kind: "started", session: 1, folder: "/d" });
+    send({ kind: "file", session: 1, name: "big.bin", size: 4096 });
+    send({ kind: "progress", session: 1, bytes: 1024, size: 4096 });
+    await expect.poll(() => banner(screen)).toContain("big.bin · 1.0 KB of 4.0 KB");
+    controller.focus();
+    await userEvent.keyboard("ls");
+    controller.terminal.input("\u0003");
+    expect(client.cancel).toHaveBeenCalledWith(1);
+    send({ kind: "failed", session: 1, reason: "cancelled" });
+    await expect.poll(() => banner(screen)).toContain("Transfer stopped: cancelled");
+    expect(sessions.session.write).not.toHaveBeenCalled();
+    // Keys go in again once it ended.
+    await userEvent.keyboard("x");
+    await vi.waitFor(() => expect(sessions.session.write).toHaveBeenCalledWith("x"));
+  });
+
+  it("says why an answer failed, and declines the offer", async () => {
+    const { controller, screen, client, send } = await receiving();
+    client.answer.mockRejectedValueOnce(new Error("could not open Downloads/Tauminus"));
+    send({ kind: "offered", session: 1, offer: 1 });
+    await new Promise((resolve) => setTimeout(resolve, SETTLE));
+    await screen.getByRole("button", { name: "Receive" }).click();
+    await expect.poll(() => banner(screen)).toContain("could not open Downloads/Tauminus");
+    expect(client.cancel).toHaveBeenCalledWith(1);
+    await screen.getByRole("button", { name: "Close" }).click();
+    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
+  });
+
+  it("names what came and what was skipped, and a decline shows nothing", async () => {
+    const { controller, screen, client, send } = await receiving();
+    send({ kind: "offered", session: 1, offer: 1 });
+    await new Promise((resolve) => setTimeout(resolve, SETTLE));
+    await screen.getByRole("button", { name: "Decline" }).click();
+    expect(client.answer).toHaveBeenCalledWith(1, 1, false);
+    send({ kind: "declined", session: 1 });
+    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
+    send({ kind: "offered", session: 1, offer: 1 });
+    send({ kind: "started", session: 1, folder: "/d" });
+    send({
+      kind: "finished",
+      session: 1,
+      folder: "/d",
+      files: ["a.txt"],
+      moreFiles: 2,
+      skipped: ["eviltxt.exe"],
+      moreSkipped: 0,
+    });
+    await expect.poll(() => banner(screen)).toContain("Received a.txt and 2 more");
+    await expect.poll(() => banner(screen)).toContain("skipped");
+    await screen.getByRole("button", { name: "Show folder" }).click();
+    expect(client.reveal).toHaveBeenCalled();
+    await screen.getByRole("button", { name: "Close" }).click();
+    await vi.waitFor(() => expect(controller.getReceive()).toBeUndefined());
   });
 });

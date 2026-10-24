@@ -97,6 +97,7 @@ impl MoshSessions {
             SessionMeta {
                 kind: SessionKind::Mosh,
                 host: Some(login.saved()),
+                transfers: false,
             },
         ))
     }

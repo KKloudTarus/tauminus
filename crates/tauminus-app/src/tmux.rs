@@ -404,6 +404,7 @@ impl TmuxSessions {
             SessionMeta {
                 kind: SessionKind::Ssh,
                 host: control.host.clone(),
+                transfers: false,
             },
         );
         control.send(TmuxCommand::Size {

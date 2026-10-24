@@ -40,6 +40,12 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "r
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 # The OS's certificate store and checks, as reqwest's own rustls uses.
 rustls-platform-verifier = "0.7.1"
+# Finding a Zmodem offer in every output chunk: SIMD substring search,
+# already in the tree through regex. MIT OR Unlicense.
+memchr = { version = "=2.8.3", default-features = false, features = ["std"] }
+# Zmodem, sans I/O, in the domain: the protocol of `sz`, for receiving
+# files a host sends. MIT OR Apache-2.0; no_std, heapless.
+zmodem2 = "=0.7.3"
 # Highlight and trigger patterns: linear-time matching, so output a host
 # sends cannot make a pattern backtrack.
 regex = "1.13.1"

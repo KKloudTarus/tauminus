@@ -14,6 +14,7 @@ import {
   historyClient,
   hostsClient,
   linkOpener,
+  receiveClient,
   recordingsClient,
   serialClient,
   sessionClient,
@@ -53,6 +54,7 @@ const shell = new AppShell({
   recordings: await recordingsClient(),
   ai: await aiClient(),
   tmux: await tmuxClient(),
+  receive: await receiveClient(),
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),

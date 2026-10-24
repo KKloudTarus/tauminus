@@ -14,6 +14,7 @@ import type { HistoryClient } from "./history.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
+import type { ReceiveClient } from "./receive.ts";
 import type { RecordingsClient } from "./recordings.ts";
 import type { SessionClient, TmuxClient } from "./sessions.ts";
 
@@ -267,6 +268,14 @@ export async function aiClient(): Promise<AiClient> {
     return (await import("./fake-ai.ts")).fakeAi();
   }
   return (await import("./ai.ts")).tauriAi;
+}
+
+/** Files hosts send with `sz`; the `e2e` build's fake shell offers them. */
+export async function receiveClient(): Promise<ReceiveClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake.ts")).fakeReceive;
+  }
+  return (await import("./receive.ts")).tauriReceive;
 }
 
 /** tmux sessions as tabs; the `e2e` build's fake shows two windows. */

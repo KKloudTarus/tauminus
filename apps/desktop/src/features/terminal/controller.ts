@@ -36,6 +36,7 @@ import {
   isPasswordPrompt,
 } from "./command-guard.ts";
 import { CommandRecorder, type RecordedCommand } from "./recorder.ts";
+import type { ReceiveHub, ReceiveState } from "./receive.ts";
 import { ShellMarks } from "./shell-marks.ts";
 import { type Suggestion, suggest } from "@/features/complete/match.ts";
 import { COMMANDS, loadSpec } from "@/features/complete/specs.ts";
@@ -374,9 +375,13 @@ export class TerminalController {
       triggers?: { source: TriggerSource; fired: (batch: FiredBatch) => void };
       /** For a pane that starts a tmux session's tabs. */
       tmux?: TmuxEvents;
+      /** Files hosts send with `sz`. */
+      receive?: ReceiveHub;
     } = {},
   ) {
     this.#sessions = sessions;
+    this.#receive = options.receive;
+    this.#stopReceive = options.receive?.subscribe(() => this.#notify());
     this.spec = options.spec ?? LOCAL;
     this.#tmux = options.tmux;
     this.#openLink = options.openLink;
@@ -513,6 +518,12 @@ export class TerminalController {
       // tmux answers its panes' queries itself: an answer from here would
       // reach the program twice.
       if (this.spec.kind === "tmux" && this.#isReply(raw)) return;
+      // While files come, keys would go into the protocol; the backend
+      // refuses them too. Ctrl+C stops the transfer.
+      if (this.#receiving()) {
+        if (raw.includes("\u0003")) this.cancelReceive();
+        return;
+      }
       this.#closeCompletion();
       const data = defusePaste(raw);
       this.#noteTyping(data);
@@ -980,6 +991,42 @@ export class TerminalController {
    */
   getFill = (): FillState | undefined => this.#fill;
 
+  /** Files the host sends: an offer, progress, or how it ended. For `useSyncExternalStore`. */
+  getReceive = (): ReceiveState | undefined => this.#receive?.state(this.#session?.id);
+
+  #receiving(): boolean {
+    const state = this.getReceive();
+    return state?.kind === "offered" || state?.kind === "receiving";
+  }
+
+  /** The user's answer to the host's offer. */
+  answerReceive(accept: boolean): void {
+    const id = this.#session?.id;
+    if (id === undefined || !this.#receive) return;
+    this.#receive.answer(id, accept).catch(ignoreEndedSession);
+    this.focus();
+  }
+
+  cancelReceive(): void {
+    const id = this.#session?.id;
+    if (id === undefined || !this.#receive) return;
+    this.#receive.client.cancel(id).catch(ignoreEndedSession);
+  }
+
+  revealReceived(): void {
+    this.#receive?.client.reveal().catch(ignoreEndedSession);
+  }
+
+  /** Hides how the last transfer ended. */
+  dismissReceive(): void {
+    const id = this.#session?.id;
+    if (id !== undefined) this.#receive?.dismiss(id);
+    this.focus();
+  }
+
+  readonly #receive: ReceiveHub | undefined;
+  readonly #stopReceive: (() => void) | undefined;
+
   /**
    * Types the saved host's login password at the prompt the pane shows,
    * without Enter: the backend checks the prompt itself and sends it, the
@@ -1357,6 +1404,7 @@ export class TerminalController {
     }
     this.#disposed = true;
     this.#marks.dispose();
+    this.#stopReceive?.();
     this.detach();
     clearTimeout(this.#ackRetry);
     clearTimeout(this.#reconnectTimer);
@@ -1378,6 +1426,7 @@ export class TerminalController {
     this.#pin?.dispose();
     this.#output.close();
     for (const pending of this.#prompts.splice(0)) pending.resolve(CANCEL);
+    if (this.#session) this.#receive?.dismiss(this.#session.id);
     this.#session?.close().catch(ignoreEndedSession);
     this.#session = undefined;
     this.#settleOpened?.(undefined);

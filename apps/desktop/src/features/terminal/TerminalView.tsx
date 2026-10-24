@@ -8,6 +8,7 @@ import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
 import { ConnectFailure } from "./ConnectFailure.tsx";
 import type { CompletionState, TerminalController } from "./controller.ts";
 import { GuardDialog } from "./GuardDialog.tsx";
+import { type ReceiveState, SETTLE, formatBytes } from "./receive.ts";
 
 interface TerminalViewProps {
   controller: TerminalController;
@@ -28,6 +29,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
   const recording = useSyncExternalStore(controller.subscribe, controller.getRecording);
   const fill = useSyncExternalStore(controller.subscribe, controller.getFill);
   const completion = useSyncExternalStore(controller.subscribe, controller.getCompletion);
+  const receive = useSyncExternalStore(controller.subscribe, controller.getReceive);
   const remote = controller.spec.kind !== "local";
 
   useEffect(() => {
@@ -140,6 +142,7 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
           PROD · {controller.defaultTitle} · commands are checked before they run
         </output>
       )}
+      {receive && <Receive controller={controller} state={receive} />}
       {prompt && <PromptDialog prompt={prompt} onAnswer={(answer) => controller.answer(answer)} />}
       {guardRequest && (
         <GuardDialog
@@ -150,6 +153,128 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
       )}
     </div>
   );
+}
+
+/**
+ * Files the host sends with `sz`: asked first, then their progress, then
+ * where they went. Nothing goes back to the host before Receive.
+ */
+function Receive({ controller, state }: { controller: TerminalController; state: ReceiveState }) {
+  // An offer's buttons wait a moment: a click meant for what was there
+  // before must not answer it.
+  const shownAt = state.kind === "offered" ? state.shownAt : 0;
+  const [settledFor, setSettledFor] = useState(0);
+  useEffect(() => {
+    if (shownAt === 0) return undefined;
+    const timer = setTimeout(() => setSettledFor(shownAt), shownAt + SETTLE - performance.now());
+    return () => clearTimeout(timer);
+  }, [shownAt]);
+  const settled = settledFor === shownAt;
+  return (
+    <output
+      data-testid="receive"
+      className="flex items-center gap-2 border-t border-line bg-surface-1 px-3 py-1 text-xs"
+    >
+      {state.kind === "offered" && (
+        <>
+          <span className="min-w-0 flex-1">
+            {controller.defaultTitle} wants to send files (Zmodem). They go to Downloads/Tauminus;
+            Ctrl+C declines.
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary btn-xs"
+            disabled={state.answered || !settled}
+            onClick={() => controller.answerReceive(true)}
+          >
+            Receive
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            disabled={state.answered || !settled}
+            onClick={() => controller.answerReceive(false)}
+          >
+            Decline
+          </button>
+        </>
+      )}
+      {state.kind === "receiving" && (
+        <>
+          <span className="min-w-0 flex-1 truncate">
+            Receiving {state.name ?? "files"}
+            {state.size === null
+              ? ` · ${formatBytes(state.bytes)}`
+              : ` · ${formatBytes(state.bytes)} of ${formatBytes(state.size)}`}
+            <span className="text-faint"> · Ctrl+C stops</span>
+          </span>
+          {state.size !== null && state.size > 0 && (
+            <progress
+              className="h-1 w-24"
+              max={state.size}
+              value={Math.min(state.bytes, state.size)}
+              aria-label="Received"
+            />
+          )}
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => controller.cancelReceive()}
+          >
+            Stop
+          </button>
+        </>
+      )}
+      {state.kind === "finished" && (
+        <>
+          <span className="min-w-0 flex-1 truncate">
+            {state.files.length === 0
+              ? "No file was received"
+              : `Received ${names(state.files, state.moreFiles)}`}
+            {state.skipped.length > 0 && (
+              <span className="text-error">
+                {" "}
+                · skipped, names that cannot be saved: {names(state.skipped, state.moreSkipped)}
+              </span>
+            )}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => controller.revealReceived()}
+          >
+            Show folder
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => controller.dismissReceive()}
+          >
+            Close
+          </button>
+        </>
+      )}
+      {state.kind === "failed" && (
+        <>
+          <span className="min-w-0 flex-1 text-error">
+            Transfer stopped: {state.reason}. Enter brings the prompt back.
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => controller.dismissReceive()}
+          >
+            Close
+          </button>
+        </>
+      )}
+    </output>
+  );
+}
+
+/** `a, b and 3 more`. */
+function names(list: string[], more: number): string {
+  return more > 0 ? `${list.join(", ")} and ${more} more` : list.join(", ");
 }
 
 /** The connection is gone; a new one is tried, counting down to it. */
@@ -168,9 +293,9 @@ function Reconnecting({
   onNow: () => void;
   onStop: () => void;
 }) {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => performance.now());
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(performance.now()), 1000);
     return () => clearInterval(timer);
   }, []);
   const seconds = Math.max(0, Math.ceil((retryAt - now) / 1000));

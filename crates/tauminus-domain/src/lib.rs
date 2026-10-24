@@ -27,6 +27,7 @@ mod telnet;
 mod terminal;
 mod tmux_control;
 mod trigger;
+mod zmodem;
 
 pub use ai::{
     AiAnswer, AiEndpoint, AiError, AiPrompt, Ask, AskContext, MAX_BASE_URL, MAX_MODEL, MAX_REQUEST,
@@ -86,3 +87,4 @@ pub use trigger::{
     MAX_SCAN_LINES, MAX_SEND, MAX_SET_RULES, MAX_SETS, Matcher, RulePattern, SendText,
     TriggerError, TriggerLibrary, TriggerMatcher, TriggerRule, TriggerSet,
 };
+pub use zmodem::{OFFER_KEEP, Output as ZmodemOutput, Receive, Received, find_offer};

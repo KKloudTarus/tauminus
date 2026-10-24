@@ -133,6 +133,7 @@ impl From<SessionError> for CommandError {
             SessionError::NotFound(_) => ErrorCode::NotFound,
             SessionError::LimitReached { .. } => ErrorCode::LimitReached,
             SessionError::Launch(_) => ErrorCode::LaunchFailed,
+            SessionError::Transferring => ErrorCode::NotAllowed,
         };
         // Include the source chain: "failed to start session: failed to start
         // /bin/zsh: No such file or directory".
