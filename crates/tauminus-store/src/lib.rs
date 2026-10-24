@@ -15,6 +15,7 @@ mod ai;
 mod format;
 pub mod history;
 mod history_backend;
+pub mod interchange;
 mod keychain;
 mod recordings;
 mod sealed_stream;

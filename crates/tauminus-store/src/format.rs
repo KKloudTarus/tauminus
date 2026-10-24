@@ -23,7 +23,7 @@ use tauminus_domain::{
 /// agent a host signs with; a file is written as the lowest version that
 /// holds what it has, so a build from before a feature keeps reading files
 /// that do not use it.
-const VERSION: u32 = 11;
+pub(crate) const VERSION: u32 = 11;
 const VERSION_WITHOUT_IDENTITY_AGENT: u32 = 10;
 const VERSION_WITHOUT_TMUX_TABS: u32 = 9;
 const VERSION_WITHOUT_AI: u32 = 8;
@@ -300,6 +300,13 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
 }
 
 pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
+    let (groups, hosts) = parts(bytes)?;
+    Inventory::new(groups, hosts).map_err(|e| e.to_string())
+}
+
+/// The groups and hosts a file holds, each checked on its own, before the
+/// checks across them. O(n).
+pub(crate) fn parts(bytes: &[u8]) -> Result<(Vec<Group>, Vec<Host>), String> {
     let file: File = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     if !(VERSION_WITHOUT_FORWARDS..=VERSION).contains(&file.version) {
         return Err(format!(
@@ -361,7 +368,7 @@ pub(crate) fn from_json(bytes: &[u8]) -> Result<Inventory, String> {
             Ok(host)
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Inventory::new(groups, hosts).map_err(|e| e.to_string())
+    Ok((groups, hosts))
 }
 
 fn settings_record(s: &Settings) -> SettingsRecord {
