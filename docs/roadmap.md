@@ -161,7 +161,7 @@ Goal: beat Termius Pro.
 - [x] Autocomplete from forked Fig specs for bash and zsh hosts whose shell marks its prompt (OSC 133)
 - [x] Password suggestion at detected prompts from identities
 - [x] AI assistant, off by default: text to command, explain error; user key or local model; every command passes the prod guard
-- [ ] `tmux` control mode: `tmux` windows as native tabs
+- [x] `tmux` control mode: `tmux` windows as native tabs (tmux 3.2+, one pane per window)
 - [ ] FIDO2 `sk-` keys through the agent, then direct signing with `ctap-hid-fido2`
 - [ ] Keys bound to Secure Enclave (macOS) and Windows Hello
 - [ ] Zmodem and trzsz transfers
