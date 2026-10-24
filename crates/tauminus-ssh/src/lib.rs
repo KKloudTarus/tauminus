@@ -190,6 +190,7 @@ impl RusshConnector {
                 goodbye: &goodbye,
                 turn: None,
                 stored_last: false,
+                skipped_fido: false,
             }
             .run()
             .await
