@@ -274,6 +274,10 @@ impl Authenticator<'_> {
                 debug!(path = %path.display(), "skipping unreadable key");
                 continue;
             };
+            if needs_security_key(&public) {
+                debug!(path = %path.display(), "skipping a FIDO2 key: only an agent signs with it");
+                continue;
+            }
             let mut signer = KeyFileSigner {
                 path: &path,
                 text: &text,
@@ -458,6 +462,10 @@ impl Authenticator<'_> {
                 return Ok(Outcome::Skipped);
             }
         };
+        if needs_security_key(key.public_key()) {
+            debug!("skipping the identity's FIDO2 key: only an agent signs with it");
+            return Ok(Outcome::Skipped);
+        }
         let hash = self.rsa_hash(key.public_key()).await?;
         let result = self
             .handle
@@ -598,6 +606,16 @@ impl Authenticator<'_> {
         }
         keys
     }
+}
+
+/// A FIDO2 key (`sk-`): its file holds no secret, only what the security
+/// key needs to sign. Offered from a file it could not be signed for, and
+/// the failed signature ended the whole connect; an agent signs for it.
+fn needs_security_key(key: &PublicKey) -> bool {
+    matches!(
+        key.algorithm(),
+        russh::keys::Algorithm::SkEd25519 | russh::keys::Algorithm::SkEcdsaSha2NistP256
+    )
 }
 
 /// The public half of a key file without decrypting it: OpenSSH-format keys
