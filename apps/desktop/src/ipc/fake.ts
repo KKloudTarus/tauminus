@@ -213,7 +213,28 @@ class FakeShell implements TerminalSession {
           name: argument || "file.bin",
           done: () => this.#print(`\r\n${this.#prompt}`),
         });
-        receiveHandler?.({ kind: "offered", session: this.id, offer: 1, wants: "receive" });
+        receiveHandler?.({
+          kind: "offered",
+          session: this.id,
+          offer: 1,
+          wants: "receive",
+          protocol: "zmodem",
+        });
+        return;
+      case "tsz":
+        // As trzsz's `tsz` does: its trigger line, then it waits.
+        this.#print("\x1b[s");
+        offers.set(this.id, {
+          name: argument || "file.bin",
+          done: () => this.#print(`\r\n${this.#prompt}`),
+        });
+        receiveHandler?.({
+          kind: "offered",
+          session: this.id,
+          offer: 1,
+          wants: "receive",
+          protocol: "trzsz",
+        });
         return;
       case "rz":
         // As `rz` does: it says it waits, then waits for files.
@@ -222,7 +243,13 @@ class FakeShell implements TerminalSession {
           name: "",
           done: () => this.#print(`\r\n${this.#prompt}`),
         });
-        receiveHandler?.({ kind: "offered", session: this.id, offer: 1, wants: "send" });
+        receiveHandler?.({
+          kind: "offered",
+          session: this.id,
+          offer: 1,
+          wants: "send",
+          protocol: "zmodem",
+        });
         return;
       case "drop":
         // As a network going away: the session ends without an exit.

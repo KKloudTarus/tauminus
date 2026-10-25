@@ -195,8 +195,8 @@ function Receive({ controller, state }: { controller: TerminalController; state:
         <>
           <span className="min-w-0 flex-1">
             {state.wants === "receive"
-              ? `${controller.defaultTitle} wants to send files (Zmodem). They go to Downloads/Tauminus; Ctrl+C declines.`
-              : `${controller.defaultTitle} waits for files (rz). Ctrl+C declines.`}
+              ? `${controller.defaultTitle} wants to send files (${state.protocol === "trzsz" ? "tsz" : "Zmodem"}). They go to Downloads/Tauminus; Ctrl+C declines.`
+              : `${controller.defaultTitle} waits for files (${state.protocol === "trzsz" ? "trz" : "rz"}). Ctrl+C declines.`}
           </span>
           <button
             type="button"

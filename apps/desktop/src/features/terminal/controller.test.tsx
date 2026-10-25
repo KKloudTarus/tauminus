@@ -1576,9 +1576,9 @@ async function receiving() {
 describe("files the host sends", () => {
   it("asks first, and sends the answer for this session only", async () => {
     const { controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 2, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 2, offer: 1, wants: "receive", protocol: "zmodem" });
     expect(controller.getZmodem()).toBeUndefined();
-    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "zmodem" });
     await expect.poll(() => banner(screen)).toContain("wants to send files");
     // A click as it appears was meant for what was there before.
     controller.answerZmodem(true);
@@ -1594,7 +1594,7 @@ describe("files the host sends", () => {
 
   it("keeps keys from the host while files come, and Ctrl+C stops them", async () => {
     const { sessions, controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "zmodem" });
     send({ kind: "started", session: 1, folder: "/d" });
     send({ kind: "file", session: 1, name: "big.bin", size: 4096 });
     send({ kind: "progress", session: 1, bytes: 1024, size: 4096 });
@@ -1611,9 +1611,17 @@ describe("files the host sends", () => {
     await vi.waitFor(() => expect(sessions.session.write).toHaveBeenCalledWith("x"));
   });
 
+  it("names trzsz's tsz and trz in the offer", async () => {
+    const { screen, send } = await receiving();
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "trzsz" });
+    await expect.poll(() => banner(screen)).toContain("wants to send files (tsz)");
+    send({ kind: "offered", session: 1, offer: 2, wants: "send", protocol: "trzsz" });
+    await expect.poll(() => banner(screen)).toContain("waits for files (trz)");
+  });
+
   it("lets the user choose files for rz, and says what went", async () => {
     const { controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 1, offer: 1, wants: "send" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "send", protocol: "zmodem" });
     await expect.poll(() => banner(screen)).toContain("waits for files (rz)");
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Choose files…" }).click();
@@ -1642,7 +1650,7 @@ describe("files the host sends", () => {
   it("says why an answer failed, and declines the offer", async () => {
     const { controller, screen, client, send } = await receiving();
     client.receive.mockRejectedValueOnce(new Error("could not open Downloads/Tauminus"));
-    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "zmodem" });
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Receive" }).click();
     await expect.poll(() => banner(screen)).toContain("could not open Downloads/Tauminus");
@@ -1653,13 +1661,13 @@ describe("files the host sends", () => {
 
   it("names what came and what was skipped, and a decline shows nothing", async () => {
     const { controller, screen, client, send } = await receiving();
-    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "zmodem" });
     await new Promise((resolve) => setTimeout(resolve, SETTLE));
     await screen.getByRole("button", { name: "Decline" }).click();
     expect(client.receive).toHaveBeenCalledWith(1, 1, false);
     send({ kind: "declined", session: 1 });
     await vi.waitFor(() => expect(controller.getZmodem()).toBeUndefined());
-    send({ kind: "offered", session: 1, offer: 1, wants: "receive" });
+    send({ kind: "offered", session: 1, offer: 1, wants: "receive", protocol: "zmodem" });
     send({ kind: "started", session: 1, folder: "/d" });
     send({
       kind: "finished",

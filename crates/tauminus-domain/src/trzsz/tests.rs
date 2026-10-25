@@ -349,7 +349,7 @@ mod downloads {
     #[test]
     fn a_damaged_or_overlong_file_is_not_kept() {
         for (data, md5_of, reason) in [
-            (&b"abc"[..], &b"abd"[..], "MD5"),
+            (&b"abc"[..], &b"xyz"[..], "MD5"),
             (&b"abcd"[..], &b"abcd"[..], "more than the size"),
         ] {
             let (mut download, mut out) = started();

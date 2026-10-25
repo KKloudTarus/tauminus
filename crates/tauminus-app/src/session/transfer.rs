@@ -15,13 +15,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use tauminus_domain::trzsz::{Download, closing};
 use tauminus_domain::{
-    LocalOs, Need, OFFER_KEEP, Receive, Received, Sent, SessionId, TransmitOutput, Wants,
-    ZmodemOutput, find_offer,
+    LocalOs, Need, OFFER_KEEP, Receive, Received, Refused, Sent, SessionId, TransferProtocol,
+    TransmitOutput, Wants, ZmodemOutput, find_offer,
 };
 use tokio::sync::mpsc;
 
-use crate::ports::{PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost};
+use crate::ports::{
+    PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost, TransferKind,
+};
 
 mod send;
 
@@ -50,6 +53,9 @@ const QUIET: Duration = Duration::from_millis(300);
 const MAX_DRAIN: Duration = Duration::from_secs(30);
 /// Names a finished transfer lists; past these it counts.
 const MAX_NAMES: usize = 100;
+/// trzsz ids a session remembers: one seen again is old output, a log or
+/// a recording replayed, and is not answered.
+const MAX_IDS: usize = 100;
 /// While sending: bytes queued for the host past which no more file is
 /// read, and below which reading starts again. They bound what an abort
 /// leaves on the way.
@@ -105,11 +111,6 @@ fn text(chunk: &[u8]) -> bool {
         })
 }
 
-/// A Zmodem offer in `bytes`: trzsz ones are not answered yet.
-fn zmodem_offer(bytes: &[u8]) -> Option<tauminus_domain::Offer> {
-    find_offer(bytes).filter(|offer| offer.protocol == tauminus_domain::TransferProtocol::Zmodem)
-}
-
 /// One session's transfers.
 pub(super) struct Transfer {
     id: SessionId,
@@ -126,6 +127,8 @@ pub(super) struct Transfer {
     offers: u64,
     /// An offer the user has not heard of yet: see [`Self::announce`].
     unannounced: bool,
+    /// trzsz ids seen, oldest first.
+    ids: std::collections::VecDeque<u64>,
 }
 
 enum State {
@@ -137,6 +140,7 @@ enum State {
         shown: usize,
         offer: u64,
         wants: Wants,
+        protocol: TransferProtocol,
     },
     Receiving(Box<Receiving>),
     Sending(Box<Sending>),
@@ -148,11 +152,65 @@ enum State {
         since: Instant,
         last: Instant,
         inputs: u64,
+        /// trzsz: data lines are text, so typing does not end the drain;
+        /// the host's closing message does.
+        trzsz: bool,
     },
 }
 
+/// What receives the files: one protocol or the other.
+enum Incoming {
+    Zmodem(Box<Receive>),
+    Trzsz(Box<Download>),
+}
+
+impl Incoming {
+    fn feed(&mut self, input: &[u8], out: &mut ZmodemOutput) -> usize {
+        match self {
+            Self::Zmodem(receive) => receive.feed(input, out),
+            Self::Trzsz(download) => download.feed(input, out),
+        }
+    }
+
+    fn timeout(&mut self, out: &mut ZmodemOutput) {
+        match self {
+            Self::Zmodem(receive) => receive.timeout(out),
+            Self::Trzsz(download) => download.timed_out(out),
+        }
+    }
+
+    fn abort(&mut self, out: &mut ZmodemOutput, reason: &'static str) {
+        match self {
+            Self::Zmodem(receive) => receive.abort(out, reason),
+            Self::Trzsz(download) => download.abort(out, reason),
+        }
+    }
+
+    fn ended(&self) -> bool {
+        match self {
+            Self::Zmodem(receive) => receive.ended(),
+            Self::Trzsz(download) => download.ended(),
+        }
+    }
+
+    fn completed(&self) -> bool {
+        match self {
+            Self::Zmodem(receive) => receive.completed(),
+            Self::Trzsz(download) => download.completed(),
+        }
+    }
+
+    /// How long nothing may come before [`Self::timeout`].
+    fn deadline(&self) -> Duration {
+        match self {
+            Self::Zmodem(_) => IDLE,
+            Self::Trzsz(download) => download.timeout(),
+        }
+    }
+}
+
 struct Receiving {
-    receive: Receive,
+    engine: Incoming,
     folder: Box<dyn ReceiveFolder>,
     part: Option<(String, Box<dyn PartFile>)>,
     size: Option<u64>,
@@ -192,6 +250,7 @@ impl Transfer {
             declined_at: None,
             offers: 0,
             unannounced: false,
+            ids: std::collections::VecDeque::new(),
         }
     }
 
@@ -218,8 +277,18 @@ impl Transfer {
         if !std::mem::take(&mut self.unannounced) {
             return;
         }
-        if let State::Offered { offer, wants, .. } = self.state {
-            self.host.offered(self.id, offer, wants);
+        if let State::Offered {
+            offer,
+            wants,
+            protocol,
+            ..
+        } = self.state
+        {
+            let kind = match protocol {
+                TransferProtocol::Zmodem => TransferKind::Zmodem,
+                TransferProtocol::Trzsz { .. } => TransferKind::Trzsz,
+            };
+            self.host.offered(self.id, offer, wants, kind);
         }
     }
 
@@ -253,8 +322,9 @@ impl Transfer {
     /// When [`Self::timeout`] is due if nothing comes: while files come or
     /// their rest is dropped.
     pub(super) fn deadline(&self) -> Option<Duration> {
-        match self.state {
-            State::Receiving(_) | State::Sending(_) => Some(IDLE),
+        match &self.state {
+            State::Receiving(receiving) => Some(receiving.engine.deadline()),
+            State::Sending(_) => Some(IDLE),
             State::Draining { .. } => Some(QUIET),
             _ => None,
         }
@@ -268,7 +338,7 @@ impl Transfer {
             State::Offered { held, .. } => {
                 held.extend_from_slice(&chunk);
                 if held.len() > MAX_HELD {
-                    return self.decline();
+                    return self.decline(false);
                 }
                 return Vec::new();
             }
@@ -276,11 +346,17 @@ impl Transfer {
                 since,
                 last,
                 inputs,
+                trzsz,
             } => {
+                // trzsz: its closing message ends what the host sent.
+                if *trzsz && let Some(at) = closing(&chunk) {
+                    self.state = State::Idle;
+                    return self.look(chunk[at..].to_vec());
+                }
                 // Typed after the stop, and text: what comes now answers
                 // the user. File data still coming carries ZDLE.
                 let typed = self.inputs.load(Ordering::Relaxed) != *inputs;
-                if since.elapsed() > MAX_DRAIN || (typed && text(&chunk)) {
+                if since.elapsed() > MAX_DRAIN || (!*trzsz && typed && text(&chunk)) {
                     self.state = State::Idle;
                     return self.look(chunk);
                 }
@@ -297,7 +373,7 @@ impl Transfer {
             }
             State::Receiving(receiving) => {
                 let mut out = ZmodemOutput::default();
-                let used = receiving.receive.feed(&chunk, &mut out);
+                let used = receiving.engine.feed(&chunk, &mut out);
                 (out, used)
             }
             State::Sending(sending) => {
@@ -324,14 +400,15 @@ impl Transfer {
         } else {
             let mut seam = tail.clone();
             seam.extend_from_slice(&chunk[..chunk.len().min(OFFER_KEEP + 1)]);
-            zmodem_offer(&seam)
+            find_offer(&seam)
                 .filter(|offer| offer.at < tail.len())
-                .map(|offer| (offer.at, tail.len() - offer.at, offer.wants))
+                .map(|offer| (offer.at, tail.len() - offer.at, offer.wants, offer.protocol))
         };
-        let found = found
-            .or_else(|| zmodem_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants)));
+        let found = found.or_else(|| {
+            find_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants, offer.protocol))
+        });
         match found {
-            Some((at, shown, wants)) if !cooling => {
+            Some((at, shown, wants, protocol)) if !cooling && self.answers(wants, protocol) => {
                 let start = at + shown - tail.len();
                 let mut held = tail[tail.len() - shown..].to_vec();
                 held.extend_from_slice(&chunk[start..]);
@@ -343,6 +420,7 @@ impl Transfer {
                     shown,
                     offer,
                     wants,
+                    protocol,
                 };
                 self.unannounced = true;
                 before
@@ -361,6 +439,40 @@ impl Transfer {
         }
     }
 
+    /// Whether an offer found is put to the user. A trzsz one is not when
+    /// its id was seen before (old output), and is told of, not answered,
+    /// when it asks what is not done. O(1).
+    fn answers(&mut self, wants: Wants, protocol: TransferProtocol) -> bool {
+        let TransferProtocol::Trzsz { id, refused, .. } = protocol else {
+            return true;
+        };
+        if self.ids.contains(&id) {
+            return false;
+        }
+        if self.ids.len() == MAX_IDS {
+            self.ids.pop_front();
+        }
+        self.ids.push_back(id);
+        let refused = match refused {
+            Some(Refused::Folders) => {
+                Some("trz -d sends folders, which Tauminus does not take yet")
+            }
+            Some(Refused::Windows) => Some("trzsz on a Windows host is not supported yet"),
+            None if wants == Wants::Send => Some("trz is not supported yet; tsz is"),
+            None => None,
+        };
+        if let Some(reason) = refused {
+            self.host.event(
+                self.id,
+                TransferEvent::Failed {
+                    reason: format!("{reason}: press Ctrl+C to end it"),
+                },
+            );
+            return false;
+        }
+        true
+    }
+
     /// The user's answer to offer `offer`: a folder to receive into, files
     /// to send, or no. An answer to another offer (an earlier one), or of
     /// the other kind, changes nothing. Returns what the view is to show.
@@ -369,6 +481,7 @@ impl Transfer {
             held,
             offer: open,
             wants,
+            protocol,
             ..
         } = &mut self.state
         else {
@@ -377,10 +490,29 @@ impl Transfer {
         if *open != offer {
             return Vec::new();
         }
+        let protocol = *protocol;
         match (answer, *wants) {
-            (TransferAnswer::Decline, _) => self.decline(),
+            (TransferAnswer::Decline, _) => self.decline(true),
             (TransferAnswer::Receive(folder), Wants::Receive) => {
-                let held = std::mem::take(held);
+                let mut held = std::mem::take(held);
+                let engine = match protocol {
+                    TransferProtocol::Zmodem => {
+                        Incoming::Zmodem(Box::new(Receive::new(LocalOs::current())))
+                    }
+                    TransferProtocol::Trzsz { .. } => {
+                        // Past the trigger line: the host waits for the
+                        // answer, and prints nothing before it.
+                        let line = held
+                            .iter()
+                            .position(|&b| b == b'\n')
+                            .map_or(held.len(), |end| end + 1);
+                        held.drain(..line);
+                        let mut out = ZmodemOutput::default();
+                        let download = Download::start(LocalOs::current(), &mut out);
+                        self.wire.send(out.wire);
+                        Incoming::Trzsz(Box::new(download))
+                    }
+                };
                 self.host.event(
                     self.id,
                     TransferEvent::Started {
@@ -388,7 +520,7 @@ impl Transfer {
                     },
                 );
                 self.state = State::Receiving(Box::new(Receiving {
-                    receive: Receive::new(LocalOs::current()),
+                    engine,
                     folder,
                     part: None,
                     size: None,
@@ -423,14 +555,22 @@ impl Transfer {
         }
     }
 
-    /// Nothing goes to the host: what was held back is shown as it came.
-    fn decline(&mut self) -> Vec<u8> {
+    /// What was held back is shown as it came. Zmodem's host hears
+    /// nothing; trzsz's, when the user declined, gets Ctrl+C, which ends a
+    /// waiting `tsz` or `trz`. A decline the pump makes writes nothing.
+    fn decline(&mut self, user: bool) -> Vec<u8> {
         let State::Offered {
-            mut held, shown, ..
+            mut held,
+            shown,
+            protocol,
+            ..
         } = std::mem::replace(&mut self.state, State::Idle)
         else {
             return Vec::new();
         };
+        if user && matches!(protocol, TransferProtocol::Trzsz { .. }) {
+            self.wire.send(vec![0x03]);
+        }
         self.declined_at = Some(Instant::now());
         self.host.event(self.id, TransferEvent::Declined);
         held.drain(..shown);
@@ -441,7 +581,7 @@ impl Transfer {
     /// stopped, its partial file removed.
     pub(super) fn cancel(&mut self) -> Vec<u8> {
         let out = match &mut self.state {
-            State::Offered { .. } => return self.decline(),
+            State::Offered { .. } => return self.decline(true),
             State::Sending(sending) => {
                 let mut out = TransmitOutput::default();
                 self.wire.cut();
@@ -451,7 +591,7 @@ impl Transfer {
             }
             State::Receiving(receiving) => {
                 let mut out = ZmodemOutput::default();
-                receiving.receive.abort(&mut out, "cancelled");
+                receiving.engine.abort(&mut out, "cancelled");
                 out
             }
             State::Idle | State::Ending(_) | State::Draining { .. } => return Vec::new(),
@@ -485,7 +625,7 @@ impl Transfer {
             return Vec::new();
         };
         let mut out = ZmodemOutput::default();
-        receiving.receive.timeout(&mut out);
+        receiving.engine.timeout(&mut out);
         self.handle(out);
         self.after_end(&[])
     }
@@ -681,6 +821,7 @@ impl Transfer {
             since: now,
             last: now,
             inputs: self.inputs.load(Ordering::Relaxed),
+            trzsz: false,
         };
         Vec::new()
     }
@@ -690,22 +831,29 @@ impl Transfer {
         let State::Receiving(receiving) = &mut self.state else {
             return Vec::new();
         };
-        if !receiving.receive.ended() {
+        if !receiving.engine.ended() {
             return Vec::new();
         }
         let State::Receiving(receiving) = std::mem::replace(&mut self.state, State::Idle) else {
             return Vec::new();
         };
-        if !receiving.receive.completed() {
+        let trzsz = matches!(receiving.engine, Incoming::Trzsz(_));
+        if !receiving.engine.completed() {
             let now = Instant::now();
             self.state = State::Draining {
                 since: now,
                 last: now,
                 inputs: self.inputs.load(Ordering::Relaxed),
+                trzsz,
             };
             return Vec::new();
         }
-        let mut receive = Box::new(receiving.receive);
+        let mut receive = match receiving.engine {
+            Incoming::Zmodem(receive) => receive,
+            // trzsz's last line is the terminal's: what follows is the
+            // host's closing message.
+            Incoming::Trzsz(_) => return self.look(rest.to_vec()),
+        };
         let shown = receive.after(rest).to_vec();
         self.state = if shown.is_empty() {
             State::Ending(receive)
@@ -726,6 +874,7 @@ impl Transfer {
         };
         let mut failed: Option<String> =
             backlog.then(|| "the host stopped reading what the transfer sends".to_owned());
+        let mut named: Option<String> = None;
         for step in out.received {
             if failed.is_some() {
                 break;
@@ -740,6 +889,9 @@ impl Transfer {
                                 size,
                             },
                         );
+                        if matches!(receiving.engine, Incoming::Trzsz(_)) {
+                            named = Some(saved.clone());
+                        }
                         receiving.part = Some((saved, part));
                         receiving.size = size;
                         receiving.bytes = 0;
@@ -805,15 +957,31 @@ impl Transfer {
                 }
             }
         }
+        self.handled(failed, named);
+    }
+
+    /// After a batch of steps: a failure stops the receive; a trzsz file
+    /// saved under `named` lets the transfer go on.
+    fn handled(&mut self, failed: Option<String>, named: Option<String>) {
+        let State::Receiving(receiving) = &mut self.state else {
+            return;
+        };
         if let Some(reason) = failed {
             // The host is told to stop, and nothing half written stays.
             let mut out = ZmodemOutput::default();
-            receiving.receive.abort(&mut out, "stopped");
+            receiving.engine.abort(&mut out, "stopped");
             if let Some((_, part)) = receiving.part.take() {
                 part.discard();
             }
             self.wire.send(out.wire);
             self.host.event(self.id, TransferEvent::Failed { reason });
+            return;
+        }
+        // trzsz goes on once the host hears the name the file got.
+        if let (Some(saved), Incoming::Trzsz(download)) = (named, &mut receiving.engine) {
+            let mut out = ZmodemOutput::default();
+            download.named(&saved, &mut out);
+            self.handle(out);
         }
     }
 }

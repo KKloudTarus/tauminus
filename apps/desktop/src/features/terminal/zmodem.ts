@@ -7,6 +7,9 @@ import type { ZmodemClient, ZmodemView } from "@/ipc/zmodem.ts";
 /** Which way an offer's files go: `receive` from `sz`, `send` to `rz`. */
 export type Direction = "receive" | "send";
 
+/** The protocol an offer came in: Zmodem (`sz`, `rz`) or trzsz (`tsz`, `trz`). */
+export type Protocol = "zmodem" | "trzsz";
+
 /** What a pane shows of files its host sends or takes. */
 export type ZmodemState =
   /**
@@ -14,7 +17,14 @@ export type ZmodemState =
    * when it appeared: a click before {@link SETTLE} ms later was meant
    * for what was there before.
    */
-  | { kind: "offered"; offer: number; wants: Direction; answered: boolean; shownAt: number }
+  | {
+      kind: "offered";
+      offer: number;
+      wants: Direction;
+      protocol: Protocol;
+      answered: boolean;
+      shownAt: number;
+    }
   | {
       /** Files come into `folder`, or, with none, go to the host. */
       kind: "moving";
@@ -117,6 +127,7 @@ function advance(state: ZmodemState | undefined, event: ZmodemView): ZmodemState
             kind: "offered",
             offer: event.offer,
             wants: event.wants,
+            protocol: event.protocol,
             answered: false,
             shownAt: performance.now(),
           };

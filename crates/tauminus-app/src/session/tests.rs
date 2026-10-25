@@ -830,18 +830,22 @@ mod transfers {
     use super::*;
     use tauminus_domain::Wants;
 
-    use crate::ports::{PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost};
+    use crate::ports::{
+        PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost, TransferKind,
+    };
 
     #[derive(Debug, Default)]
     pub(super) struct Host {
         pub(super) offers: AtomicUsize,
         pub(super) wants: Mutex<Option<Wants>>,
+        pub(super) kind: Mutex<Option<TransferKind>>,
         events: Mutex<Vec<TransferEvent>>,
     }
 
     impl TransferHost for Host {
-        fn offered(&self, _id: SessionId, offer: u64, wants: Wants) {
+        fn offered(&self, _id: SessionId, offer: u64, wants: Wants, kind: TransferKind) {
             *lock(&self.wants) = Some(wants);
+            *lock(&self.kind) = Some(kind);
             let before = self.offers.fetch_add(1, Ordering::Relaxed);
             assert_eq!(offer, before as u64 + 1, "offers are numbered from 1");
         }
@@ -1931,6 +1935,166 @@ mod transfers {
             String::from_utf8_lossy(&w.sink.output()).contains("rz: timed out\r\n$ ")
         })
         .await;
+    }
+
+    // Files a host sends with `tsz` (ADR 0031).
+
+    use tauminus_domain::trzsz::{decode, encode, frame};
+
+    const TRIGGER: &[u8] = b"\x1b[s::TRZSZ:TRANSFER:S:1.2.0:1729812345600:0\r\n";
+
+    /// The next `n` lines the terminal wrote to the host; Ctrl+C alone
+    /// counts as one.
+    async fn said(w: &mut World, n: usize) -> Vec<String> {
+        let mut wire = Vec::new();
+        loop {
+            let text = String::from_utf8(wire.clone()).unwrap();
+            let lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
+            let whole = lines
+                .iter()
+                .filter(|l| l.ends_with('\n') || l.as_str() == "\x03")
+                .count();
+            if whole >= n {
+                return lines;
+            }
+            let Some(TerminalInput::Data(bytes)) =
+                tokio::time::timeout(Duration::from_secs(2), w.input.recv())
+                    .await
+                    .expect("a line from the terminal")
+            else {
+                continue;
+            };
+            wire.extend(bytes);
+        }
+    }
+
+    async fn host(w: &World, bytes: Vec<u8>) {
+        w.events.send(TerminalEvent::Output(bytes)).await.unwrap();
+    }
+
+    fn text(kind: &str, value: &[u8]) -> Vec<u8> {
+        frame(kind, &encode(value))
+    }
+
+    async fn offered(w: &mut World) {
+        let mut printed = b"$ tsz notes.txt\r\n".to_vec();
+        printed.extend_from_slice(TRIGGER);
+        host(w, printed).await;
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        assert_eq!(*lock(&w.host.kind), Some(TransferKind::Trzsz));
+        assert_eq!(*lock(&w.host.wants), Some(Wants::Receive));
+        // Shown up to the mark: the cursor it saves is the host's.
+        until("the text before", || {
+            w.sink.output() == b"$ tsz notes.txt\r\n\x1b[s"
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_file_from_tsz_is_saved_and_the_host_s_message_shown() {
+        let mut w = world();
+        offered(&mut w).await;
+        let folder = Folder::default();
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
+            .unwrap();
+        assert!(said(&mut w, 1).await[0].starts_with("#ACT:"));
+        let body = b"line one\nline two\n".repeat(200);
+        let mut lines = text("CFG", br#"{"timeout":20}"#);
+        lines.extend(frame("NUM", "1"));
+        lines.extend(text("NAME", b"notes.txt"));
+        host(&w, lines).await;
+        let lines = said(&mut w, 2).await;
+        assert_eq!(lines[0], "#SUCC:1\n");
+        let name = decode(&lines[1].trim_end().as_bytes()["#SUCC:".len()..], 64).unwrap();
+        assert_eq!(name, b"notes.txt");
+        let mut lines = frame("SIZE", &body.len().to_string());
+        lines.extend(text("DATA", &body));
+        host(&w, lines).await;
+        let size = format!("#SUCC:{}\n", body.len());
+        assert_eq!(said(&mut w, 2).await, [size.clone(), size]);
+        host(&w, text("MD5", &tauminus_domain::trzsz::md5(&body))).await;
+        let end = said(&mut w, 2).await;
+        assert!(end[0].starts_with("#SUCC:") && end[1].starts_with("#EXIT:"));
+        host(&w, b"\x1b[u\x1b[0JSaved 1 file\r\n$ ".to_vec()).await;
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert_eq!(lock(&folder.0).get("notes.txt"), Some(&body));
+        assert!(matches!(
+            w.host.events().last(),
+            Some(TransferEvent::Finished { files, .. }) if files == &["notes.txt"]
+        ));
+        // The file's text never reached the view.
+        let shown = w.sink.output();
+        assert!(!shown.windows(8).any(|x| x == b"line one"));
+        // The same trigger again is old output: shown, not offered.
+        host(&w, TRIGGER.to_vec()).await;
+        until("the old trigger", || w.sink.output().ends_with(b"\r\n")).await;
+        assert_eq!(w.host.offers.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_decline_sends_ctrl_c_and_upload_and_folders_are_told_not_offered() {
+        let mut w = world();
+        offered(&mut w).await;
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Decline)
+            .unwrap();
+        assert_eq!(said(&mut w, 1).await, ["\x03"]);
+        for (trigger, reason) in [
+            (
+                &b"::TRZSZ:TRANSFER:R:1.2.0:1729812345700:0\r\n"[..],
+                "trz is not",
+            ),
+            (b"::TRZSZ:TRANSFER:D:1.2.0:1729812345800:0\r\n", "folders"),
+        ] {
+            let mut w = world();
+            host(&w, trigger.to_vec()).await;
+            until("the reason", || !w.host.events().is_empty()).await;
+            assert!(matches!(
+                w.host.events().last(),
+                Some(TransferEvent::Failed { reason: why }) if why.contains(reason)
+            ));
+            until("shown", || w.sink.output() == trigger).await;
+            assert_eq!(w.host.offers.load(Ordering::Relaxed), 0);
+            assert!(
+                w.sessions.write(w.id, b"\x03".to_vec()).await.is_ok(),
+                "keys go"
+            );
+            assert!(w.input.try_recv().is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_mid_file_sends_ctrl_c_drops_the_rest_and_shows_the_host_s_end() {
+        let mut w = world();
+        offered(&mut w).await;
+        let folder = Folder::default();
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Receive(Box::new(folder.clone())))
+            .unwrap();
+        said(&mut w, 1).await;
+        let mut lines = text("CFG", b"{}");
+        lines.extend(frame("NUM", "1"));
+        lines.extend(text("NAME", b"secret.env"));
+        host(&w, lines).await;
+        said(&mut w, 2).await;
+        host(&w, frame("SIZE", "100")).await;
+        said(&mut w, 1).await;
+        let shown = w.sink.output().len();
+        w.sessions.cancel_transfer(w.id).unwrap();
+        assert_eq!(said(&mut w, 1).await, ["\x03"]);
+        until("the stop", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Failed { .. }))
+        })
+        .await;
+        assert_eq!(folder.1.load(Ordering::Relaxed), 1, "the part file goes");
+        // A data line on its way, as text: dropped.
+        host(&w, text("DATA", b"DB_PASSWORD=hunter2")).await;
+        w.sessions.write(w.id, b"\r".to_vec()).await.unwrap();
+        host(&w, b"#DATA:more".to_vec()).await;
+        host(&w, b"\x1b[u\x1b[0JStopped\r\n$ ".to_vec()).await;
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert_eq!(&w.sink.output()[shown..], b"\x1b[u\x1b[0JStopped\r\n$ ");
     }
 }
 

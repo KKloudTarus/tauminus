@@ -19,6 +19,7 @@ use specta::Type;
 use tauminus_app::SessionManager;
 use tauminus_app::ports::{
     OutgoingFile, PartFile, ReceiveFolder, TransferAnswer, TransferEvent, TransferHost,
+    TransferKind,
 };
 use tauminus_domain::{LocalOs, SessionId, Wants, local_name};
 use tauri::State;
@@ -44,6 +45,7 @@ pub(crate) enum ZmodemView {
         session: SessionHandle,
         offer: f64,
         wants: Direction,
+        protocol: TransferProtocolView,
     },
     /// Files come into `folder`, or, with none, go to the host.
     Started {
@@ -89,6 +91,15 @@ pub(crate) enum Direction {
     Send,
 }
 
+/// Which protocol an offer came in.
+#[derive(Debug, Clone, Copy, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TransferProtocolView {
+    Zmodem,
+    /// trzsz (ADR 0031).
+    Trzsz,
+}
+
 /// Where transfer events go: the view's one channel, once it listens.
 #[derive(Default)]
 pub(crate) struct Transfers {
@@ -121,7 +132,7 @@ fn number(bytes: u64) -> f64 {
 }
 
 impl TransferHost for Transfers {
-    fn offered(&self, id: SessionId, offer: u64, wants: Wants) {
+    fn offered(&self, id: SessionId, offer: u64, wants: Wants, kind: TransferKind) {
         if let Ok(session) = SessionHandle::try_from(id) {
             self.send(ZmodemView::Offered {
                 session,
@@ -129,6 +140,10 @@ impl TransferHost for Transfers {
                 wants: match wants {
                     Wants::Receive => Direction::Receive,
                     Wants::Send => Direction::Send,
+                },
+                protocol: match kind {
+                    TransferKind::Zmodem => TransferProtocolView::Zmodem,
+                    TransferKind::Trzsz => TransferProtocolView::Trzsz,
                 },
             });
         }

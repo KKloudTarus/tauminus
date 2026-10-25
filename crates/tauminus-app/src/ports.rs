@@ -974,8 +974,22 @@ pub trait TransferHost: Send + Sync + fmt::Debug + 'static {
     /// comes back through `SessionManager::answer_transfer` with that
     /// number; until then the session shows nothing more and takes no
     /// keys.
-    fn offered(&self, id: tauminus_domain::SessionId, offer: u64, wants: tauminus_domain::Wants);
+    fn offered(
+        &self,
+        id: tauminus_domain::SessionId,
+        offer: u64,
+        wants: tauminus_domain::Wants,
+        kind: TransferKind,
+    );
     fn event(&self, id: tauminus_domain::SessionId, event: TransferEvent);
+}
+
+/// The protocol an offer came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferKind {
+    Zmodem,
+    /// trzsz (ADR 0031).
+    Trzsz,
 }
 
 /// A folder the user chose to receive into. Only names a host sent,
