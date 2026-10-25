@@ -127,10 +127,10 @@ Annual billing, from https://termius.com/pricing.
 | Import `~/.ssh/config` | Starter | `ssh -G` when OpenSSH exists, else `ssh2-config` 0.9.0 (no `Match`, no tokens) | glue | v0.1 |
 | Import CSV | Starter | Parser | build | v0.5 |
 | Import PuTTY, MobaXterm, SecureCRT | Starter | Parsers | build | v0.5 |
-| AWS (EC2, Lightsail) sync | Pro or Team (Termius sources disagree) | `aws-sdk-ec2` 1.269.0 | ready | v0.5 |
-| DigitalOcean sync | Pro or Team | REST via `reqwest` | glue | v0.5 |
-| Azure sync | Pro or Team | ARM REST with `azure_identity` 1.0.0 | glue | v0.5 |
-| GCP sync | Not in Termius | `google-cloud-compute-v1` 4.0.0 | ready | v0.5 |
+| AWS (EC2, Lightsail) import | Pro or Team (Termius sources disagree) | the user's `aws` CLI, every region (ADR 0032) | glue | v0.5 |
+| DigitalOcean import | Pro or Team | the user's `doctl` (ADR 0032) | glue | v0.5 |
+| Azure import | Pro or Team | the user's `az` (ADR 0032) | glue | v0.5 |
+| GCP import | Not in Termius | the user's `gcloud` (ADR 0032) | glue | v0.5 |
 | API bridge, Ansible inventory import | Team | Hub API | hub | v0.6 |
 
 ### SFTP
