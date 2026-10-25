@@ -34,15 +34,46 @@ const MAX_INSTANCES: usize = 10_000;
 const MAX_ERROR: usize = 256;
 
 /// Where the CLIs are often installed, past the app's `PATH`, which a
-/// desktop app started from a dock may lack.
-const KNOWN_DIRS: &[&str] = &[
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    "/opt/local/bin",
-    "/snap/bin",
-    "/run/current-system/sw/bin",
-    "/usr/bin",
-];
+/// desktop app started from a dock may lack. Only on Unix: on Windows a
+/// path like these is relative to the current drive, whose root any user
+/// may make folders in.
+#[cfg(unix)]
+fn known_dirs() -> Vec<PathBuf> {
+    [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/opt/local/bin",
+        "/snap/bin",
+        "/run/current-system/sw/bin",
+        "/usr/bin",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// The installers' own folders, under the system's program folders and
+/// the user's local app data.
+#[cfg(windows)]
+fn known_dirs() -> Vec<PathBuf> {
+    let under =
+        |var: &str, rest: &str| std::env::var_os(var).map(|root| PathBuf::from(root).join(rest));
+    [
+        under("ProgramFiles", r"Amazon\AWSCLIV2"),
+        under("ProgramFiles", r"Microsoft SDKs\Azure\CLI2\wbin"),
+        under("ProgramFiles(x86)", r"Microsoft SDKs\Azure\CLI2\wbin"),
+        under("ProgramFiles", r"Google\Cloud SDK\google-cloud-sdk\bin"),
+        under(
+            "ProgramFiles(x86)",
+            r"Google\Cloud SDK\google-cloud-sdk\bin",
+        ),
+        under("LOCALAPPDATA", r"Google\Cloud SDK\google-cloud-sdk\bin"),
+        under("LOCALAPPDATA", r"Programs\doctl"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
 
 /// The providers' CLIs.
 #[derive(Debug, Clone)]
@@ -130,8 +161,8 @@ impl Clis {
         } else {
             let path = std::env::var_os("PATH").unwrap_or_default();
             std::env::split_paths(&path)
+                .chain(known_dirs())
                 .filter(|dir| dir.is_absolute())
-                .chain(KNOWN_DIRS.iter().map(PathBuf::from))
                 .collect()
         };
         // `az` and `gcloud` are batch files on Windows.
@@ -216,12 +247,18 @@ impl Clis {
             return Err("a profile, subscription or project is letters, digits and `_.:@-`".into());
         }
         let scope = request.scope.as_deref();
-        match request.provider {
-            Provider::Ec2 | Provider::Lightsail => self.aws(request.provider, scope).await,
-            Provider::DigitalOcean => self.digitalocean(scope).await,
-            Provider::Azure => self.azure(scope).await,
-            Provider::Gcp => self.gcp(scope).await,
-        }
+        let work = async {
+            match request.provider {
+                Provider::Ec2 | Provider::Lightsail => self.aws(request.provider, scope).await,
+                Provider::DigitalOcean => self.digitalocean(scope).await,
+                Provider::Azure => self.azure(scope).await,
+                Provider::Gcp => self.gcp(scope).await,
+            }
+        };
+        // Regions run in waves: the whole listing gets a few commands' time.
+        tokio::time::timeout(self.deadline * 3, work)
+            .await
+            .map_err(|_| "listing the account took longer than an import waits".to_owned())?
     }
 
     async fn aws(&self, provider: Provider, profile: Option<&str>) -> Result<Listing, String> {
@@ -249,6 +286,9 @@ impl Clis {
         if regions.len() > MAX_REGIONS {
             return Err("aws listed more regions than an import asks".into());
         }
+        if let Some(odd) = regions.iter().find(|r| !valid_region(r)) {
+            return Err(format!("aws listed a region named {}", parse::clean(odd)));
+        }
         let permits = Arc::new(Semaphore::new(PARALLEL));
         let mut tasks = tokio::task::JoinSet::new();
         for region in regions {
@@ -266,42 +306,28 @@ impl Clis {
             tasks.spawn(async move {
                 let _permit = permits.acquire_owned().await;
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                let json = clis.run(&AWS, &args).await?;
                 let mut read = parse::Read::default();
+                let json = match clis.run(&AWS, &args).await {
+                    Ok(json) => json,
+                    Err(error) => return (region, Err(error)),
+                };
                 if lightsail {
                     parse::lightsail(&json, &account, &region, &mut read);
                 } else {
                     parse::ec2(&json, &account, &region, &mut read);
                 }
-                Ok::<_, String>(read)
+                (region, Ok(read))
             });
         }
-        let mut instances = Vec::new();
-        while let Some(joined) = tasks.join_next().await {
-            let read = joined.map_err(|e| e.to_string())??;
-            instances.extend(read.instances);
-            if instances.len() > MAX_INSTANCES {
-                return Err(format!("more than {MAX_INSTANCES} instances"));
-            }
-        }
-        // Regions answer in any order: the plan is the same each time.
-        instances.sort_by(|a, b| a.origin.cmp(&b.origin));
-        let prefix = if lightsail {
-            "aws-lightsail"
+        let (provider, prefix) = if lightsail {
+            ("AWS Lightsail", "aws-lightsail")
         } else {
-            "aws-ec2"
+            ("AWS EC2", "aws-ec2")
         };
-        Ok(Listing {
-            provider: if lightsail {
-                "AWS Lightsail"
-            } else {
-                "AWS EC2"
-            }
-            .into(),
-            whole: vec![format!("{prefix}:{account}")],
-            account,
-            instances,
-        })
+        let mut listing = gather(tasks, &format!("{prefix}:{account}")).await?;
+        listing.provider = provider.into();
+        listing.account = account;
+        Ok(listing)
     }
 
     async fn digitalocean(&self, context: Option<&str>) -> Result<Listing, String> {
@@ -327,6 +353,8 @@ impl Clis {
             whole: vec![format!("do:{uuid}")],
             account: uuid,
             instances: read.instances,
+            unreadable: read.unreadable,
+            failed: Vec::new(),
         })
     }
 
@@ -361,6 +389,8 @@ impl Clis {
             whole: vec![format!("azure:/subscriptions/{id}")],
             account: id,
             instances: read.instances,
+            unreadable: read.unreadable,
+            failed: Vec::new(),
         })
     }
 
@@ -402,8 +432,54 @@ impl Clis {
             whole: vec![format!("gcp:{project}")],
             account: project,
             instances: read.instances,
+            unreadable: read.unreadable,
+            failed: Vec::new(),
         })
     }
+}
+
+/// The regions' answers as one listing. A region refused (an
+/// organization's policy denying it, say) is told, and its hosts are not
+/// marked gone; the others import. Every region refused fails it.
+async fn gather(
+    mut tasks: tokio::task::JoinSet<(String, Result<parse::Read, String>)>,
+    scope: &str,
+) -> Result<Listing, String> {
+    let mut listing = Listing::default();
+    while let Some(joined) = tasks.join_next().await {
+        let (region, read) = joined.map_err(|e| e.to_string())?;
+        match read {
+            Ok(read) => {
+                listing.whole.push(format!("{scope}:{region}"));
+                listing.instances.extend(read.instances);
+                listing.unreadable += read.unreadable;
+            }
+            Err(error) => listing.failed.push((format!("region {region}"), error)),
+        }
+        if listing.instances.len() > MAX_INSTANCES {
+            return Err(format!("more than {MAX_INSTANCES} instances"));
+        }
+    }
+    if listing.whole.is_empty()
+        && let Some((_, error)) = listing.failed.pop()
+    {
+        return Err(error);
+    }
+    listing.whole.sort();
+    listing.failed.sort();
+    // Regions answer in any order: the plan is the same each time.
+    listing.instances.sort_by(|a, b| a.origin.cmp(&b.origin));
+    Ok(listing)
+}
+
+/// A region name as AWS gives them, `eu-west-1`: it goes into a command
+/// line.
+fn valid_region(region: &str) -> bool {
+    (1..=32).contains(&region.len())
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !region.starts_with('-')
 }
 
 fn bounded(read: &parse::Read) -> Result<(), String> {
@@ -433,3 +509,28 @@ fn is_program(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod search {
+    #[test]
+    fn every_place_searched_past_path_is_absolute_on_this_system() {
+        for dir in super::known_dirs() {
+            assert!(dir.is_absolute(), "{}", dir.display());
+        }
+    }
+
+    #[test]
+    fn a_region_is_lowercase_letters_digits_and_dashes() {
+        assert!(super::valid_region("eu-west-1"));
+        for odd in [
+            "",
+            "-x",
+            "--endpoint-url=http://evil",
+            "EU",
+            "a b",
+            &"a".repeat(33),
+        ] {
+            assert!(!super::valid_region(odd), "{odd}");
+        }
+    }
+}

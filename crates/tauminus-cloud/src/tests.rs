@@ -79,16 +79,52 @@ async fn ec2_asks_every_region_with_a_fixed_command_and_no_pager() {
         .unwrap();
     assert_eq!(listing.provider, "AWS EC2");
     assert_eq!(listing.account, "111122223333");
-    assert_eq!(listing.whole, ["aws-ec2:111122223333"]);
+    assert_eq!(
+        listing.whole,
+        [
+            "aws-ec2:111122223333:eu-west-1",
+            "aws-ec2:111122223333:us-east-1"
+        ]
+    );
     assert_eq!(listing.instances.len(), 1);
     assert_eq!(listing.instances[0].name, "web");
     let log = dir.log("aws");
     assert!(log.contains("--profile|work|--output|json|sts|get-caller-identity|"));
-    assert!(log.contains("ec2|describe-instances|--region|us-east-1|"));
+    assert!(log.contains("|--region|us-east-1|"));
     assert!(
         log.lines()
             .filter(|l| l.starts_with("pager="))
             .all(|l| l == "pager=")
+    );
+}
+
+#[tokio::test]
+async fn a_region_refused_is_told_and_the_others_import() {
+    let dir = Dir::new("denied");
+    dir.cli(
+        "aws",
+        &AWS_SCRIPT.replace(
+            r#"*"--region us-east-1"*) echo '{"Reservations":[]}' ;;"#,
+            r#"*"--region us-east-1"*) echo 'An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation' >&2; exit 254 ;;"#,
+        ),
+    );
+    let listing = dir
+        .clis()
+        .list(&request(Provider::Ec2, None))
+        .await
+        .unwrap();
+    assert_eq!(listing.instances.len(), 1);
+    assert_eq!(
+        listing.whole,
+        ["aws-ec2:111122223333:eu-west-1"],
+        "only the region listed"
+    );
+    assert_eq!(listing.failed.len(), 1);
+    assert_eq!(listing.failed[0].0, "region us-east-1");
+    assert!(
+        listing.failed[0].1.contains("UnauthorizedOperation"),
+        "{:?}",
+        listing.failed
     );
 }
 

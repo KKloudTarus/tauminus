@@ -7,6 +7,7 @@
 //! against the hosts as saved then.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -115,7 +116,18 @@ pub(crate) struct Cloud {
     pub(crate) clis: Box<dyn CloudInventory>,
     pub(crate) program: Box<dyn Fn(Provider) -> String + Send + Sync>,
     pending: Mutex<Option<(u32, Listing, Address)>>,
-    next: std::sync::atomic::AtomicU32,
+    next: AtomicU32,
+    /// One listing at a time: each runs up to eight CLIs.
+    listing: AtomicBool,
+}
+
+/// Clears [`Cloud::listing`] however the listing ends.
+struct Busy<'a>(&'a AtomicBool);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl Cloud {
@@ -146,7 +158,8 @@ impl Cloud {
             clis,
             program,
             pending: Mutex::new(None),
-            next: std::sync::atomic::AtomicU32::new(1),
+            next: AtomicU32::new(1),
+            listing: AtomicBool::new(false),
         }
     }
 }
@@ -259,21 +272,28 @@ async fn list(
         provider,
         scope: ask.scope.filter(|s| !s.trim().is_empty()),
     };
+    if cloud.listing.swap(true, Ordering::AcqRel) {
+        return Err(CommandError::new(
+            ErrorCode::NotAllowed,
+            "an account is being listed already",
+        ));
+    }
+    let _listing = Busy(&cloud.listing);
     let listing = cloud
         .clis
         .list(&request)
         .await
         .map_err(|e| CommandError::new(ErrorCode::ConnectFailed, e))?;
-    let plan = book.cloud_plan(&listing, address).await;
-    let token = cloud
-        .next
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // The plan and the labels it shows from one reading of the hosts.
+    let inventory = book.snapshot().await;
+    let plan = tauminus_app::cloud::plan(&inventory, &listing, address);
+    let token = cloud.next.fetch_add(1, Ordering::Relaxed);
     let shown = preview(
         token,
         (cloud.program)(provider),
         &listing,
         &plan,
-        &book.snapshot().await,
+        &inventory,
     );
     *cloud
         .pending

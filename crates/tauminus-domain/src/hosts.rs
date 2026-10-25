@@ -39,7 +39,7 @@ pub const MAX_TAGS: usize = 32;
 /// unless a setting turns it off.
 pub const PROD_TAG: &str = "prod";
 const MAX_ID: usize = 64;
-const MAX_LABEL: usize = 128;
+pub const MAX_LABEL: usize = 128;
 const MAX_TAG: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -50,7 +50,7 @@ pub enum HostsError {
     Label,
     #[error("tag {0:?} must be 1 to 32 lowercase letters, digits, '-', '_' or '.'")]
     Tag(String),
-    #[error("an origin must be 1 to {MAX_ORIGIN} ASCII letters, digits or `._:/@+=,-`")]
+    #[error("an origin must be 1 to {MAX_ORIGIN} ASCII letters, digits or `._:/@+=,()-`")]
     Origin,
     #[error("at most {MAX_TAGS} tags per host")]
     TooManyTags,
@@ -132,7 +132,7 @@ macro_rules! id_type {
 id_type!(HostId, "saved host");
 
 /// Longest [`Origin`], in bytes.
-pub const MAX_ORIGIN: usize = 256;
+pub const MAX_ORIGIN: usize = 512;
 
 /// Where a host came from: `aws-ec2:<account>:<region>:<instance>`,
 /// `do:<droplet>`, and the like (ADR 0032). ASCII, no space.
@@ -143,13 +143,14 @@ impl Origin {
     /// O(n) in the length.
     ///
     /// # Errors
-    /// Empty, too long, or a character outside `[A-Za-z0-9._:/@+=,-]`.
+    /// Empty, too long, or a character outside `[A-Za-z0-9._:/@+=,()-]`:
+    /// an Azure resource group may hold parentheses.
     pub fn parse(text: &str) -> Result<Self, HostsError> {
         let valid = !text.is_empty()
             && text.len() <= MAX_ORIGIN
             && text
                 .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._:/@+=,-".contains(&b));
+                .all(|b| b.is_ascii_alphanumeric() || b"._:/@+=,()-".contains(&b));
         if valid {
             Ok(Self(text.to_owned()))
         } else {

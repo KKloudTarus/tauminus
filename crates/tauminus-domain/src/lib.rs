@@ -48,8 +48,8 @@ pub use history::{
 };
 pub use hosts::{
     Exposed, ForwardId, Group, GroupId, Hop, Host, HostId, HostsError, IdentityId, Inventory,
-    Label, MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_ORIGIN, MAX_STARTUP, MAX_TAGS, Origin,
-    PROD_TAG, Protocol, Repair, Settings, SnippetId, Tag, TriggerSetId,
+    Label, MAX_GROUP_DEPTH, MAX_GROUPS, MAX_HOSTS, MAX_LABEL, MAX_ORIGIN, MAX_STARTUP, MAX_TAGS,
+    Origin, PROD_TAG, Protocol, Repair, Settings, SnippetId, Tag, TriggerSetId,
 };
 pub use keys::{KeyKind, PublicKeyLine, PublicKeyLineError, install_script, names_another_machine};
 pub use mosh::{MOSH_SERVER_SCRIPT, MoshConnect, MoshError, MoshKey};
