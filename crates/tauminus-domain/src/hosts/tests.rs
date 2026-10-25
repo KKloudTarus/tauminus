@@ -1123,9 +1123,18 @@ fn an_origin_is_plain_ascii_of_a_bounded_length() {
         "do:12345",
         "azure:/subscriptions/x/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
         "gcp:my-project:1234567890",
+        "azure:/subscriptions/x/resourcegroups/rg(prod)/providers/microsoft.compute/virtualmachines/vm1",
     ] {
         assert_eq!(Origin::parse(good).unwrap().as_str(), good);
     }
+    // An Azure id of a 90-character group and a 64-character name fits.
+    let azure = format!(
+        "azure:/subscriptions/{}/resourcegroups/{}/providers/microsoft.compute/virtualmachines/{}",
+        "0".repeat(36),
+        "g".repeat(90),
+        "v".repeat(64)
+    );
+    assert!(Origin::parse(&azure).is_ok());
     let long = "a".repeat(MAX_ORIGIN + 1);
     for bad in ["", "a b", "x\ny", "é", "a;b", long.as_str()] {
         assert_eq!(Origin::parse(bad), Err(HostsError::Origin), "{bad}");

@@ -13,22 +13,43 @@ const MAX_NAME: usize = 128;
 /// Tags read per instance, at most.
 const MAX_TAGS: usize = 64;
 
-/// A name as it may be kept: control characters and those that change
-/// how text reads (bidi controls) out, cut to a label's length, as ADR
-/// 0029 keeps names from files.
+/// A name as it may be kept: control characters, those that change how
+/// text reads (bidi controls), and those that show nothing (zero-width,
+/// fillers, tag characters) out, so a name cannot pass for another; cut
+/// to a label's length, as ADR 0029 keeps names from files.
 pub(crate) fn clean(text: &str) -> String {
     text.chars()
-        .filter(|&c| {
-            !c.is_control()
-                && !matches!(
-                    c,
-                    '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-                )
-        })
+        .filter(|&c| !c.is_control() && !unseen(c))
         .take(MAX_NAME)
         .collect::<String>()
         .trim()
         .to_owned()
+}
+
+/// Bidi controls, and characters that draw nothing or a blank: Unicode's
+/// format characters (Cf) and the fillers that render as space.
+fn unseen(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{061C}'
+            | '\u{115F}'..='\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
+            | '\u{180B}'..='\u{180F}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{2028}'..='\u{202E}'
+            | '\u{2060}'..='\u{206F}'
+            | '\u{2800}'
+            | '\u{3164}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{FEFF}'
+            | '\u{FFA0}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0000}'..='\u{E0FFF}'
+    )
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -177,11 +198,16 @@ fn lightsail_instance(instance: &Value, account: &str, region: &str) -> Option<I
     })
 }
 
-/// `doctl account get`: the account's uuid. Some versions print a list
-/// of one.
+/// `doctl account get`: the team's uuid, as droplets belong to the team
+/// a context is signed in to; the user's own where no team is named.
+/// Some versions print a list of one.
 pub(crate) fn do_account(json: &Value) -> Option<String> {
     let account = json.as_array().and_then(|a| a.first()).unwrap_or(json);
-    text(account, "uuid").map(str::to_owned)
+    account
+        .get("team")
+        .and_then(|team| text(team, "uuid"))
+        .or_else(|| text(account, "uuid"))
+        .map(str::to_owned)
 }
 
 /// `doctl compute droplet list` of `account`.
@@ -223,9 +249,10 @@ fn droplet_instance(droplet: &Value, account: &str) -> Option<Instance> {
     })
 }
 
-/// `az account show`: the subscription id.
+/// `az account show`: the subscription id, lowercase as resource ids are
+/// compared.
 pub(crate) fn azure_subscription(json: &Value) -> Option<String> {
-    text(json, "id").map(str::to_owned)
+    text(json, "id").map(str::to_ascii_lowercase)
 }
 
 /// `az vm list --show-details`.
@@ -236,7 +263,9 @@ pub(crate) fn azure(json: &Value, out: &mut Read) {
 }
 
 fn azure_instance(vm: &Value) -> Option<Instance> {
-    let id = text(vm, "id")?;
+    // Azure matches resource ids ignoring case, and does not always give
+    // one the same case twice.
+    let id = text(vm, "id")?.to_ascii_lowercase();
     // Several addresses come as one string, comma-separated.
     let first = |key: &str| {
         text(vm, key)

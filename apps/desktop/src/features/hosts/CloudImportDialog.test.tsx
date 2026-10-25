@@ -46,4 +46,15 @@ describe("CloudImportDialog", () => {
     await expect.element(screen.getByText(/Unable to authenticate you/)).toBeVisible();
     await expect.element(screen.getByRole("button", { name: "Import" })).not.toBeInTheDocument();
   });
+
+  it("drops a preview once what is asked changes", async () => {
+    const store = new HostsStore(fakeHosts());
+    await store.load();
+    const screen = await render(<CloudImportDialog store={store} onClose={() => {}} />);
+    await screen.getByRole("button", { name: "List" }).click();
+    await expect.element(screen.getByText("web-1 203.0.113.7 (nyc3)")).toBeVisible();
+    await screen.getByRole("textbox").fill("staging");
+    await expect.element(screen.getByRole("button", { name: "Import" })).not.toBeInTheDocument();
+    await expect.element(screen.getByText("web-1 203.0.113.7 (nyc3)")).not.toBeInTheDocument();
+  });
 });

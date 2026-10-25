@@ -107,11 +107,16 @@ fn droplets_come_with_root_and_their_public_address() {
         Some("b6fc48a1-0000")
     );
     assert_eq!(do_account(&json!([{"uuid": "x"}])).as_deref(), Some("x"));
+    // A context signed in to a team lists the team's droplets.
+    assert_eq!(
+        do_account(&json!({"uuid": "me", "team": {"uuid": "team-b", "name": "B"}})).as_deref(),
+        Some("team-b")
+    );
 }
 
 #[test]
 fn azure_vms_come_with_their_first_addresses_and_admin() {
-    let id = "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1";
+    let id = "/subscriptions/00000000-1111-2222-3333-444444444444/resourceGroups/RG/providers/Microsoft.Compute/virtualMachines/vm1";
     let json = json!([{
         "id": id,
         "name": "vm1",
@@ -124,7 +129,11 @@ fn azure_vms_come_with_their_first_addresses_and_admin() {
     let mut read = Read::default();
     azure(&json, &mut read);
     let vm = &read.instances[0];
-    assert_eq!(vm.origin.as_str(), format!("azure:{id}"));
+    // Lowercase: Azure gives the same id in either case.
+    assert_eq!(
+        vm.origin.as_str(),
+        format!("azure:{}", id.to_ascii_lowercase())
+    );
     assert_eq!(vm.public.as_deref(), Some("20.1.2.3"));
     assert_eq!(vm.user.as_deref(), Some("azureuser"));
     assert_eq!(vm.tags, ["env.dev"]);
@@ -161,5 +170,16 @@ fn gcp_instances_come_with_their_region_labels_and_network_tags() {
 #[test]
 fn a_name_is_kept_as_a_label_may_hold_it() {
     assert_eq!(clean("  a\u{2066}b\nc  "), "abc");
+    for unseen in [
+        '\u{200B}',
+        '\u{FEFF}',
+        '\u{2060}',
+        '\u{3164}',
+        '\u{E0041}',
+        '\u{2028}',
+        '\u{00AD}',
+    ] {
+        assert_eq!(clean(&format!("prod-db{unseen}")), "prod-db", "{unseen:?}");
+    }
     assert_eq!(clean(&"x".repeat(300)).len(), 128);
 }

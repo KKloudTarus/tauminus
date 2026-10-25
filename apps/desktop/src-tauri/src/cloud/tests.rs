@@ -25,6 +25,8 @@ impl CloudInventory for One {
                 provider: "DigitalOcean".into(),
                 account: "b6fc48a1".into(),
                 whole: vec!["do:b6fc48a1".into()],
+                unreadable: 0,
+                failed: Vec::new(),
                 instances: vec![Instance {
                     origin: Origin::parse("do:b6fc48a1:7").unwrap(),
                     name: "web".into(),
@@ -102,4 +104,41 @@ async fn a_failing_cli_is_told_with_its_words() {
         error.message.contains("Unable to authenticate"),
         "{error:?}"
     );
+}
+
+/// A provider that answers when told to.
+struct Slow(Arc<tokio::sync::Notify>);
+
+impl CloudInventory for Slow {
+    fn list<'a>(&'a self, request: &'a CloudRequest) -> BoxFuture<'a, Result<Listing, String>> {
+        Box::pin(async move {
+            self.0.notified().await;
+            One.list(request).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_second_listing_is_refused_until_the_first_ends() {
+    let answer = Arc::new(tokio::sync::Notify::new());
+    let cloud = Cloud::with(
+        Box::new(Slow(Arc::clone(&answer))),
+        Box::new(|_| String::new()),
+    );
+    let book = book().await;
+    let first = list(&cloud, &book, ask(None));
+    tokio::pin!(first);
+    // Started, and waiting on the provider.
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), first.as_mut())
+            .await
+            .is_err()
+    );
+    let second = list(&cloud, &book, ask(None)).await.unwrap_err();
+    assert!(second.message.contains("already"), "{second:?}");
+    answer.notify_one();
+    assert!(first.await.is_ok());
+    // Ended: another may start.
+    answer.notify_one();
+    assert!(list(&cloud, &book, ask(None)).await.is_ok());
 }

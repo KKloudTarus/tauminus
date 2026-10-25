@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { CloudAsk, CloudPreview } from "@/ipc/index.ts";
 
@@ -32,21 +32,35 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [preview, setPreview] = useState<CloudPreview | undefined>();
+  // The listing asked last: an answer to an earlier one is dropped.
+  const asked = useRef(0);
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
   }, []);
   const chosen = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[0];
 
+  /** Any change to what is asked drops the preview of what was. */
+  const changed = () => {
+    asked.current += 1;
+    setPreview(undefined);
+  };
+
   const list = (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
+    const ask = (asked.current += 1);
     setBusy(true);
     setError(undefined);
     setPreview(undefined);
     store
       .cloudPreview({ provider, scope: scope.trim() || null, address })
-      .then(setPreview)
-      .catch((failure: unknown) => setError(messageOf(failure)))
+      .then((shown) => {
+        if (ask === asked.current) setPreview(shown);
+      })
+      .catch((failure: unknown) => {
+        if (ask === asked.current) setError(messageOf(failure));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -63,6 +77,15 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
   const changes = preview
     ? preview.counts.add + preview.counts.moved + preview.counts.back + preview.counts.gone
     : 0;
+  const lists = useMemo(
+    () =>
+      preview && {
+        add: preview.add.map((p) => `${p.label} ${p.address} (${p.region})`),
+        moved: preview.moved.map((m) => `${m.label}: ${m.from} → ${m.to}`),
+        skipped: preview.skipped.map((s) => `${s.name}: ${s.reason}`),
+      },
+    [preview],
+  );
 
   return (
     <dialog
@@ -83,10 +106,11 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
           Provider
           <select
             value={provider}
+            disabled={busy}
             onChange={(e) => {
               const picked = PROVIDERS.find((p) => p.value === e.target.value);
               if (picked) setProvider(picked.value);
-              setPreview(undefined);
+              changed();
             }}
             className="field mt-1 w-full"
           >
@@ -101,7 +125,11 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
           {chosen?.scope ?? "Scope"} (blank for the CLI's own default)
           <input
             value={scope}
-            onChange={(e) => setScope(e.target.value)}
+            disabled={busy}
+            onChange={(e) => {
+              setScope(e.target.value);
+              changed();
+            }}
             spellCheck={false}
             className="field mt-1 w-full"
           />
@@ -114,9 +142,10 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
                 type="radio"
                 name="address"
                 checked={address === choice}
+                disabled={busy}
                 onChange={() => {
                   setAddress(choice);
-                  setPreview(undefined);
+                  changed();
                 }}
               />
               {choice === "public" ? "Public" : "Private (through a VPN or jump host)"}
@@ -128,19 +157,19 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
             {error}
           </p>
         )}
-        {preview && (
+        {preview && lists && (
           <section aria-label="What the import would do" className="space-y-2 text-sm">
             <p className="text-xs opacity-70">
               Ran {preview.program || chosen?.cli} for {preview.account}.
             </p>
             <Listed
               title={`Add ${preview.counts.add}`}
-              items={preview.add.map((p) => `${p.label} ${p.address} (${p.region})`)}
+              items={lists.add}
               more={preview.counts.add - preview.add.length}
             />
             <Listed
               title={`Address moved ${preview.counts.moved}`}
-              items={preview.moved.map((m) => `${m.label}: ${m.from} → ${m.to}`)}
+              items={lists.moved}
               more={preview.counts.moved - preview.moved.length}
             />
             <Listed
@@ -155,7 +184,7 @@ export function CloudImportDialog({ store, onClose }: { store: HostsStore; onClo
             />
             <Listed
               title={`Skipped ${preview.counts.skipped}`}
-              items={preview.skipped.map((s) => `${s.name}: ${s.reason}`)}
+              items={lists.skipped}
               more={preview.counts.skipped - preview.skipped.length}
             />
           </section>
@@ -189,8 +218,9 @@ function Listed({ title, items, more }: { title: string; items: string[]; more: 
     <details open={items.length <= 10}>
       <summary>{title}</summary>
       <ul className="ml-4 list-disc font-mono text-xs">
-        {items.map((item) => (
-          <li key={item}>{item}</li>
+        {items.map((item, at) => (
+          // oxlint-disable-next-line react/no-array-index-key -- names repeat; a preview never reorders
+          <li key={at}>{item}</li>
         ))}
         {more > 0 && <li>and {more} more</li>}
       </ul>
