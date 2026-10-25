@@ -140,8 +140,13 @@ while fewer than 128 KiB wait, with epochs so a stop drops what has not
 left. A line's last part, which holds its line end, waits until the
 queue is empty, and goes only if the host printed nothing while the line
 went: `trz` reads a line whole and says nothing before, so output then
-is a shell echoing it. A `trz` gone mid-line thus leaves no line end,
-and the shell never runs a word cut from the middle of a line.
+is a shell echoing it; under tmux, anything but tmux's status counts.
+"Empty" means handed to SSH, not read on the host: a `trz` that dies
+within the last round trip before a line end leaves the shell the rest
+of that line, one base64 word with no `#`, which it runs as an unknown
+command before the Ctrl+C that follows. The protocol gives no sign of
+life before a line ends, so that window stays; it is one word, of the
+user's own file, and no line of the file is ever its own command.
 
 ### Stopping
 
