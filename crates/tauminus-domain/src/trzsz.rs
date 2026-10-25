@@ -40,7 +40,7 @@ pub enum Mode {
 pub struct Trigger {
     /// Where `::TRZSZ:TRANSFER:` starts.
     pub at: usize,
-    /// Just past its CR LF.
+    /// Just past its line end.
     pub end: usize,
     pub mode: Mode,
     /// The host's trzsz, `x.y.z`.
@@ -57,8 +57,8 @@ pub struct Trigger {
 const MARK: &[u8] = b"::TRZSZ:TRANSFER:";
 /// The longest trigger: the mark, a mode and its colon, a version of
 /// three five-digit parts, a colon and a 13-digit id, a colon and a
-/// five-digit port, and CR LF.
-pub const TRIGGER_KEEP: usize = MARK.len() + 2 + 17 + 1 + MAX_ID + 1 + MAX_PART + 2;
+/// five-digit port, and CR CR LF.
+pub const TRIGGER_KEEP: usize = MARK.len() + 2 + 17 + 1 + MAX_ID + 1 + MAX_PART + 3;
 const MAX_PART: usize = 5;
 /// An id is 13 digits; old Windows hosts sent `1`.
 const MAX_ID: usize = 13;
@@ -118,7 +118,13 @@ fn parse(bytes: &[u8], at: usize) -> Option<Trigger> {
         let len = digits(port, MAX_PART)?;
         rest = &port[len..];
     }
-    rest = rest.strip_prefix(b"\r\n")?;
+    // `tsz` writes CR LF; a terminal in cooked mode turns its LF into CR
+    // LF again.
+    let crs = rest.iter().take_while(|&&b| b == b'\r').count();
+    if crs > 2 {
+        return None;
+    }
+    rest = rest[crs..].strip_prefix(b"\n")?;
     let windows = id == "1" || (id.len() == 13 && id.ends_with("10"));
     if !windows && id.len() != 13 {
         return None;

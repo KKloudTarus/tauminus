@@ -22,6 +22,12 @@ fn a_whole_trigger_is_found_with_what_it_says() {
     let python = find_trigger(b"\x1b7::TRZSZ:TRANSFER:S:1.1.7:0001234567800\r\n").unwrap();
     assert_eq!((python.mode, python.windows), (Mode::Send, false));
     let windows = find_trigger(b"::TRZSZ:TRANSFER:R:1.2.0:1729812345610:0\r\n").unwrap();
+    // As a terminal in cooked mode shows it, and with no CR at all.
+    for end in [&b"\r\r\n"[..], b"\n"] {
+        let mut cooked = b"\x1b7::TRZSZ:TRANSFER:S:1.1.7:9295296220300:50103".to_vec();
+        cooked.extend_from_slice(end);
+        assert_eq!(find_trigger(&cooked).unwrap().end, cooked.len());
+    }
     assert!(windows.windows);
     let folders = find_trigger(b"::TRZSZ:TRANSFER:D:1.2.0:1729812345600:0\r\n").unwrap();
     assert_eq!(folders.mode, Mode::Folders);
@@ -36,14 +42,15 @@ fn a_trigger_cut_anywhere_or_wrong_anywhere_is_not_found() {
         &b"::TRZSZ:TRANSFER:X:1.2.0:1729812345600:1\r\n"[..],
         b"::TRZSZ:TRANSFER:R:1.2:1729812345600:1\r\n",
         b"::TRZSZ:TRANSFER:R:1.2.0:172981234560:1\r\n",
-        b"::TRZSZ:TRANSFER:R:1.2.0:1729812345600:1\n",
+        b"::TRZSZ:TRANSFER:R:1.2.0:1729812345600:1\r\r\r\n",
+        b"::TRZSZ:TRANSFER:R:1.2.0:1729812345600:1\r",
         b"::TRZSZ:TRANSFER:R:1.2.0:1729812345600:123456\r\n",
         b"echo '::TRZSZ:TRANSFER:R:1.2.0:1729812345600'",
     ] {
         assert_eq!(find_trigger(bad), None, "{}", String::from_utf8_lossy(bad));
     }
     // The longest one fits what is kept across reads.
-    let longest = b"::TRZSZ:TRANSFER:R:99999.99999.99999:1729812345600:65535\r\n";
+    let longest = b"::TRZSZ:TRANSFER:R:99999.99999.99999:1729812345600:65535\r\r\n";
     assert_eq!(longest.len(), TRIGGER_KEEP);
     assert!(find_trigger(longest).is_some());
     assert_eq!(
