@@ -75,6 +75,23 @@ test("imports another client's sessions from the menu and the palette", async ({
   );
 });
 
+test("imports a cloud account after showing what would change", async ({ page }) => {
+  await sidebar(page).getByRole("button", { name: "Import hosts" }).click();
+  await sidebar(page).getByRole("menuitem", { name: "From a cloud account…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Import from a cloud account" });
+  await dialog.getByLabel("Provider").selectOption("digitalOcean");
+  await dialog.getByRole("button", { name: "List" }).click();
+  await expect(dialog.getByText("web-1 203.0.113.7 (nyc3)")).toBeVisible();
+  await expect(sidebar(page)).toContainText("No saved hosts yet.");
+  await dialog.getByRole("button", { name: "Import" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(sidebar(page).getByRole("status")).toHaveText(
+    /^Imported 2 hosts from DigitalOcean; skipped 1: meta/,
+  );
+  const tree = sidebar(page).getByRole("list", { name: "Saved hosts" });
+  await expect(tree.getByRole("button", { name: /^web-1 root@203\.0\.113\.7/ })).toBeVisible();
+});
+
 test("connects to a saved host through its prompts", async ({ page }) => {
   await importConfig(page);
   await sidebar(page)

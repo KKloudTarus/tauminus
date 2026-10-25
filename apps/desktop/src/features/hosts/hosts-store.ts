@@ -3,6 +3,8 @@
 
 import type { GuardSource } from "@/features/terminal/command-guard.ts";
 import type {
+  CloudAsk,
+  CloudPreview,
   GroupInput,
   HostInput,
   HostView,
@@ -141,6 +143,25 @@ export class HostsStore {
     const result = await this.#client.importFrom(kind);
     if (!result) return;
     this.#setView(result.view, { notice: importNotice(result, IMPORT_SOURCES[kind] ?? kind) });
+  }
+
+  /** What importing a cloud account would do, as its CLI lists it now. */
+  cloudPreview(ask: CloudAsk): Promise<CloudPreview> {
+    return this.#client.cloudPreview(ask);
+  }
+
+  /** Imports what the preview with `token` showed. */
+  async cloudImport(token: number, from: string): Promise<void> {
+    const done = await this.#client.cloudImport(token);
+    const changes = [
+      done.moved > 0 ? `${done.moved} moved` : "",
+      done.back > 0 ? `${done.back} back` : "",
+      done.gone > 0 ? `${done.gone} gone from the account` : "",
+    ].filter(Boolean);
+    this.#setView(done.result.view, {
+      notice:
+        importNotice(done.result, from) + (changes.length > 0 ? `; ${changes.join(", ")}` : ""),
+    });
   }
 
   /** Shows `text` where import results appear, for example why a host cannot connect. */

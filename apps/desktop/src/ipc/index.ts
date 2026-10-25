@@ -35,6 +35,9 @@ export {
   type ImportKind,
   type ImportResult,
   type SettingsSpec,
+  type CloudAsk,
+  type CloudPreview,
+  type CloudResult,
   tauriHosts,
 } from "./hosts.ts";
 export {

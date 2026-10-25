@@ -6,6 +6,7 @@
 
 mod ai;
 mod clipboard;
+mod cloud;
 mod commands;
 mod drops;
 mod edit;
@@ -116,6 +117,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         serial::serial_open,
         hosts::hosts_import_ssh_config,
         import::hosts_import_from::<tauri::Wry>,
+        cloud::cloud_preview,
+        cloud::cloud_import,
         ssh::host_connect::<tauri::Wry>,
         forwards::forward_start,
         forwards::forward_stop,
@@ -217,6 +220,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         .set_transfer_host(Arc::clone(&transfers) as Arc<dyn tauminus_app::ports::TransferHost>);
     app.manage(transfers);
     app.manage(zmodem::Choosing::default());
+    app.manage(cloud::Cloud::new(tauminus_cloud::Clis::new()));
     app.manage(zmodem::ReceiveRoot(
         downloads
             .or_else(|| home.as_ref().map(|home| home.join("Downloads")))

@@ -70,6 +70,8 @@ const COMMANDS: &[&str] = &[
     "ssh_config_aliases",
     "hosts_import_ssh_config",
     "hosts_import_from",
+    "cloud_preview",
+    "cloud_import",
     "host_connect",
     "forward_start",
     "forward_stop",

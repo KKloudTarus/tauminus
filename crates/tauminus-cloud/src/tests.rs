@@ -83,7 +83,7 @@ async fn ec2_asks_every_region_with_a_fixed_command_and_no_pager() {
     assert_eq!(listing.instances.len(), 1);
     assert_eq!(listing.instances[0].name, "web");
     let log = dir.log("aws");
-    assert!(log.contains("--profile|work|--output|json|--no-cli-pager|sts|get-caller-identity|"));
+    assert!(log.contains("--profile|work|--output|json|sts|get-caller-identity|"));
     assert!(log.contains("ec2|describe-instances|--region|us-east-1|"));
     assert!(
         log.lines()

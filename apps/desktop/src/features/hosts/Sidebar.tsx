@@ -15,6 +15,7 @@ import type {
 
 import { type Editing, EditorDialog } from "./HostEditor.tsx";
 import { type HostsStore, messageOf } from "./hosts-store.ts";
+import { CloudImportDialog } from "./CloudImportDialog.tsx";
 import { ImportMenu } from "./ImportMenu.tsx";
 import { searchHosts } from "./search.ts";
 
@@ -81,6 +82,7 @@ export function Sidebar({
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Editing | undefined>();
+  const [cloud, setCloud] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const { groups, hosts } = state.view;
   const tree = useMemo(() => buildTree(groups, hosts), [groups, hosts]);
@@ -180,10 +182,15 @@ export function Sidebar({
         )}
         <ImportMenu
           onImport={(kind) => {
+            if (kind === "cloud") {
+              setCloud(true);
+              return;
+            }
             const run = kind === "sshConfig" ? store.importConfig() : store.importFrom(kind);
             run.catch((error: unknown) => store.notify(`Import failed: ${messageOf(error)}`));
           }}
         />
+        {cloud && <CloudImportDialog store={store} onClose={() => setCloud(false)} />}
         <button
           type="button"
           onClick={() => setEditing({ kind: "group", group: undefined })}

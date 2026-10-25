@@ -225,9 +225,11 @@ impl Clis {
     }
 
     async fn aws(&self, provider: Provider, profile: Option<&str>) -> Result<Listing, String> {
+        // `AWS_PAGER` empty turns version 2's pager off; version 1 has
+        // none, and knows no `--no-cli-pager`.
         let base: Vec<&str> = match profile {
-            Some(profile) => vec!["--profile", profile, "--output", "json", "--no-cli-pager"],
-            None => vec!["--output", "json", "--no-cli-pager"],
+            Some(profile) => vec!["--profile", profile, "--output", "json"],
+            None => vec!["--output", "json"],
         };
         let with = |args: &[&'static str]| {
             let mut all = base.clone();
