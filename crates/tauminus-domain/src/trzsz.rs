@@ -81,7 +81,11 @@ pub enum TrzszError {
 #[must_use]
 pub fn find_trigger(bytes: &[u8]) -> Option<Trigger> {
     static FINDER: LazyLock<Finder<'static>> = LazyLock::new(|| Finder::new(MARK));
-    FINDER.find_iter(bytes).find_map(|at| parse(bytes, at))
+    // One inside a tmux control-mode line was printed for a pane, never
+    // for this session to answer.
+    FINDER
+        .find_iter(bytes)
+        .find_map(|at| parse(bytes, at).filter(|trigger| !trigger.tmux_control))
 }
 
 /// The trigger whose mark starts at `at`, whole.

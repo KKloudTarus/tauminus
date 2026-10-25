@@ -31,18 +31,69 @@ pub enum Wants {
     Send,
 }
 
-/// An offer found in output: where its header starts, and what it asks.
+/// An offer found in output: where it starts, what it asks, and which
+/// protocol makes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Offer {
     pub at: usize,
     pub wants: Wants,
+    pub protocol: TransferProtocol,
 }
 
-/// Where a ZRQINIT or ZRINIT header starts in `bytes`, if one does, whole:
-/// the hex digits of its flags and CRC all there. A header cut at the end
-/// of `bytes` is not found; [`OFFER_KEEP`] bytes kept for the next read
-/// find it then. O(n).
+/// The protocol of an offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferProtocol {
+    Zmodem,
+    /// trzsz (ADR 0031): its trigger line ends at `end`.
+    Trzsz {
+        id: u64,
+        end: usize,
+        /// What the host asks that is not done: the offer is shown, not
+        /// answered.
+        refused: Option<Refused>,
+    },
+}
+
+/// A trzsz offer that is not taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// `trz -d`: folders.
+    Folders,
+    /// A Windows host's line ends.
+    Windows,
+}
+
+/// The first offer in `bytes`, whole: a Zmodem ZRQINIT or ZRINIT header
+/// with its flags and CRC, or a trzsz trigger with its line end. One cut
+/// at the end of `bytes` is not found; [`OFFER_KEEP`] bytes kept for the
+/// next read find it then. O(n): two SIMD searches.
 pub fn find_offer(bytes: &[u8]) -> Option<Offer> {
+    let zmodem = find_zmodem(bytes);
+    // A trzsz trigger past a Zmodem header is not looked for: the first
+    // one wins.
+    let upto = zmodem.map_or(bytes.len(), |offer| offer.at);
+    let trzsz = crate::trzsz::find_trigger(&bytes[..upto]).map(|trigger| Offer {
+        at: trigger.at,
+        wants: match trigger.mode {
+            crate::trzsz::Mode::Send => Wants::Receive,
+            crate::trzsz::Mode::Receive | crate::trzsz::Mode::Folders => Wants::Send,
+        },
+        protocol: TransferProtocol::Trzsz {
+            id: trigger.id.parse().unwrap_or(0),
+            end: trigger.end,
+            refused: if trigger.windows {
+                Some(Refused::Windows)
+            } else if trigger.mode == crate::trzsz::Mode::Folders {
+                Some(Refused::Folders)
+            } else {
+                None
+            },
+        },
+    });
+    trzsz.or(zmodem)
+}
+
+fn find_zmodem(bytes: &[u8]) -> Option<Offer> {
     // SIMD search, about 25 GB/s: every output chunk of a session that can
     // transfer passes here.
     static FINDER: LazyLock<Finder<'static>> = LazyLock::new(|| Finder::new(OFFER));
@@ -56,13 +107,38 @@ pub fn find_offer(bytes: &[u8]) -> Option<Offer> {
         tail[1..]
             .iter()
             .all(u8::is_ascii_hexdigit)
-            .then_some(Offer { at, wants })
+            .then_some(Offer {
+                at,
+                wants,
+                protocol: TransferProtocol::Zmodem,
+            })
     })
 }
 
-/// Bytes at the end of a read that may begin a header [`find_offer`] would
-/// find once the rest comes.
-pub const OFFER_KEEP: usize = OFFER.len() + OFFER_TAIL - 1;
+/// Bytes at the end of a read that may begin an offer [`find_offer`]
+/// would find once the rest comes: the longer of a Zmodem header and a
+/// trzsz trigger.
+pub const OFFER_KEEP: usize = if crate::trzsz::TRIGGER_KEEP > OFFER.len() + OFFER_TAIL {
+    crate::trzsz::TRIGGER_KEEP - 1
+} else {
+    OFFER.len() + OFFER_TAIL - 1
+};
+
+/// A name a host sent, made safe to save: its last path component, a
+/// leading `.` made `_`, then [`local_name`], and no character that reads
+/// as nothing. `Err` with the name as it may be shown.
+pub fn incoming_name(raw: &str, os: LocalOs) -> Result<String, String> {
+    let last = raw.rsplit(['/', '\\']).next().unwrap_or(raw);
+    let last = last
+        .strip_prefix('.')
+        .map_or(last.to_owned(), |rest| format!("_{rest}"));
+    // Characters that read as nothing could hide what a name ends with.
+    local_name(&last, os)
+        .ok()
+        .filter(|name| !name.chars().any(crate::history::invisible))
+        .map(str::to_owned)
+        .ok_or_else(|| crate::history::shown_safely(raw, MAX_SHOWN_NAME))
+}
 
 /// A step of a receive the caller acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,33 +345,25 @@ impl Receive {
             }
             Action::Event(Event::FileStarted(info)) => {
                 let raw = String::from_utf8_lossy(info.name).into_owned();
-                // A path is reduced to its last component, then checked.
-                let last = raw.rsplit(['/', '\\']).next().unwrap_or(&raw);
-                let last = last
-                    .strip_prefix('.')
-                    .map_or(last.to_owned(), |rest| format!("_{rest}"));
-                // Characters that read as nothing could hide what a name
-                // ends with.
-                let name = local_name(&last, self.os)
-                    .ok()
-                    .filter(|name| !name.chars().any(crate::history::invisible));
-                if let Some(name) = name {
-                    // An empty size field reads as 0: no size given.
-                    self.expected = info
-                        .size
-                        .map(|p| u64::from(p.get()))
-                        .filter(|&size| size > 0);
-                    self.got = 0;
-                    out.received.push(Received::File {
-                        name: name.to_owned(),
-                        size: self.expected,
-                    });
-                    let _ = self.receiver.accept_file_at(0);
-                } else {
+                match incoming_name(&raw, self.os) {
+                    Ok(name) => {
+                        // An empty size field reads as 0: no size given.
+                        self.expected = info
+                            .size
+                            .map(|p| u64::from(p.get()))
+                            .filter(|&size| size > 0);
+                        self.got = 0;
+                        out.received.push(Received::File {
+                            name,
+                            size: self.expected,
+                        });
+                        let _ = self.receiver.accept_file_at(0);
+                    }
                     // Shown to the user: what hides or reorders text out.
-                    let name = crate::history::shown_safely(&raw, MAX_SHOWN_NAME);
-                    out.received.push(Received::Skipped { name });
-                    let _ = self.receiver.skip_file();
+                    Err(name) => {
+                        out.received.push(Received::Skipped { name });
+                        let _ = self.receiver.skip_file();
+                    }
                 }
             }
             Action::Event(Event::FileCompleted) => out.received.push(Received::FileDone),

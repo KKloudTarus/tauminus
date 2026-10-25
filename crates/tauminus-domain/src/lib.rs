@@ -89,6 +89,7 @@ pub use trigger::{
     TriggerError, TriggerLibrary, TriggerMatcher, TriggerRule, TriggerSet,
 };
 pub use zmodem::{
-    MAX_SEND_NAME, Need, OFFER_KEEP, Offer, Output as ZmodemOutput, Receive, Received, Sent,
-    Transmit, TransmitError, TransmitOutput, Wants, find_offer,
+    MAX_SEND_NAME, Need, OFFER_KEEP, Offer, Output as ZmodemOutput, Receive, Received, Refused,
+    Sent, TransferProtocol, Transmit, TransmitError, TransmitOutput, Wants, find_offer,
+    incoming_name,
 };
