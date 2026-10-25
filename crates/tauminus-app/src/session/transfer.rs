@@ -720,7 +720,9 @@ impl Transfer {
                     Need::Write => {}
                     // A line's end goes once the queue is empty; the
                     // writer wakes the pump when it is.
-                    Need::Hold if self.wire.pending() == 0 => sending.engine.release(),
+                    Need::Hold if self.wire.pending() == 0 && out.wire.is_empty() => {
+                        sending.engine.release();
+                    }
                     Need::Hold | Need::Wait | Need::Ended => break,
                 }
             }

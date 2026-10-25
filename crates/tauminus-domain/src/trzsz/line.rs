@@ -143,6 +143,12 @@ fn read_frame(mut line: Vec<u8>, expect: &str, junk: bool) -> Result<Line, Trzsz
     })
 }
 
+/// Whether `bytes` holds nothing but tmux's status sequences, as tmux
+/// draws them while `trz` reads. O(n).
+pub(super) fn status_only(bytes: &[u8]) -> bool {
+    without_status(bytes).is_empty()
+}
+
 /// `line` without tmux's `ESC P = ... ESC \` sequences. O(n).
 fn without_status(line: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(line.len());
