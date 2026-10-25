@@ -29,7 +29,7 @@ describe("SyncStore", () => {
     );
     expect(store.getSnapshot().status?.setup).toEqual({
       kind: "on",
-      git: true,
+      through: "git",
       shown: "https://example.com/s.git",
     });
     expect(JSON.stringify(store.getSnapshot())).not.toContain("tok");

@@ -12,7 +12,7 @@ import {
 } from "react";
 
 import { messageOf } from "@/features/hosts/hosts-store.ts";
-import type { ReportView, ReviewView, TargetKind } from "@/ipc/index.ts";
+import type { ReportView, ReviewView, S3Input, TargetKind } from "@/ipc/index.ts";
 
 import type { SyncStore } from "./sync-store.ts";
 
@@ -68,7 +68,7 @@ export function SyncDialog({ store, onClose, onOpenVault, onReviewed }: SyncDial
         <Syncing
           store={store}
           shown={setup.shown}
-          git={setup.git}
+          through={setup.through}
           running={status.running}
           last={status.last}
         />
@@ -93,6 +93,7 @@ export function SyncDialog({ store, onClose, onOpenVault, onReviewed }: SyncDial
 function SetUp({ store }: { store: SyncStore }) {
   const [kind, setKind] = useState<TargetKind>("folder");
   const [address, setAddress] = useState("");
+  const [bucket, setBucket] = useState<S3Input>(NO_BUCKET);
   const [passphrase, setPassphrase] = useState("");
   const [confirm, setConfirm] = useState("");
   const [mode, setMode] = useState<"create" | "join">("create");
@@ -111,11 +112,12 @@ function SetUp({ store }: { store: SyncStore }) {
     }
     setBusy(true);
     setError(undefined);
-    const target = { kind, address };
+    const target = kind === "s3" ? { kind, s3: bucket } : { kind, address };
     (mode === "create" ? store.create(target, passphrase) : store.join(target, passphrase))
       .then(() => {
         setPassphrase("");
         setConfirm("");
+        setBucket(NO_BUCKET);
       })
       .catch((failure: unknown) => setError(messageOf(failure)))
       .finally(() => setBusy(false));
@@ -124,8 +126,8 @@ function SetUp({ store }: { store: SyncStore }) {
     <form onSubmit={submit}>
       <p className="mb-3 opacity-80">
         Sync keeps your hosts, groups and snippets the same on each device. Everything is encrypted
-        on this device with a key only your passphrase opens; the folder or remote sees ciphertext
-        only. Passwords and keys in the vault never sync.
+        on this device with a key only your passphrase opens; the folder, remote or bucket sees
+        ciphertext only. Passwords and keys in the vault never sync.
       </p>
       <fieldset className="mb-3 flex gap-4">
         <legend className="mb-1.5 text-[13px] font-medium text-muted">Sync through</legend>
@@ -133,6 +135,7 @@ function SetUp({ store }: { store: SyncStore }) {
           [
             ["folder", "A shared folder"],
             ["git", "A git remote"],
+            ["s3", "An S3 bucket"],
           ] as const
         ).map(([value, label]) => (
           <label key={value} className="flex items-center gap-1.5">
@@ -146,36 +149,42 @@ function SetUp({ store }: { store: SyncStore }) {
           </label>
         ))}
       </fieldset>
-      <Field label={kind === "folder" ? "Folder (Syncthing, Dropbox, a network share)" : "Remote"}>
-        <span className="flex gap-2">
-          <input
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder={
-              kind === "folder" ? "/home/me/Sync/tauminus" : "git@github.com:me/sync.git"
-            }
-            spellCheck={false}
-            autoComplete="off"
-            className={FIELD}
-          />
-          {kind === "folder" && (
-            <button
-              type="button"
-              className="btn"
-              onClick={() => {
-                store
-                  .chooseFolder()
-                  .then((path) => {
-                    if (path !== null) setAddress(path);
-                  })
-                  .catch((failure: unknown) => setError(messageOf(failure)));
-              }}
-            >
-              Choose…
-            </button>
-          )}
-        </span>
-      </Field>
+      {kind === "s3" ? (
+        <BucketFields bucket={bucket} onChange={setBucket} />
+      ) : (
+        <Field
+          label={kind === "folder" ? "Folder (Syncthing, Dropbox, a network share)" : "Remote"}
+        >
+          <span className="flex gap-2">
+            <input
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder={
+                kind === "folder" ? "/home/me/Sync/tauminus" : "git@github.com:me/sync.git"
+              }
+              spellCheck={false}
+              autoComplete="off"
+              className={FIELD}
+            />
+            {kind === "folder" && (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  store
+                    .chooseFolder()
+                    .then((path) => {
+                      if (path !== null) setAddress(path);
+                    })
+                    .catch((failure: unknown) => setError(messageOf(failure)));
+                }}
+              >
+                Choose…
+              </button>
+            )}
+          </span>
+        </Field>
+      )}
       <fieldset className="mb-3 flex gap-4">
         <legend className="mb-1.5 text-[13px] font-medium text-muted">This device</legend>
         <label className="flex items-center gap-1.5">
@@ -226,23 +235,86 @@ function SetUp({ store }: { store: SyncStore }) {
           {error}
         </p>
       )}
-      <button type="submit" disabled={busy || address.trim() === ""} className="btn btn-primary">
+      <button
+        type="submit"
+        disabled={busy || (kind === "s3" ? !bucketReady(bucket) : address.trim() === "")}
+        className="btn btn-primary"
+      >
         {busy ? "Working…" : mode === "create" ? "Start syncing" : "Join"}
       </button>
     </form>
   );
 }
 
+const THROUGH: Record<TargetKind, string> = {
+  folder: "the folder",
+  git: "the git remote",
+  s3: "the S3 bucket",
+};
+
+const NO_BUCKET: S3Input = {
+  endpoint: "",
+  region: "",
+  bucket: "",
+  prefix: "",
+  keyId: "",
+  secret: "",
+};
+
+function bucketReady(bucket: S3Input): boolean {
+  return [bucket.endpoint, bucket.region, bucket.bucket, bucket.keyId, bucket.secret].every(
+    (value) => value.trim() !== "",
+  );
+}
+
+/** An S3-compatible bucket: AWS, Cloudflare R2, Backblaze B2, MinIO. The
+ * secret goes to the vault and never comes back. */
+function BucketFields({
+  bucket,
+  onChange,
+}: {
+  bucket: S3Input;
+  onChange: (bucket: S3Input) => void;
+}) {
+  const field = (name: keyof S3Input, label: string, placeholder: string, secret = false) => (
+    <Field label={label}>
+      <input
+        type={secret ? "password" : "text"}
+        value={bucket[name] ?? ""}
+        onChange={(e) => onChange({ ...bucket, [name]: e.target.value })}
+        placeholder={placeholder}
+        spellCheck={false}
+        autoComplete={secret ? "new-password" : "off"}
+        className={FIELD}
+      />
+    </Field>
+  );
+  return (
+    <>
+      {field("endpoint", "Service address", "https://s3.us-east-1.amazonaws.com")}
+      <div className="grid grid-cols-2 gap-x-3">
+        {field("region", "Region", "us-east-1, or auto for R2")}
+        {field("bucket", "Bucket", "my-tauminus-sync")}
+      </div>
+      {field("prefix", "Folder in the bucket (optional)", "tauminus")}
+      <div className="grid grid-cols-2 gap-x-3">
+        {field("keyId", "Access key id", "AKIA…")}
+        {field("secret", "Secret access key", "", true)}
+      </div>
+    </>
+  );
+}
+
 function Syncing({
   store,
   shown,
-  git,
+  through,
   running,
   last,
 }: {
   store: SyncStore;
   shown: string;
-  git: boolean;
+  through: TargetKind;
   running: boolean;
   last: ReportView | null;
 }) {
@@ -259,7 +331,7 @@ function Syncing({
   return (
     <div>
       <p className="mb-1">
-        Syncing through {git ? "the git remote" : "the folder"}{" "}
+        Syncing through {THROUGH[through]}{" "}
         <code className="font-mono text-xs break-all">{shown}</code>
       </p>
       <LastRun last={last} />

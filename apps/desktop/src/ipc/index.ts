@@ -110,6 +110,7 @@ export {
   type ReportView,
   type ReviewView,
   type ReviewsView,
+  type S3Input,
   type SeenInput,
   type SetupSpec,
   type SyncClient,

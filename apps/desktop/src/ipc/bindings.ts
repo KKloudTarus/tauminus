@@ -961,6 +961,19 @@ export type RuleSpec = {
 	action: ActionSpec,
 };
 
+/**
+ *  A bucket as the user typed it. The secret is wiped when this goes,
+ *  read or not.
+ */
+export type S3Input = {
+	endpoint: string,
+	region: string,
+	bucket: string,
+	prefix?: string,
+	keyId: string,
+	secret: string,
+};
+
 /**  A host as the user saw it. */
 export type SeenInput = {
 	host: string,
@@ -1062,7 +1075,7 @@ export type SettingsSpec = {
 	triggers?: string[] | null,
 };
 
-export type SetupSpec = { kind: "locked" } | { kind: "off" } | { kind: "on"; git: boolean; shown: string };
+export type SetupSpec = { kind: "locked" } | { kind: "off" } | { kind: "on"; through: TargetKind; shown: string };
 
 export type SftpHandle = {
 	id: number,
@@ -1144,13 +1157,17 @@ export type TabWindowView = {
 	name: string,
 };
 
-/**  Where to sync, as the user typed or chose it. */
+/**
+ *  Where to sync, as the user typed or chose it: `address` for a folder
+ *  or a remote, `s3` for a bucket.
+ */
 export type TargetInput = {
 	kind: TargetKind,
-	address: string,
+	address?: string,
+	s3?: S3Input | null,
 };
 
-export type TargetKind = "folder" | "git";
+export type TargetKind = "folder" | "git" | "s3";
 
 export type TmuxOpenedView = {
 	control: number,

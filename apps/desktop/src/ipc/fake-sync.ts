@@ -15,11 +15,14 @@ function fail(code: SessionCommandError["code"], message: string): never {
   throw new SessionCommandError({ code, message });
 }
 
-/** A remote without what stands before `@` in its authority. */
+/** A remote without what stands before `@` in its authority; a bucket
+ * by its name and service. */
 function shown(target: TargetInput): string {
-  if (target.kind === "folder") return target.address;
-  const [scheme, rest] = target.address.split("://", 2);
-  if (rest === undefined) return target.address;
+  if (target.kind === "s3") return `${target.s3?.bucket} at ${target.s3?.endpoint}`;
+  const address = target.address ?? "";
+  if (target.kind === "folder") return address;
+  const [scheme, rest] = address.split("://", 2);
+  if (rest === undefined) return address;
   const slash = rest.indexOf("/");
   const authority = slash < 0 ? rest : rest.slice(0, slash);
   const path = slash < 0 ? "" : rest.slice(slash);
@@ -56,7 +59,8 @@ export function fakeSync(): SyncClient {
     open();
     if (setup.kind === "on")
       fail("invalid_argument", "this device already syncs; stop syncing first");
-    if (target.address.trim() === "") fail("connect_failed", "the sync target: no address");
+    const where = target.kind === "s3" ? (target.s3?.endpoint ?? "") : (target.address ?? "");
+    if (where.trim() === "") fail("connect_failed", "the sync target: no address");
   };
   return {
     status: async () => status(),
@@ -67,14 +71,14 @@ export function fakeSync(): SyncClient {
       if (Array.from(passphrase).length < 12) {
         fail("wrong_password", "the sync passphrase needs at least 12 characters");
       }
-      setup = { kind: "on", git: target.kind === "git", shown: shown(target) };
+      setup = { kind: "on", through: target.kind, shown: shown(target) };
       last = null;
       return status();
     },
     async join(target, passphrase) {
       start(target);
       if (passphrase !== THEIRS) fail("wrong_password", "the passphrase does not open this sync");
-      setup = { kind: "on", git: target.kind === "git", shown: shown(target) };
+      setup = { kind: "on", through: target.kind, shown: shown(target) };
       last = null;
       pending = [STAGING];
       return status();

@@ -28,8 +28,10 @@ fn a_target_comes_in_trimmed_and_a_remote_as_a_secret() {
     let git = TargetInput {
         kind: TargetKind::Git,
         address: " https://t@example.com/s.git \n".into(),
+        s3: None,
     }
-    .into_target();
+    .into_target()
+    .unwrap();
     assert_eq!(
         git,
         SyncTarget::Git(Secret::new("https://t@example.com/s.git".into()))
@@ -37,9 +39,39 @@ fn a_target_comes_in_trimmed_and_a_remote_as_a_secret() {
     let folder = TargetInput {
         kind: TargetKind::Folder,
         address: "/srv/sync".into(),
+        s3: None,
+    }
+    .into_target()
+    .unwrap();
+    assert_eq!(folder, SyncTarget::Folder("/srv/sync".into()));
+    let bucket = S3Input {
+        endpoint: " https://s3.example.com ".into(),
+        region: "auto".into(),
+        bucket: "team".into(),
+        prefix: "sync".into(),
+        key_id: "AKID".into(),
+        secret: " s3-secret\n".into(),
+    };
+    assert!(!format!("{bucket:?}").contains("s3-secret"));
+    let s3 = TargetInput {
+        kind: TargetKind::S3,
+        address: String::new(),
+        s3: Some(bucket),
+    }
+    .into_target()
+    .unwrap();
+    let SyncTarget::S3(s3) = s3 else {
+        panic!("not a bucket");
+    };
+    assert_eq!(s3.endpoint, "https://s3.example.com");
+    assert_eq!(s3.secret.as_str(), "s3-secret");
+    let missing = TargetInput {
+        kind: TargetKind::S3,
+        address: String::new(),
+        s3: None,
     }
     .into_target();
-    assert_eq!(folder, SyncTarget::Folder("/srv/sync".into()));
+    assert_eq!(missing.unwrap_err().code, ErrorCode::InvalidArgument);
 }
 
 #[test]

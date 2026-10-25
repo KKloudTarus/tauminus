@@ -13,7 +13,7 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::{Secret, SyncError, SyncTarget};
-use tauminus_app::sync::{Report, Setup, Status};
+use tauminus_app::sync::{Report, Setup, Status, Through};
 use tauminus_app::trust::{Fingerprint, Review, Trust, TrustError};
 use tauminus_app::{SnippetBook, SyncRunError, SyncService, SyncServiceError};
 use tauminus_domain::{HostId, Inventory, Library};
@@ -185,7 +185,7 @@ impl SyncState {
 pub(crate) enum SetupSpec {
     Locked,
     Off,
-    On { git: bool, shown: String },
+    On { through: TargetKind, shown: String },
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -264,7 +264,14 @@ impl From<Status> for SyncStatusView {
             setup: match status.setup {
                 Setup::Locked => SetupSpec::Locked,
                 Setup::Off => SetupSpec::Off,
-                Setup::On { git, shown } => SetupSpec::On { git, shown },
+                Setup::On { through, shown } => SetupSpec::On {
+                    through: match through {
+                        Through::Folder => TargetKind::Folder,
+                        Through::Git => TargetKind::Git,
+                        Through::S3 => TargetKind::S3,
+                    },
+                    shown,
+                },
             },
             running: status.running,
             last: status.last.map(ReportView::from),
@@ -272,30 +279,84 @@ impl From<Status> for SyncStatusView {
     }
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TargetKind {
     Folder,
     Git,
+    S3,
 }
 
-/// Where to sync, as the user typed or chose it.
-#[derive(Debug, Clone, Deserialize, Type)]
+/// A bucket as the user typed it. The secret is wiped when this goes,
+/// read or not.
+#[derive(Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct S3Input {
+    pub(crate) endpoint: String,
+    pub(crate) region: String,
+    pub(crate) bucket: String,
+    #[serde(default)]
+    pub(crate) prefix: String,
+    pub(crate) key_id: String,
+    pub(crate) secret: String,
+}
+
+impl Drop for S3Input {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
+impl std::fmt::Debug for S3Input {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Input")
+            .field("endpoint", &self.endpoint)
+            .field("bucket", &self.bucket)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where to sync, as the user typed or chose it: `address` for a folder
+/// or a remote, `s3` for a bucket.
+#[derive(Debug, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TargetInput {
     pub(crate) kind: TargetKind,
+    #[serde(default)]
     pub(crate) address: String,
+    #[serde(default)]
+    pub(crate) s3: Option<S3Input>,
 }
 
 impl TargetInput {
-    /// Wipes the address as it came: a remote's may hold a token.
-    fn into_target(mut self) -> SyncTarget {
+    /// Wipes what came: a remote's address may hold a token, and a
+    /// bucket's secret is one.
+    fn into_target(mut self) -> Result<SyncTarget, CommandError> {
         let address = self.address.trim().to_owned();
         self.address.zeroize();
-        match self.kind {
-            TargetKind::Folder => SyncTarget::Folder(address),
-            TargetKind::Git => SyncTarget::Git(Secret::new(address)),
-        }
+        let s3 = self.s3.take().map(|s3| {
+            // `s3` wipes its own copy when it drops.
+            let secret = Secret::new(s3.secret.trim().to_owned());
+            tauminus_app::ports::S3Target {
+                endpoint: s3.endpoint.trim().to_owned(),
+                region: s3.region.trim().to_owned(),
+                bucket: s3.bucket.trim().to_owned(),
+                prefix: s3.prefix.trim().to_owned(),
+                key_id: s3.key_id.trim().to_owned(),
+                secret,
+            }
+        });
+        Ok(match (self.kind, s3) {
+            (TargetKind::Folder, _) => SyncTarget::Folder(address),
+            (TargetKind::Git, _) => SyncTarget::Git(Secret::new(address)),
+            (TargetKind::S3, Some(s3)) => SyncTarget::S3(s3),
+            (TargetKind::S3, None) => {
+                return Err(CommandError::new(
+                    ErrorCode::InvalidArgument,
+                    "a bucket needs its address, bucket and key",
+                ));
+            }
+        })
     }
 }
 
@@ -404,7 +465,7 @@ pub(crate) async fn sync_create(
 ) -> Result<SyncStatusView, CommandError> {
     let secret = self::passphrase(passphrase);
     let service = sync.service()?;
-    service.create(target.into_target(), secret).await?;
+    service.create(target.into_target()?, secret).await?;
     sync.kick.notify_one();
     Ok(service.status().await.into())
 }
@@ -419,7 +480,7 @@ pub(crate) async fn sync_join(
 ) -> Result<SyncStatusView, CommandError> {
     let secret = self::passphrase(passphrase);
     let service = sync.service()?;
-    service.join(target.into_target(), secret).await?;
+    service.join(target.into_target()?, secret).await?;
     sync.kick.notify_one();
     Ok(service.status().await.into())
 }

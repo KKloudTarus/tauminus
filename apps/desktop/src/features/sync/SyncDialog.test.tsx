@@ -75,6 +75,27 @@ describe("SyncDialog", () => {
     await expect.element(screen.getByRole("button", { name: "Start syncing" })).toBeVisible();
   });
 
+  it("starts a sync on a bucket and shows it without its key", async () => {
+    await unlocked();
+    const screen = await render(
+      <SyncDialog store={new SyncStore(fakeSync())} onClose={() => {}} onOpenVault={() => {}} />,
+    );
+    await screen.getByRole("radio", { name: "An S3 bucket" }).click();
+    const start = screen.getByRole("button", { name: "Start syncing" });
+    await expect.element(start).toBeDisabled();
+    await screen.getByLabelText("Service address").fill("https://r2.example.com");
+    await screen.getByLabelText("Region").fill("auto");
+    await screen.getByLabelText("Bucket", { exact: true }).fill("team");
+    await screen.getByLabelText("Access key id").fill("AKID");
+    await screen.getByLabelText("Secret access key").fill("bucket-secret-1");
+    await screen.getByLabelText("Sync passphrase").fill("a long sync passphrase");
+    await screen.getByLabelText("Repeat it").fill("a long sync passphrase");
+    await start.click();
+    await expect.element(screen.getByText("team at https://r2.example.com")).toBeVisible();
+    await expect.element(screen.getByText(/the S3 bucket/)).toBeVisible();
+    expect(document.body.innerHTML).not.toContain("bucket-secret-1");
+  });
+
   it("sends a locked vault to the vault", async () => {
     await unlocked();
     await sharedFakeVault().lock();
