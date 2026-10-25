@@ -348,6 +348,31 @@ export const commands = {
 	 *  Returns how many went.
 	 */
 	historyClear: (host: string | null) => typedError<number, CommandError>(__TAURI_INVOKE("history_clear", { host })),
+	syncStatus: () => typedError<SyncStatusView, CommandError>(__TAURI_INVOKE("sync_status")),
+	/**  Where each scheduled run's status goes; called once. */
+	syncListen: (onStatus: Channel<SyncStatusView>) => __TAURI_INVOKE<void>("sync_listen", { onStatus }),
+	/**
+	 *  Starts sync on an empty folder or remote, with a new key wrapped there
+	 *  under `passphrase`.
+	 */
+	syncCreate: (target: TargetInput, passphrase: string) => typedError<SyncStatusView, CommandError>(__TAURI_INVOKE("sync_create", { target, passphrase })),
+	/**  Joins the sync a folder or remote holds, with its passphrase. */
+	syncJoin: (target: TargetInput, passphrase: string) => typedError<SyncStatusView, CommandError>(__TAURI_INVOKE("sync_join", { target, passphrase })),
+	syncNow: () => typedError<SyncStatusView, CommandError>(__TAURI_INVOKE("sync_now")),
+	/**
+	 *  Stops syncing on this device. The target and the other devices keep
+	 *  everything.
+	 */
+	syncLeave: () => typedError<SyncStatusView, CommandError>(__TAURI_INVOKE("sync_leave")),
+	/**  The first page of hosts another device changed, waiting for the user. */
+	syncReviews: () => typedError<ReviewsView, CommandError>(__TAURI_INVOKE("sync_reviews")),
+	/**
+	 *  Lets each host be used as the user saw it. Returns the hosts that
+	 *  changed since they were shown; those still wait.
+	 */
+	syncReviewAccept: (seen: SeenInput[]) => typedError<string[], CommandError>(__TAURI_INVOKE("sync_review_accept", { seen })),
+	/**  Opens the system's folder dialog; `None` when nothing was chosen. */
+	syncChooseFolder: () => typedError<string | null, CommandError>(__TAURI_INVOKE("sync_choose_folder")),
 };
 
 /* Types */
@@ -428,6 +453,13 @@ export type ChallengeFieldSpec = {
 };
 
 export type ChangeSpec = { kind: "mkdir"; path: string } | { kind: "removeFile"; path: string } | { kind: "removeDir"; path: string } | { kind: "rename"; from: string; to: string } | { kind: "chmod"; path: string; mode: number };
+
+export type ClashView = {
+	record: string,
+	field: string,
+	kept: string,
+	lost: string,
+};
 
 export type CommandError = {
 	code: ErrorCode,
@@ -524,9 +556,24 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
  *  A setting forbids it, such as a host that does not let the AI
  *  assistant read its output.
  */
-"not_allowed" | "internal";
+"not_allowed" | 
+/**
+ *  Another device changed this saved host: the view shows what a
+ *  connect to it now does, and the user accepts it first.
+ */
+"needs_review" | 
+/**  Something like it is running; try again when it ends. */
+"busy" | "internal";
 
 export type ExitFilterSpec = "any" | "success" | "failure";
+
+export type ExposedView = {
+	/**  0 for the host, then each group up to the top. */
+	level: number,
+	place: string,
+	field: string,
+	value: string,
+};
 
 /**  What a pane may offer at a password prompt. */
 export type FillOfferView = {
@@ -877,6 +924,34 @@ export type RecordingView = {
 	complete: boolean,
 };
 
+export type ReportView = {
+	/**  Milliseconds since the Unix epoch. */
+	at: number | null,
+	/**  The saved hosts or snippets changed while it ran. */
+	changed: boolean,
+	error: string | null,
+	clashes: ClashView[],
+	repairs: string[],
+	notices: string[],
+};
+
+export type ReviewView = {
+	host: string,
+	label: string,
+	new: boolean,
+	lines: ExposedView[],
+	startup: string,
+	/**  Sent back to accept exactly what was shown. */
+	fingerprint: string,
+};
+
+export type ReviewsView = {
+	/**  The first hosts waiting, at most a page. */
+	reviews: ReviewView[],
+	/**  Hosts noted in all; a few may turn out approved at the next sync. */
+	noted: number,
+};
+
 export type RouteSpec = { kind: "direct" } | { kind: "proxyCommand"; command: string } | { kind: "socks5"; host: string; port: number } | { kind: "httpConnect"; host: string; port: number };
 
 export type RuleSpec = {
@@ -884,6 +959,12 @@ export type RuleSpec = {
 	pattern: string,
 	enabled: boolean,
 	action: ActionSpec,
+};
+
+/**  A host as the user saw it. */
+export type SeenInput = {
+	host: string,
+	fingerprint: string,
 };
 
 export type SerialPortView = {
@@ -981,6 +1062,8 @@ export type SettingsSpec = {
 	triggers?: string[] | null,
 };
 
+export type SetupSpec = { kind: "locked" } | { kind: "off" } | { kind: "on"; git: boolean; shown: string };
+
 export type SftpHandle = {
 	id: number,
 	/**  The login folder, where browsing starts. */
@@ -1049,11 +1132,25 @@ export type StyleSpec = {
 	line?: boolean,
 };
 
+export type SyncStatusView = {
+	setup: SetupSpec,
+	running: boolean,
+	last: ReportView | null,
+};
+
 export type TabWindowView = {
 	window: number,
 	pane: number,
 	name: string,
 };
+
+/**  Where to sync, as the user typed or chose it. */
+export type TargetInput = {
+	kind: TargetKind,
+	address: string,
+};
+
+export type TargetKind = "folder" | "git";
 
 export type TmuxOpenedView = {
 	control: number,

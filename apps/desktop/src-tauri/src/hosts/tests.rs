@@ -253,44 +253,75 @@ async fn prod_hosts_are_guarded_and_their_commands_checked() {
         .collect();
     assert_eq!(guarded, [("db".into(), true), ("dev".into(), false)]);
 
-    let verdict = check_lines(&book, "db", vec!["sudo rm -rf /srv".into()])
-        .await
-        .unwrap();
+    let verdict = check_lines(
+        &book,
+        "db",
+        vec!["sudo rm -rf /srv".into()],
+        async |_: &HostId| false,
+    )
+    .await
+    .unwrap();
     assert_eq!(verdict.findings.len(), 1);
     assert_eq!(verdict.findings[0].rule, "recursive-delete");
     assert_eq!(verdict.findings[0].command, "rm -rf /srv");
     assert_eq!(verdict.findings[0].reason, "deletes files recursively");
     assert!(!verdict.incomplete);
     assert!(
-        check_lines(&book, "db", vec!["echo 'open".into(), "ls".into()])
-            .await
-            .unwrap()
-            .incomplete
+        check_lines(
+            &book,
+            "db",
+            vec!["echo 'open".into(), "ls".into()],
+            async |_: &HostId| false
+        )
+        .await
+        .unwrap()
+        .incomplete
     );
-    let unguarded = check_lines(&book, "dev", vec!["rm -rf /srv".into()])
-        .await
-        .unwrap();
+    let unguarded = check_lines(
+        &book,
+        "dev",
+        vec!["rm -rf /srv".into()],
+        async |_: &HostId| false,
+    )
+    .await
+    .unwrap();
     assert!(unguarded.findings.is_empty());
-    let long = check_lines(&book, "db", vec!["a".repeat(MAX_LINE + 1)])
-        .await
-        .unwrap();
+    // Held for review: the guard is on whatever the synced settings say.
+    let held = check_lines(
+        &book,
+        "dev",
+        vec!["rm -rf /srv".into()],
+        async |_: &HostId| true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(held.findings.len(), 1);
+    let long = check_lines(
+        &book,
+        "db",
+        vec!["a".repeat(MAX_LINE + 1)],
+        async |_: &HostId| false,
+    )
+    .await
+    .unwrap();
     assert_eq!(long.findings[0].rule, "unreadable");
     // Findings from every reading count, once each.
     let merged = check_lines(
         &book,
         "db",
         vec!["ls".into(), "rm -rf /a".into(), "rm -rf /a".into()],
+        async |_: &HostId| false,
     )
     .await
     .unwrap();
     assert_eq!(merged.findings.len(), 1);
     assert!(
-        check_lines(&book, "db", vec!["ls".into(); 9])
+        check_lines(&book, "db", vec!["ls".into(); 9], async |_: &HostId| false)
             .await
             .is_err()
     );
     for bad in ["nope", "../x"] {
-        let error = check_lines(&book, bad, vec!["ls".into()])
+        let error = check_lines(&book, bad, vec!["ls".into()], async |_: &HostId| false)
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidArgument, "{bad}");

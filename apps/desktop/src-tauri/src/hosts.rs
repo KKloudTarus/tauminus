@@ -749,6 +749,7 @@ pub(crate) async fn hosts_list(hosts: State<'_, Hosts>) -> Result<HostsView, Com
 pub(crate) async fn host_save(
     hosts: State<'_, Hosts>,
     forwards: State<'_, Arc<Forwards>>,
+    gate: State<'_, crate::sync::Gate>,
     host: HostInput,
 ) -> Result<HostsView, CommandError> {
     let book = hosts.book()?;
@@ -758,6 +759,7 @@ pub(crate) async fn host_save(
     };
     let host = parse_host(book, host)?;
     let id = host.id.clone();
+    let library = gate.library_before().await;
     let mut before = Inventory::default();
     let inventory = book
         .edit(|inventory| {
@@ -765,6 +767,7 @@ pub(crate) async fn host_save(
             put_host(inventory, host, keep)
         })
         .await?;
+    gate.hosts_edited(library, &before, &inventory).await;
     // A running rule that was removed or changed stops, so nothing keeps
     // listening the way the list no longer says.
     let rules = |inventory: &Inventory| {
@@ -801,10 +804,12 @@ pub(crate) async fn host_delete(
 pub(crate) async fn group_save(
     hosts: State<'_, Hosts>,
     forwards: State<'_, Arc<Forwards>>,
+    gate: State<'_, crate::sync::Gate>,
     group: GroupInput,
 ) -> Result<HostsView, CommandError> {
     let book = hosts.book()?;
     let group = parse_group(book, group)?;
+    let library = gate.library_before().await;
     let mut before = Inventory::default();
     let inventory = book
         .edit(|inventory| {
@@ -816,6 +821,7 @@ pub(crate) async fn group_save(
             inventory.put_group(group)
         })
         .await?;
+    gate.hosts_edited(library, &before, &inventory).await;
     stop_moved(&forwards, &before, &inventory);
     Ok(view(&inventory))
 }
@@ -852,9 +858,11 @@ fn moved_hosts(before: &Inventory, after: &Inventory) -> Vec<HostId> {
 pub(crate) async fn group_delete(
     hosts: State<'_, Hosts>,
     forwards: State<'_, Arc<Forwards>>,
+    gate: State<'_, crate::sync::Gate>,
     id: String,
 ) -> Result<HostsView, CommandError> {
     let id = GroupId::parse(&id).map_err(invalid)?;
+    let library = gate.library_before().await;
     let mut before = Inventory::default();
     let inventory = hosts
         .book()?
@@ -863,6 +871,7 @@ pub(crate) async fn group_delete(
             inventory.remove_group(&id).map(drop)
         })
         .await?;
+    gate.hosts_edited(library, &before, &inventory).await;
     // Its hosts move to the parent group and may inherit other settings.
     stop_moved(&forwards, &before, &inventory);
     Ok(view(&inventory))
@@ -875,10 +884,14 @@ pub(crate) async fn group_delete(
 #[specta::specta]
 pub(crate) async fn guard_check(
     hosts: State<'_, Hosts>,
+    gate: State<'_, crate::sync::Gate>,
     id: String,
     lines: Vec<String>,
 ) -> Result<GuardVerdict, CommandError> {
-    check_lines(hosts.book()?, &id, lines).await
+    check_lines(hosts.book()?, &id, lines, async |host: &HostId| {
+        !gate.passes(&hosts, host).await
+    })
+    .await
 }
 
 /// Most readings of one Enter checked together; the view sends at most 8.
@@ -887,16 +900,24 @@ const MAX_CANDIDATES: usize = 8;
 /// Checks the readings of one submitted line: the line as typed, the whole
 /// screen line, the rows below, the keys typed. Findings from all of them
 /// count; `incomplete` comes from the first.
+/// `held`, asked after the policy is read: another device changed the
+/// host and the user has not seen it, so its guard is on, without the
+/// allow patterns it may have brought.
 async fn check_lines(
     book: &HostBook,
     id: &str,
     lines: Vec<String>,
+    held: impl AsyncFnOnce(&HostId) -> bool,
 ) -> Result<GuardVerdict, CommandError> {
     let id = HostId::parse(id).map_err(invalid)?;
     if lines.len() > MAX_CANDIDATES {
         return Err(invalid(format!("at most {MAX_CANDIDATES} lines per check")));
     }
-    let policy = book.guard_policy(&id).await.map_err(invalid)?;
+    let mut policy = book.guard_policy(&id).await.map_err(invalid)?;
+    if held(&id).await {
+        policy.active = true;
+        policy.allow.clear();
+    }
     // Lines over `MAX_LINE` bytes come back flagged unread, without a parse.
     // The readings share one budget (8·MAX_LINE characters lexed, 64 Mi
     // characters matched) but may take milliseconds, so they run off the

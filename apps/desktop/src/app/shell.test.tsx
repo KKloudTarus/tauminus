@@ -9,6 +9,7 @@ import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { fakeSessions } from "@/ipc/fake.ts";
 import { fakeHosts } from "@/ipc/fake-hosts.ts";
 import { fakeSnippets } from "@/ipc/fake-snippets.ts";
+import { fakeSync } from "@/ipc/fake-sync.ts";
 import { fakeVault } from "@/ipc/fake-vault.ts";
 
 import { AppShell } from "./shell.ts";
@@ -244,5 +245,38 @@ describe("AppShell workspaces", () => {
     await broken.openWorkspace(saved!.id);
     expect(broken.workspace.getSnapshot().tabs).toHaveLength(0);
     expect(broken.hosts.getSnapshot().notice).toMatch(/not opened/u);
+  });
+});
+
+describe("AppShell sync", () => {
+  it("opens sync from the palette and retries a connect once reviews are done", async () => {
+    const made = new AppShell({
+      sessions: fakeSessions,
+      hosts: fakeHosts(),
+      vault: fakeVault(),
+      sync: fakeSync(),
+      userAgent: "test",
+      storage: localStorage,
+      root: document.documentElement,
+      clipboard: undefined,
+    });
+    shells.push(made);
+    expect(made.sync).toBeDefined();
+    made.run("sync.open");
+    expect(made.getState().syncOpen).toBe(true);
+    made.setSyncOpen(false);
+    let retried = 0;
+    made.reviewSyncThen(() => (retried += 1), "db");
+    expect(made.getState().syncOpen).toBe(true);
+    // Another host accepted: the connect to `db` still waits.
+    made.syncReviewed(["web"]);
+    expect([made.getState().syncOpen, retried]).toEqual([true, 0]);
+    made.syncReviewed(["web", "db"]);
+    expect([made.getState().syncOpen, retried]).toEqual([false, 1]);
+    // Closing without finishing drops the retry.
+    made.reviewSyncThen(() => (retried += 1), "db");
+    made.setSyncOpen(false);
+    made.syncReviewed(["db"]);
+    expect(retried).toBe(1);
   });
 });

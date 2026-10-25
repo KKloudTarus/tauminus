@@ -107,6 +107,15 @@
     "allow-history-record",
     "allow-history-search",
     "allow-history-output",
-    "allow-history-clear"
+    "allow-history-clear",
+    "allow-sync-status",
+    "allow-sync-listen",
+    "allow-sync-create",
+    "allow-sync-join",
+    "allow-sync-now",
+    "allow-sync-leave",
+    "allow-sync-reviews",
+    "allow-sync-review-accept",
+    "allow-sync-choose-folder"
   ]
 }

@@ -328,16 +328,24 @@ pub(crate) struct PreparedView {
 pub(crate) async fn trigger_prepare(
     hosts: State<'_, Hosts>,
     triggers: State<'_, Triggers>,
+    gate: State<'_, crate::sync::Gate>,
     host: Option<String>,
 ) -> Result<PreparedView, CommandError> {
     let named = match host {
         Some(host) => {
             let host = HostId::parse(&host).map_err(invalid)?;
-            hosts
+            let named = hosts
                 .book()?
                 .triggers(&host)
                 .await
-                .map_err(|e| CommandError::new(ErrorCode::NotFound, e.to_string()))?
+                .map_err(|e| CommandError::new(ErrorCode::NotFound, e.to_string()))?;
+            // Sets another device attached, unseen, may type into the
+            // shell: the pane gets the defaults only.
+            if gate.passes(&hosts, &host).await {
+                named
+            } else {
+                Vec::new()
+            }
         }
         None => Vec::new(),
     };

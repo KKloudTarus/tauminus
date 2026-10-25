@@ -340,3 +340,189 @@ fn filling_a_password_names_a_session_and_nothing_else() {
     .unwrap_err();
     assert_eq!(bad["code"], "invalid_argument");
 }
+
+/// Syncs now, after any sync the schedule started meanwhile.
+fn sync_now(app: &App<tauri::test::MockRuntime>) -> Value {
+    for _ in 0..500 {
+        match call(app, "sync_now", json!({})) {
+            Err(error) if error["code"] == "busy" => {
+                tauri::async_runtime::block_on(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                });
+            }
+            result => return result.unwrap(),
+        }
+    }
+    panic!("sync stayed busy");
+}
+
+const PASSPHRASE: &str = "correct horse battery";
+
+/// Device A syncs a host with a startup snippet to `target`; its id.
+fn share_a_host(a: &App<tauri::test::MockRuntime>, target: &Value) -> String {
+    let short = call(
+        a,
+        "sync_create",
+        json!({"target": target, "passphrase": "short"}),
+    );
+    assert_eq!(short.unwrap_err()["code"], "wrong_password");
+    let on = call(
+        a,
+        "sync_create",
+        json!({"target": target, "passphrase": PASSPHRASE}),
+    )
+    .unwrap();
+    assert_eq!(on["setup"]["kind"], "on", "{on}");
+    let snippets = call(
+        a,
+        "snippet_save",
+        json!({"snippet": {"name": "hello", "body": "echo hello"}}),
+    )
+    .unwrap();
+    let snippet = snippets[0]["id"].as_str().unwrap().to_owned();
+    let saved = call(
+        a,
+        "host_save",
+        json!({"host": {"label": "db", "address": "db.internal", "startup": [snippet]}}),
+    )
+    .unwrap();
+    let host = saved["hosts"][0]["id"].as_str().unwrap().to_owned();
+    // A's own host is A's to use.
+    assert!(call(a, "host_startup", json!({"host": host})).is_ok());
+    sync_now(a);
+    host
+}
+
+/// What an open session on a host waiting for review gets: the guard on,
+/// and no history.
+fn held_until_reviewed(b: &App<tauri::test::MockRuntime>, host: &str) {
+    // An open session on it keeps the safe values until then: the guard
+    // on, and no history.
+    let verdict = call(
+        b,
+        "guard_check",
+        json!({"id": host, "lines": ["rm -rf /srv"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        verdict["findings"].as_array().unwrap().len(),
+        1,
+        "{verdict}"
+    );
+    let recorded = call(
+        b,
+        "history_record",
+        json!({"entry": {"host": host, "label": "db", "command": "ls"}}),
+    )
+    .unwrap();
+    assert_eq!(recorded, json!("dropped"));
+}
+
+#[test]
+fn a_startup_snippet_synced_from_another_device_waits_for_review() {
+    let (a, _dir_a) = app("sync-a");
+    let (b, _dir_b) = app("sync-b");
+    let shared = std::env::temp_dir().join(format!("tauminus-ipc-shared-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&shared);
+    std::fs::create_dir_all(&shared).unwrap();
+    let _shared = Scratch(shared.clone());
+    let target = json!({"kind": "folder", "address": shared.to_string_lossy()});
+    for app in [&a, &b] {
+        let status = call(app, "sync_status", json!({})).unwrap();
+        assert_eq!(status["setup"]["kind"], "locked", "{status}");
+        call(app, "vault_create", json!({"password": "vault password 1"})).unwrap();
+        let status = call(app, "sync_status", json!({})).unwrap();
+        assert_eq!(status["setup"]["kind"], "off");
+    }
+    let host = share_a_host(&a, &target);
+
+    let wrong = call(
+        &b,
+        "sync_join",
+        json!({"target": target, "passphrase": "not the passphrase"}),
+    );
+    assert_eq!(wrong.unwrap_err()["code"], "wrong_password");
+    call(
+        &b,
+        "sync_join",
+        json!({"target": target, "passphrase": PASSPHRASE}),
+    )
+    .unwrap();
+    let status = sync_now(&b);
+    assert_eq!(status["last"]["error"], Value::Null, "{status}");
+    assert_eq!(
+        call(&b, "hosts_list", json!({})).unwrap()["hosts"][0]["id"],
+        host.as_str()
+    );
+
+    let refused = call(&b, "host_startup", json!({"host": host})).unwrap_err();
+    assert_eq!(refused["code"], "needs_review", "{refused}");
+    // Every login checks too, before any connection is made.
+    let login = call(
+        &b,
+        "sftp_open",
+        json!({"host": host, "onPrompt": "__CHANNEL__:1"}),
+    )
+    .unwrap_err();
+    assert_eq!(login["code"], "needs_review", "{login}");
+    held_until_reviewed(&b, &host);
+    let page = call(&b, "sync_reviews", json!({})).unwrap();
+    assert_eq!(page["noted"], 1);
+    let review = &page["reviews"][0];
+    assert_eq!(review["host"], host.as_str());
+    assert_eq!(review["new"], true);
+    assert_eq!(review["startup"], "echo hello\r");
+    let stale = call(
+        &b,
+        "sync_review_accept",
+        json!({"seen": [{"host": host, "fingerprint": "00".repeat(32)}]}),
+    );
+    assert_eq!(stale.unwrap(), json!([host]), "not what was shown");
+    let stale = call(
+        &b,
+        "sync_review_accept",
+        json!({"seen": [{"host": host, "fingerprint": review["fingerprint"]}]}),
+    );
+    assert_eq!(stale.unwrap(), json!([]));
+    let verdict = call(
+        &b,
+        "guard_check",
+        json!({"id": host, "lines": ["rm -rf /srv"]}),
+    )
+    .unwrap();
+    assert_eq!(verdict["findings"], json!([]), "not a prod host");
+    // The user's own edit after accepting is no change to review.
+    call(
+        &b,
+        "host_save",
+        json!({"host": {"id": host, "label": "db", "address": "db.internal", "settings": {"port": 2222}}}),
+    )
+    .unwrap();
+    let startup = call(&b, "host_startup", json!({"host": host})).unwrap();
+    assert_eq!(startup["text"], "echo hello\r");
+    // Accepted, the note stays until a sync leaves the host as it was.
+    assert_eq!(
+        call(&b, "sync_reviews", json!({})).unwrap(),
+        json!({"reviews": [], "noted": 1})
+    );
+    sync_now(&b);
+    assert_eq!(
+        call(&b, "sync_reviews", json!({})).unwrap(),
+        json!({"reviews": [], "noted": 0})
+    );
+
+    // Leaving stops sync here and keeps the hosts.
+    let off = call(&b, "sync_leave", json!({})).unwrap();
+    assert_eq!(off["setup"]["kind"], "off");
+    assert_eq!(
+        call(&b, "sync_now", json!({})).unwrap_err()["code"],
+        "not_found"
+    );
+    assert_eq!(
+        call(&b, "hosts_list", json!({})).unwrap()["hosts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}

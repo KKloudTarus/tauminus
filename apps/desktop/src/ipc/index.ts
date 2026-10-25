@@ -11,6 +11,7 @@ import type { SerialClient } from "./serial.ts";
 import type { SnippetsClient } from "./snippets.ts";
 import type { TriggersClient } from "./triggers.ts";
 import type { HistoryClient } from "./history.ts";
+import type { SyncClient } from "./sync.ts";
 import type { VaultClient } from "./vault.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
@@ -104,6 +105,20 @@ export {
   tauriHistory,
 } from "./history.ts";
 export {
+  type ClashView,
+  type ExposedView,
+  type ReportView,
+  type ReviewView,
+  type ReviewsView,
+  type SeenInput,
+  type SetupSpec,
+  type SyncClient,
+  type SyncStatusView,
+  type TargetInput,
+  type TargetKind,
+  tauriSync,
+} from "./sync.ts";
+export {
   type IdentityEdit,
   type IdentityView,
   type KeychainSpec,
@@ -183,6 +198,14 @@ export async function vaultClient(): Promise<VaultClient> {
     return (await import("./fake-vault.ts")).sharedFakeVault();
   }
   return (await import("./vault.ts")).tauriVault;
+}
+
+/** Sync; the `e2e` build pretends, with one other device behind it. */
+export async function syncClient(): Promise<SyncClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-sync.ts")).fakeSync();
+  }
+  return (await import("./sync.ts")).tauriSync;
 }
 
 /** The command history; the `e2e` build keeps one in memory. */

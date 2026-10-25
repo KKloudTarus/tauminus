@@ -21,6 +21,7 @@ use crate::ipc::{
 pub(crate) async fn telnet_connect(
     telnet: State<'_, TelnetSessions>,
     hosts: State<'_, Hosts>,
+    gate: State<'_, crate::sync::Gate>,
     id: String,
     size: GridSize,
     on_output: Channel<OutputChunk>,
@@ -33,6 +34,7 @@ pub(crate) async fn telnet_connect(
         .telnet_target(&id)
         .await
         .map_err(|e| CommandError::new(ErrorCode::NotFound, e.to_string()))?;
+    gate.check(&hosts, &id).await?;
     let sink = ChannelSink {
         output: on_output,
         exit: on_exit,

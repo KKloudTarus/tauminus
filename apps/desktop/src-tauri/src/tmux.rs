@@ -119,6 +119,7 @@ pub(crate) async fn tmux_open(
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    gate: State<'_, crate::sync::Gate>,
     forwards: State<'_, Arc<Forwards>>,
     id: String,
     size: GridSize,
@@ -128,7 +129,7 @@ pub(crate) async fn tmux_open(
     let mark = tauminus_domain::HostId::parse(&id)
         .ok()
         .map(|host| forwards.host_mark(&host));
-    let login = login(&hosts, &vault, &id).await?;
+    let login = login(&hosts, &vault, &gate, &id).await?;
     // The host's settings decide, not the view.
     if !hosts
         .book()?
@@ -141,6 +142,8 @@ pub(crate) async fn tmux_open(
             "this host does not show its tmux windows as tabs",
         ));
     }
+    // That setting was read after the login's check.
+    gate.check(&hosts, &login.host).await?;
     let prompter = prompter(&broker, on_prompt);
     let Opened { control, windows } = tmux
         .open(
@@ -151,7 +154,7 @@ pub(crate) async fn tmux_open(
         )
         .await?;
     if let Some(mark) = mark {
-        crate::forwards::start_with_host(&hosts, &forwards, login, mark, prompter);
+        crate::forwards::start_with_host(&hosts, &gate, &forwards, login, mark, prompter);
     }
     Ok(TmuxOpenedView {
         control: u32::try_from(control)

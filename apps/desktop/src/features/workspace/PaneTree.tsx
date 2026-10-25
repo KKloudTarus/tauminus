@@ -18,10 +18,11 @@ interface PaneTreeProps {
   /** The panes that type together; without it none are marked. */
   broadcast?: Broadcast | undefined;
   onUnlockVault?: ((retry: () => void) => void) | undefined;
+  onReview?: ((retry: () => void, host: string | undefined) => void) | undefined;
 }
 
 /** Renders one tab's layout: nested resizable groups with a terminal in each leaf. */
-export function PaneTree({ workspace, tab, broadcast, onUnlockVault }: PaneTreeProps) {
+export function PaneTree({ workspace, tab, broadcast, onUnlockVault, onReview }: PaneTreeProps) {
   return (
     <Node
       workspace={workspace}
@@ -29,6 +30,7 @@ export function PaneTree({ workspace, tab, broadcast, onUnlockVault }: PaneTreeP
       node={tab.root}
       broadcast={broadcast}
       onUnlockVault={onUnlockVault}
+      onReview={onReview}
     />
   );
 }
@@ -39,6 +41,7 @@ function Node({
   node,
   broadcast,
   onUnlockVault,
+  onReview,
 }: PaneTreeProps & { node: LayoutNode }) {
   if (node.kind === "pane") {
     return (
@@ -49,6 +52,7 @@ function Node({
         split={tab.root.kind !== "pane"}
         broadcast={broadcast}
         onUnlockVault={onUnlockVault}
+        onReview={onReview}
       />
     );
   }
@@ -74,6 +78,7 @@ function Node({
               node={child}
               broadcast={broadcast}
               onUnlockVault={onUnlockVault}
+              onReview={onReview}
             />
           </Panel>
         </ChildPanel>
@@ -101,6 +106,7 @@ function TerminalPane({
   split,
   broadcast,
   onUnlockVault,
+  onReview,
 }: {
   workspace: Workspace<TerminalController, SessionSpec>;
   paneId: PaneId;
@@ -109,6 +115,7 @@ function TerminalPane({
   split: boolean;
   broadcast: Broadcast | undefined;
   onUnlockVault: ((retry: () => void) => void) | undefined;
+  onReview: ((retry: () => void, host: string | undefined) => void) | undefined;
 }) {
   const controller = workspace.terminal(paneId);
   const title = useSyncExternalStore(
@@ -166,6 +173,7 @@ function TerminalPane({
         controller={controller}
         className="min-h-0 flex-1"
         {...(onUnlockVault ? { onUnlockVault } : {})}
+        {...(onReview ? { onReview } : {})}
       />
     </section>
   );

@@ -203,9 +203,14 @@ async fn rule(
 /// in, with any question on `on_prompt`. Returns the port listening.
 #[tauri::command]
 #[specta::specta]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri passes each IPC argument separately"
+)]
 pub(crate) async fn forward_start(
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    gate: State<'_, crate::sync::Gate>,
     broker: State<'_, Arc<PromptBroker>>,
     forwards: State<'_, Arc<Forwards>>,
     host: String,
@@ -216,8 +221,9 @@ pub(crate) async fn forward_start(
     let rule_id = ForwardId::parse(&rule_id).map_err(invalid)?;
     // Before reading anything, so an edit that lands meanwhile wins.
     let ticket = forwards.ticket(&host_id, &rule_id);
-    let login = crate::ssh::login(&hosts, &vault, &host).await?;
+    let login = crate::ssh::login(&hosts, &vault, &gate, &host).await?;
     let rule = rule(&hosts, &login.host, &rule_id).await?;
+    gate.check(&hosts, &login.host).await?;
     let prompter = crate::ssh::prompter(&broker, on_prompt);
     Ok(forwards.start(&login, &rule, ticket, prompter).await?)
 }
@@ -259,6 +265,7 @@ pub(crate) fn forwards_status(forwards: State<'_, Arc<Forwards>>) -> Vec<Forward
 /// background; a rule that fails shows its reason in the status list.
 pub(crate) fn start_with_host(
     hosts: &crate::hosts::Hosts,
+    gate: &crate::sync::Gate,
     forwards: &Arc<Forwards>,
     login: Login,
     mark: HostMark,
@@ -267,7 +274,9 @@ pub(crate) fn start_with_host(
     let crate::hosts::Hosts::Ready(book) = hosts else {
         return;
     };
+    let hosts = crate::hosts::Hosts::Ready(Arc::clone(book));
     let book = Arc::clone(book);
+    let gate = gate.clone();
     let forwards = Arc::clone(forwards);
     tauri::async_runtime::spawn(async move {
         let Ok(rules) = book.forward_rules(&login.host).await else {
@@ -284,6 +293,11 @@ pub(crate) fn start_with_host(
             let Some(rule) = saved.into_iter().find(|r| r.id == id && r.auto_start) else {
                 continue;
             };
+            // A sync may have changed the rules since the login's check.
+            if let Err(error) = gate.check(&hosts, &login.host).await {
+                tracing::warn!(rule = %rule.id, error = %error.message, "a rule did not start with its host");
+                return;
+            }
             if let Err(error) = forwards
                 .start(&login, &rule, ticket, Arc::clone(&prompter))
                 .await
