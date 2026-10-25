@@ -12,10 +12,17 @@ use crate::ports::SyncTarget;
 use crate::sync::service::tests::{Connector, PASSPHRASE, service};
 use crate::vault::tests::secret;
 
-/// Lets the loop run until it waits on time again.
+/// Lets the loop run until it waits on time again. A run reads the vault
+/// on the blocking pool, which runs on real time: each turn gives it a
+/// millisecond of that.
 async fn settle() {
-    for _ in 0..50 {
+    for _ in 0..200 {
         tokio::task::yield_now().await;
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "holds the paused clock still while the blocking pool runs"
+        )]
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
