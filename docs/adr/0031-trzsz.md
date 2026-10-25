@@ -165,7 +165,10 @@ changes the banner's words; the commands, dialog and file types stay.
   about 30 MiB at most per transfer. Upload: O(n) per byte, at most
   1 MiB of chunk and 128 KiB queued.
 - Folders, Windows hosts, binary mode, resume and protocols 2 to 4 are
-  not supported; each is refused with a reason the user sees.
+  not supported; each is refused with a reason the user sees. Files are
+  chosen as for Zmodem (ADR 0026), so one past 4 GiB is refused there.
+- A tty in cooked mode turns the trigger's CR LF into CR CR LF; the
+  search takes up to two CRs before the LF.
 - Live tests run `trz` and `tsz` from pip trzsz 1.1.7 and trzsz-go
   1.2.0 on a scratch sshd, with and without tmux on the host, and kill
   `trz` mid-upload under bash and zsh to check no line runs.
