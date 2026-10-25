@@ -718,3 +718,29 @@ async fn a_mosh_host_loads_back_at_version_7() {
     assert_eq!(json["version"], 7);
     assert_eq!(store.load().await.unwrap(), inventory);
 }
+
+#[tokio::test]
+async fn the_review_list_is_parsed_again_only_when_its_bytes_change() {
+    let dir = Dir::new();
+    let path = dir.0.join("sync-review.json");
+    let here = JsonTrustStore::new(path.clone());
+    let other = JsonTrustStore::new(path);
+    let (empty, version) = here.load().await.unwrap();
+    assert!(empty.is_empty());
+    let mut notes = Approvals::new();
+    notes.insert(HostId::parse("h").unwrap(), None);
+    let (_, theirs) = other.load().await.unwrap();
+    other.save(&notes, theirs).await.unwrap();
+    // Saving what was read before the other window's save is refused,
+    // whatever was loaded since.
+    let (first, now) = here.load().await.unwrap();
+    assert_eq!(*first, notes, "another window's save is seen");
+    assert!(matches!(
+        here.save(&Approvals::new(), version).await,
+        Err(StoreError::Conflict)
+    ));
+    let (again, _) = here.load().await.unwrap();
+    assert!(Arc::ptr_eq(&first, &again), "same bytes, no parse");
+    here.save(&Approvals::new(), now).await.unwrap();
+    assert!(here.load().await.unwrap().0.is_empty());
+}

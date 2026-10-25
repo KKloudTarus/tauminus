@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
-use crate::ports::Secret;
+use crate::ports::{Secret, SyncTarget};
 
 /// Idle time before the vault locks itself, unless changed.
 pub const DEFAULT_IDLE: Duration = Duration::from_mins(15);
@@ -284,6 +284,10 @@ pub trait OpenVault: Send {
     fn ai_key(&self) -> Result<Option<AiKey>, VaultError>;
     /// Saves the AI assistant's API key, or removes it.
     fn set_ai_key(&mut self, key: Option<&AiKey>) -> Result<(), VaultError>;
+    /// Where this device syncs, and the sync key, if sync is set up.
+    fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError>;
+    /// Saves where this device syncs and its key, or removes them.
+    fn set_sync_setup(&mut self, setup: Option<&SyncSetup>) -> Result<(), VaultError>;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
@@ -301,6 +305,22 @@ impl std::fmt::Debug for AiKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AiKey")
             .field("origin", &self.origin)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where this device syncs, and the key every device's objects are sealed
+/// with (ADR 0030). Wiped when dropped.
+#[derive(Clone)]
+pub struct SyncSetup {
+    pub target: SyncTarget,
+    pub key: Zeroizing<[u8; 32]>,
+}
+
+impl std::fmt::Debug for SyncSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncSetup")
+            .field("target", &self.target)
             .finish_non_exhaustive()
     }
 }
@@ -723,6 +743,24 @@ impl Vault {
     pub async fn save_ai_key(&self, key: Option<AiKey>) -> Result<(), VaultError> {
         self.with_open(move |vault| {
             vault.set_ai_key(key.as_ref())?;
+            vault.save()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Where this device syncs and the sync key. Needs the vault unlocked,
+    /// and is no use of it: a sync in the background must not keep it open.
+    pub async fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError> {
+        self.with_open_as(false, |vault| Ok(vault.sync_setup()?))
+            .await
+    }
+
+    /// Saves where this device syncs and its key, or removes them, and
+    /// saves the vault.
+    pub async fn save_sync_setup(&self, setup: Option<SyncSetup>) -> Result<(), VaultError> {
+        self.with_open(move |vault| {
+            vault.set_sync_setup(setup.as_ref())?;
             vault.save()?;
             Ok(())
         })

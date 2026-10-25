@@ -138,9 +138,12 @@ const LAYER_RULES: &[(&str, &[&str])] = &[
         &["memchr", "regex", "regex-syntax", "thiserror", "zmodem2"],
     ),
     // zeroize: a dependency-free crate that wipes secrets when they drop.
+    // sha2: SHA-256 with no I/O, for the fingerprint another device must
+    // not be able to match with a different host (ADR 0030).
     (
         "tauminus-app",
         &[
+            "sha2",
             "tauminus-domain",
             "thiserror",
             "tokio",

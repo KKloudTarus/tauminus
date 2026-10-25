@@ -21,6 +21,7 @@ mod recordings;
 mod sealed_stream;
 mod snippets;
 mod triggers;
+mod trust;
 pub mod vault;
 mod vault_backend;
 
@@ -37,8 +38,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use rand::TryRng;
 use tauminus_app::AiSettings;
 use tauminus_app::ports::{
-    AiSettingsStore, BoxFuture, HostStore, SnippetStore, StoreError, TriggerStore,
+    AiSettingsStore, BoxFuture, HostStore, SnippetStore, StoreError, StoreVersion, TriggerStore,
+    TrustStore,
 };
+use tauminus_app::trust::Approvals;
 use tauminus_domain::{Inventory, Library};
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -227,6 +230,73 @@ impl AiSettingsStore for JsonAiSettingsStore {
     fn save<'a>(&'a self, settings: &'a AiSettings) -> BoxFuture<'a, Result<(), StoreError>> {
         let bytes = ai::to_json(settings);
         Box::pin(self.0.save(bytes))
+    }
+}
+
+/// The sync review list in a JSON file, written durably. Read at every
+/// use of a saved host, so what was parsed is kept, and parsed again only
+/// when the file's bytes hash differently: at 10 000 notes a read and a
+/// hash cost 0.3 ms, a parse 8 ms.
+#[derive(Debug, Clone)]
+pub struct JsonTrustStore {
+    file: JsonFile,
+    parsed: Arc<Mutex<Option<Parsed>>>,
+}
+
+/// The notes as last parsed, with the hash of the bytes they came from.
+type Parsed = (Seen, Arc<Approvals>);
+
+impl JsonTrustStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            file: JsonFile::new(path, "sync review list"),
+            parsed: Arc::default(),
+        }
+    }
+}
+
+impl TrustStore for JsonTrustStore {
+    fn load(&self) -> BoxFuture<'_, Result<(Arc<Approvals>, StoreVersion), StoreError>> {
+        let path = self.file.path.clone();
+        let parsed = Arc::clone(&self.parsed);
+        Box::pin(blocking(move || {
+            let bytes = read_limited(&path)?;
+            let print = bytes.as_deref().map(fingerprint);
+            let mut parsed = parsed.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((kept, approvals)) = parsed.as_ref()
+                && *kept == print
+            {
+                return Ok((Arc::clone(approvals), StoreVersion(print)));
+            }
+            let approvals = Arc::new(match bytes {
+                None => Approvals::default(),
+                Some(bytes) => trust::from_json(&bytes).map_err(StoreError::Corrupt)?,
+            });
+            *parsed = Some((print, Arc::clone(&approvals)));
+            Ok((approvals, StoreVersion(print)))
+        }))
+    }
+
+    /// Compares against the version the caller read, not the last any
+    /// caller read: a check in between must not let a stale write pass.
+    fn save<'a>(
+        &'a self,
+        approvals: &'a Approvals,
+        read: StoreVersion,
+    ) -> BoxFuture<'a, Result<(), StoreError>> {
+        let bytes = trust::to_json(approvals);
+        let path = self.file.path.clone();
+        let temp_name = new_id();
+        Box::pin(async move {
+            let bytes = bytes.map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+            blocking(move || {
+                if read_limited(&path)?.as_deref().map(fingerprint) != read.0 {
+                    return Err(StoreError::Conflict);
+                }
+                write_atomic(&path, &bytes, &temp_name)
+            })
+            .await
+        })
     }
 }
 

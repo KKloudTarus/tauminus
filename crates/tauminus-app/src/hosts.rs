@@ -9,7 +9,7 @@ use tauminus_domain::{
     Route, Settings, SnippetId, SshTarget, TelnetTarget, TriggerSetId, UserName, env_list,
 };
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
 use crate::ports::{ConfigHost, HostStore, SshConfigSource, StoreError};
 
@@ -33,12 +33,36 @@ pub struct ImportReport {
 /// Name of the group that hosts imported from `~/.ssh/config` go into.
 pub const IMPORT_GROUP: &str = "SSH config";
 
+/// A book's contents, read under its lock, never written through.
+pub struct Reading<'a, T>(tokio::sync::MutexGuard<'a, T>);
+
+impl<'a, T> Reading<'a, T> {
+    pub(crate) fn new(guard: tokio::sync::MutexGuard<'a, T>) -> Self {
+        Self(guard)
+    }
+}
+
+impl<T> std::fmt::Debug for Reading<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reading").finish_non_exhaustive()
+    }
+}
+
+impl<T> std::ops::Deref for Reading<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
 /// The saved hosts. Every change is saved before it becomes visible, so a
 /// failed write leaves the list as it was. Changes are serialized; each
 /// costs O(H + G) to copy and save, H ≤ 10 000.
 pub struct HostBook {
     store: Arc<dyn HostStore>,
     inventory: Mutex<Inventory>,
+    revision: watch::Sender<u64>,
 }
 
 impl std::fmt::Debug for HostBook {
@@ -53,11 +77,23 @@ impl HostBook {
         Ok(Self {
             store,
             inventory: Mutex::new(inventory),
+            revision: watch::Sender::new(0),
         })
     }
 
     pub async fn snapshot(&self) -> Inventory {
         self.inventory.lock().await.clone()
+    }
+
+    /// The list as it is now, without a copy, read-only. Holds the list's
+    /// lock until dropped: take the snippets' after it, never before.
+    pub async fn reading(&self) -> Reading<'_, Inventory> {
+        Reading::new(self.inventory.lock().await)
+    }
+
+    /// Bumped on every change to the list, a sync's included.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
     }
 
     pub fn new_host_id(&self) -> Result<HostId, HostsError> {
@@ -102,6 +138,15 @@ impl HostBook {
         &self,
         change: impl FnOnce(&mut Inventory) -> Result<(), HostsError>,
     ) -> Result<Inventory, HostBookError> {
+        Ok(self.edit_both(change).await?.1)
+    }
+
+    /// As [`HostBook::edit`], and the inventory just before the change:
+    /// what this edit, and nothing else, changed.
+    pub async fn edit_both(
+        &self,
+        change: impl FnOnce(&mut Inventory) -> Result<(), HostsError>,
+    ) -> Result<(Inventory, Inventory), HostBookError> {
         let mut current = self.inventory.lock().await;
         let mut next = current.clone();
         change(&mut next)?;
@@ -110,12 +155,14 @@ impl HostBook {
             Err(StoreError::Conflict) => {
                 // Take the other window's list, so the next try builds on it.
                 *current = self.store.load().await?;
+                self.revision.send_modify(|r| *r += 1);
                 return Err(StoreError::Conflict.into());
             }
             Err(e) => return Err(e.into()),
         }
-        *current = next.clone();
-        Ok(next)
+        let before = std::mem::replace(&mut *current, next.clone());
+        self.revision.send_modify(|r| *r += 1);
+        Ok((before, next))
     }
 
     /// Replaces the inventory with `next` if it is still `expected`, and
@@ -133,6 +180,7 @@ impl HostBook {
         if *current != next {
             self.store.save(&next).await?;
             *current = next;
+            self.revision.send_modify(|r| *r += 1);
         }
         Ok(true)
     }

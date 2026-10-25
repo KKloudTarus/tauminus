@@ -128,6 +128,9 @@ pub struct Assistant {
     editing: Mutex<()>,
     /// Sessions with a request in flight: one each.
     busy: StdMutex<HashSet<SessionId>>,
+    /// The sync review list, and the snippets it hashes: a host another
+    /// device changed, unseen, lends nothing it printed.
+    trust: Option<(Arc<crate::trust::Trust>, Option<Arc<crate::SnippetBook>>)>,
     /// The explanation each session's user was shown and may send, at most
     /// one per session.
     previews: StdMutex<HashMap<SessionId, Pending>>,
@@ -177,6 +180,7 @@ impl Assistant {
             transport,
             settings: Mutex::new(None),
             editing: Mutex::new(()),
+            trust: None,
             busy: StdMutex::default(),
             previews: StdMutex::default(),
             next: AtomicU32::new(1),
@@ -374,6 +378,17 @@ impl Assistant {
     /// settings as they are now. A saved host's leave holds while the host
     /// is still saved with the address the session logged in to. O(log H +
     /// d).
+    /// Holds back the output of hosts the sync review list holds.
+    #[must_use]
+    pub fn with_trust(
+        mut self,
+        trust: Arc<crate::trust::Trust>,
+        snippets: Option<Arc<crate::SnippetBook>>,
+    ) -> Self {
+        self.trust = Some((trust, snippets));
+        self
+    }
+
     async fn reads_output(&self, meta: &SessionMeta, settings: &AiSettings) -> bool {
         match meta.kind {
             SessionKind::Local => settings.local_output,
@@ -390,6 +405,14 @@ impl Assistant {
                         .sends_output_to_ai(&saved.id)
                         .await
                         .unwrap_or(false)
+                    // Read before the check, as every use is.
+                    && match &self.trust {
+                        Some((trust, snippets)) => trust
+                            .check(&self.hosts, snippets.as_deref(), &saved.id)
+                            .await
+                            .is_ok(),
+                        None => true,
+                    }
             }
             SessionKind::Telnet | SessionKind::Serial => false,
         }

@@ -7,10 +7,10 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauminus_app::ports::Secret;
+use tauminus_app::ports::{Secret, SyncTarget};
 use tauminus_app::vault::{
     AiKey, HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
-    RecordingKeys, VaultBackend, VaultError,
+    RecordingKeys, SyncSetup, VaultBackend, VaultError,
 };
 use zeroize::Zeroizing;
 
@@ -420,6 +420,45 @@ impl OpenPort for Opened {
         self.vault.put(AI_KEY, plain).map_err(port_error)
     }
 
+    /// Kept as the kind (`f` or `g`), the 32-byte key, and the address.
+    fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError> {
+        let Some(stored) = self.vault.get(SYNC) else {
+            return Ok(None);
+        };
+        let corrupt = || VaultError::Corrupt("the sync record is damaged".into());
+        let (&kind, rest) = stored.split_first().ok_or_else(corrupt)?;
+        if rest.len() < 32 {
+            return Err(corrupt());
+        }
+        let (key, address) = rest.split_at(32);
+        let address = std::str::from_utf8(address).map_err(|_| corrupt())?;
+        let target = match kind {
+            b'f' => SyncTarget::Folder(address.to_owned()),
+            b'g' => SyncTarget::Git(Secret::new(address.to_owned())),
+            _ => return Err(corrupt()),
+        };
+        let mut bytes = Zeroizing::new([0; 32]);
+        bytes.copy_from_slice(key);
+        Ok(Some(SyncSetup { target, key: bytes }))
+    }
+
+    fn set_sync_setup(&mut self, setup: Option<&SyncSetup>) -> Result<(), VaultError> {
+        let Some(setup) = setup else {
+            self.vault.remove(SYNC);
+            return Ok(());
+        };
+        let (kind, address) = match &setup.target {
+            SyncTarget::Folder(path) => (b'f', path.as_str()),
+            SyncTarget::Git(url) => (b'g', url.as_str()),
+        };
+        let mut plain = Vec::with_capacity(1 + 32 + address.len());
+        plain.push(kind);
+        plain.extend_from_slice(&*setup.key);
+        plain.extend_from_slice(address.as_bytes());
+        // `put` wipes what it is given.
+        self.vault.put(SYNC, plain).map_err(port_error)
+    }
+
     /// Saves, then brings the keychain in line with the file.
     fn save(&mut self) -> Result<(), VaultError> {
         self.vault.save(&self.file).map_err(port_error)?;
@@ -562,6 +601,8 @@ impl Opened {
 
 /// The AI assistant's API key.
 const AI_KEY: &str = "ai-key";
+/// Where this device syncs, and the sync key.
+const SYNC: &str = "sync";
 /// Vault records holding the history's keys.
 const HISTORY_DATABASE: &str = "history-database";
 /// Never rotated: every recording made is sealed to it.
