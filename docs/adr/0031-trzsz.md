@@ -67,27 +67,32 @@ A trigger counts only whole: `::TRZSZ:TRANSFER:`, the mode, a version,
 the 13-digit id, an optional port, and CR LF, in raw bytes. A line from
 tmux control mode (`%output`) carrying one is shown, never answered. An
 id seen before in the session is shown, never answered: `cat` of a log
-or a replayed recording repeats ids. Output is held from `::TRZSZ`; the
+or a replayed recording repeats ids. An offer looked at and not put to
+the user, of either protocol, is never looked at again: what is kept
+for the next read starts past it. Output is held from `::TRZSZ`; the
 `ESC[s` before it reaches the view, since the server's last message
 restores that cursor and clears below it.
 
 The gate is ADR 0025's: output held up to 256 KiB, a numbered offer,
-400 ms before the buttons act, keys refused, Ctrl+C declines, and 10 s
-in which a new offer goes unanswered. Nothing is written to the host
+400 ms before the buttons act, keys refused, and Ctrl+C declines. The
+10 s after a decline in which a new Zmodem offer goes unanswered does
+not hold for trzsz: `sz` asks again and again, `tsz` prints its trigger
+once, and a repeat id is passed already. Nothing is written to the host
 until the user accepts; for an upload, the backend's file dialog (ADR
 0026) comes first.
 
 A decline the user makes, or Ctrl+C, writes one `0x03`: a waiting `trz`
 or `tsz` reads it as an interrupt, prints `Interrupted` and exits, and
 anything else that printed the trigger gets what Ctrl+C would send. A
-decline the pump makes (too much held, or within the 10 s) writes
+decline the pump makes (too much held) writes
 nothing, so text never goes into a program that only printed the
 trigger.
 
 ### What the host's configuration may set
 
 After `#ACT:`, the host's `#CFG:` must come within 20 s, or the offer
-ends with nothing more written. It is a flat JSON object; the domain
+ends with nothing more written; an upload no `trz` answered starts the
+10 s as a decline does. It is a flat JSON object; the domain
 reads it with a small reader of its own (it takes no serde), bounded to
 64 KiB of JSON and 32 levels. The transfer stops before any file if it
 asks for binary, folders, a newline other than LF, or a protocol other
@@ -111,9 +116,10 @@ characters, Windows device names, trailing dots or spaces, or more than
 `ReceiveFolder`: created new under a part name, never over a file and
 never through a link, moved to their name, a taken name getting a
 number. The file becomes its name only once the host's MD5 matches; a
-mismatch removes it. `#SUCC` tells the host the name only, and the
-`#EXIT:` text names no local folder, which would tell the host the
-user's name.
+mismatch removes it. `#SUCC` and the `#EXIT:` text give the host back
+the names it sent, made safe, never the names saved: a taken name's
+number would tell the host what the folder holds, and a folder would
+tell it the user's name.
 
 ### Limits
 
@@ -125,10 +131,17 @@ The line reader resumes from where it stopped scanning, so a long line
 in small reads costs O(n), not O(n²). Each download holds at most about
 30 MiB.
 
-An upload starts with 64 KiB chunks and doubles them while a chunk is
-acknowledged within 500 ms, up to the host's `bufsize` or 1 MiB. Chunks
-go out through ADR 0026's queue, at most 1 KiB per write, read while
-fewer than 128 KiB wait, with epochs so a stop drops what has not left.
+An upload starts with 16 KiB chunks and doubles them while a chunk is
+acknowledged within 500 ms, up to the host's `bufsize` or 1 MiB; one
+acknowledged after 2 s or more shrinks to what goes in 500 ms, at least
+1 KiB, so a link that slows keeps each line within the host's timeout.
+Chunks go out through ADR 0026's queue, at most 1 KiB per write, read
+while fewer than 128 KiB wait, with epochs so a stop drops what has not
+left. A line's last part, which holds its line end, waits until the
+queue is empty, and goes only if the host printed nothing while the line
+went: `trz` reads a line whole and says nothing before, so output then
+is a shell echoing it. A `trz` gone mid-line thus leaves no line end,
+and the shell never runs a word cut from the middle of a line.
 
 ### Stopping
 
@@ -172,3 +185,7 @@ changes the banner's words; the commands, dialog and file types stay.
 - Live tests run `trz` and `tsz` from pip trzsz 1.1.7 and trzsz-go
   1.2.0 on a scratch sshd, with and without tmux on the host, and kill
   `trz` mid-upload under bash and zsh to check no line runs.
+- A program that prints what someone else writes (a chat client, a log
+  follower) can print a trigger, and, once the user accepts, answer as
+  `trz` would, taking the files the user chose. The user's choice is the
+  gate; the banner names the protocol and the program that asked.
