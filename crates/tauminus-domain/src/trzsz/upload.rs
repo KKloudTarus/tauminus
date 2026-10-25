@@ -15,11 +15,31 @@ use super::{
 };
 use crate::zmodem::{Need, Sent, TransmitError, TransmitOutput};
 
-/// Bytes of a file read per line at first, and at most.
-const FIRST_CHUNK: usize = 64 << 10;
+/// Bytes of a file read per line at first, at least, and at most.
+const FIRST_CHUNK: usize = 16 << 10;
+const MIN_CHUNK: usize = 1 << 10;
 const MAX_CHUNK: usize = 1 << 20;
 /// A chunk acknowledged sooner than this doubles.
 const QUICK: Duration = Duration::from_millis(500);
+/// A chunk acknowledged this late shrinks to what goes in [`QUICK`]: a
+/// link that slowed down keeps each line well within the host's timeout.
+const SLOW: Duration = Duration::from_secs(2);
+
+/// The next chunk's size: `chunk` bytes of a full chunk of `len` were
+/// acknowledged after `took`; at most `most`. O(1).
+pub(super) fn next_chunk(chunk: usize, len: usize, took: Duration, most: usize) -> usize {
+    if took >= SLOW {
+        let fits = u128::from(u32::try_from(QUICK.as_millis()).unwrap_or(u32::MAX)) * len as u128
+            / took.as_millis().max(1);
+        return usize::try_from(fits)
+            .unwrap_or(MIN_CHUNK)
+            .clamp(MIN_CHUNK, chunk);
+    }
+    if len == chunk && took < QUICK {
+        return (chunk * 2).min(most);
+    }
+    chunk
+}
 /// Bytes of a line written per poll: the caller's queue stays bounded.
 const PART: usize = 1 << 10;
 /// How long the host's configuration may take.
@@ -49,9 +69,12 @@ pub struct Upload {
     lines: Lines,
     step: Step,
     config: Option<Config>,
-    /// The line being written, and how much of it went.
+    /// The line being written, and how much of it went. Its last part,
+    /// which holds its line end, waits for the caller's queue to empty:
+    /// see [`Need::Hold`].
     outbox: Vec<u8>,
     written: usize,
+    released: bool,
     size: u64,
     sent: u64,
     /// The bytes of the last data line, for its acknowledgement.
@@ -90,6 +113,7 @@ impl Upload {
             config: None,
             outbox: Vec::new(),
             written: 0,
+            released: false,
             size: 0,
             sent: 0,
             chunk_len: 0,
@@ -161,12 +185,25 @@ impl Upload {
     /// bytes. Writes at most [`PART`] bytes of a line per call. O(bytes).
     pub fn poll(&mut self, out: &mut TransmitOutput) -> Need {
         if self.written < self.outbox.len() {
+            // The line end goes once all before it left, and nothing came
+            // back meanwhile: a `trz` gone mid-line leaves no line end for
+            // a shell to run the rest by.
+            let last = self.outbox.len().saturating_sub(PART);
+            if self.written >= last && !self.released {
+                return Need::Hold;
+            }
             let end = (self.written + PART).min(self.outbox.len());
+            let end = if self.released {
+                end
+            } else {
+                end.min(last.max(1))
+            };
             out.wire.extend_from_slice(&self.outbox[self.written..end]);
             self.written = end;
             if self.written == self.outbox.len() {
                 self.outbox.clear();
                 self.written = 0;
+                self.released = false;
             }
             return Need::Write;
         }
@@ -182,6 +219,12 @@ impl Upload {
             }
             _ => Need::Wait,
         }
+    }
+
+    /// The caller's queue is empty after a [`Need::Hold`]: the line's end
+    /// may go.
+    pub fn release(&mut self) {
+        self.released = true;
     }
 
     /// The bytes asked for by the last [`Need::Read`].
@@ -206,6 +249,20 @@ impl Upload {
         if self.ended() {
             return;
         }
+        // `trz` reads a line whole and says nothing before: output while
+        // one goes is a shell echoing it, or tmux, which only draws its
+        // status.
+        let junk = self.config.as_ref().is_some_and(|config| config.junk);
+        if self.written > 0
+            && !input.is_empty()
+            && (!junk || memchr::memmem::find(input, b"#DATA:").is_some())
+        {
+            self.stop(
+                out,
+                "the host printed while a line went: trz is gone".into(),
+            );
+            return;
+        }
         self.lines.push(input);
         while !matches!(self.step, Step::Ended | Step::Idle | Step::Read) {
             let expect = match self.step {
@@ -223,8 +280,14 @@ impl Upload {
                     let text = decode(&line.payload, MAX_LINE)
                         .map(|bytes| shown_message(&String::from_utf8_lossy(&bytes)))
                         .unwrap_or_default();
-                    // The host is leaving: nothing more is written to it.
-                    self.end(out, format!("the host stopped the transfer: {text}").into());
+                    // The host is leaving: nothing more is written to it,
+                    // but for what drops a line it left half sent.
+                    let reason = format!("the host stopped the transfer: {text}");
+                    if self.written == 0 {
+                        self.end(out, reason.into());
+                    } else {
+                        self.stop(out, reason.into());
+                    }
                 }
                 Ok(Some(line)) => self.fail(
                     out,
@@ -242,7 +305,10 @@ impl Upload {
 
     /// Nothing came for [`Self::timeout`].
     pub fn timed_out(&mut self, out: &mut TransmitOutput) {
-        if !matches!(self.step, Step::Ended | Step::Idle | Step::Read) {
+        if self.config.is_none() && !self.ended() {
+            // Maybe no `trz` at all: nothing more is written to it.
+            self.end(out, "the host never answered as trz does".into());
+        } else if !matches!(self.step, Step::Ended | Step::Idle | Step::Read) {
             self.stop(out, "the host stopped answering".into());
         }
     }
@@ -269,6 +335,7 @@ impl Upload {
         }
         self.outbox.clear();
         self.written = 0;
+        self.released = false;
         out.wire.extend_from_slice(b"\x03\x05\x15");
         self.end(out, reason);
     }
@@ -366,7 +433,7 @@ impl Upload {
     }
 
     /// A chunk taken soon doubles the next, up to the host's chunk size
-    /// and 1 MiB.
+    /// and 1 MiB; one taken late shrinks it.
     fn grow(&mut self) {
         let most = self
             .config
@@ -374,9 +441,7 @@ impl Upload {
             .and_then(|config| usize::try_from(config.bufsize).ok())
             .unwrap_or(MAX_CHUNK)
             .min(MAX_CHUNK);
-        if self.chunk_len == self.chunk && self.chunk_at.elapsed() < QUICK {
-            self.chunk = (self.chunk * 2).min(most);
-        }
+        self.chunk = next_chunk(self.chunk, self.chunk_len, self.chunk_at.elapsed(), most);
     }
 
     fn end_well(&mut self, out: &mut TransmitOutput) {

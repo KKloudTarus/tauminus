@@ -2065,6 +2065,48 @@ mod transfers {
     }
 
     #[tokio::test]
+    async fn tsz_run_again_after_a_decline_is_offered_at_once() {
+        let mut w = world();
+        offered(&mut w).await;
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Decline)
+            .unwrap();
+        assert_eq!(said(&mut w, 1).await, ["\x03"]);
+        // trzsz prints its trigger once: no cooldown keeps it waiting.
+        let mut again = b"Interrupted\r\n$ tsz notes.txt\r\n".to_vec();
+        again.extend_from_slice(b"\x1b[s::TRZSZ:TRANSFER:S:1.2.0:1729812345700:0\r\n");
+        host(&w, again).await;
+        until("the second offer", || {
+            w.host.offers.load(Ordering::Relaxed) == 2
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_offer_passed_in_the_cooldown_is_never_offered_later() {
+        let w = world();
+        host(&w, OFFER.to_vec()).await;
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        w.sessions
+            .answer_transfer(w.id, 1, TransferAnswer::Decline)
+            .unwrap();
+        until("declined", || !w.host.events().is_empty()).await;
+        // sz asks once more within the cooldown, then gives up after it.
+        host(&w, b"\r\n**\x18B00000000000000\r\x8a\x11".to_vec()).await;
+        tokio::time::sleep(transfer::COOLDOWN + Duration::from_millis(100)).await;
+        host(&w, b"\r\nsz: giving up\r\n$ ".to_vec()).await;
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert_eq!(w.host.offers.load(Ordering::Relaxed), 1);
+        // A trzsz trigger seen once and refused is not looked at again.
+        let w = world();
+        host(&w, b"::TRZSZ:TRANSFER:D:1.2.0:1729812345800:0\r\n".to_vec()).await;
+        until("the reason", || w.host.events().len() == 1).await;
+        host(&w, b"$ ".to_vec()).await;
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert_eq!(w.host.events().len(), 1, "told once");
+    }
+
+    #[tokio::test]
     async fn files_go_to_trz_whole_as_base64_lines() {
         let mut w = world();
         host(

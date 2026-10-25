@@ -119,6 +119,9 @@ pub enum Need {
     /// Bytes for the host were written: poll again. A long line goes out
     /// a part at a time, so the caller's queue stays bounded.
     Write,
+    /// The rest waits until the caller's queue is empty; then release it
+    /// and poll again.
+    Hold,
     /// The send ended.
     Ended,
 }

@@ -46,7 +46,10 @@ pub struct Download {
     size: u64,
     got: u64,
     md5: md5::Context,
-    saved: Vec<String>,
+    /// The names the host sent, made safe: what it hears back. The names
+    /// files were saved under stay here, as they tell what the folder
+    /// held.
+    names: Vec<String>,
     completed: bool,
 }
 
@@ -76,7 +79,7 @@ impl Download {
             size: 0,
             got: 0,
             md5: md5::Context::new(),
-            saved: Vec::new(),
+            names: Vec::new(),
             completed: false,
         }
     }
@@ -113,21 +116,30 @@ impl Download {
         input.len()
     }
 
-    /// The caller saved the file the last [`Received::File`] named, as
-    /// `saved`: the host hears that name, and the transfer goes on.
-    pub fn named(&mut self, saved: &str, out: &mut Output) {
+    /// The caller saved the file the last [`Received::File`] named: the
+    /// transfer goes on. The host hears the name it sent, made safe, not
+    /// the one saved, which would tell it what names the folder holds.
+    pub fn named(&mut self, out: &mut Output) {
         if self.step != Step::Saving {
             return;
         }
-        self.saved.push(saved.to_owned());
+        let name = self.names.last().cloned().unwrap_or_default();
         out.wire
-            .extend_from_slice(&frame("SUCC", &encode(saved.as_bytes())));
+            .extend_from_slice(&frame("SUCC", &encode(name.as_bytes())));
         self.step = Step::Size;
         self.run(out);
     }
 
-    /// Nothing came for [`Self::timeout`].
+    /// Nothing came for [`Self::timeout`]. Before the host's
+    /// configuration, it may have been no `tsz` at all: nothing more is
+    /// written to it.
     pub fn timed_out(&mut self, out: &mut Output) {
+        if self.config.is_none() {
+            if !self.ended() {
+                self.end(out, "the host never answered as tsz does".into());
+            }
+            return;
+        }
         self.abort(out, "the host stopped answering");
     }
 
@@ -226,6 +238,7 @@ impl Download {
                 let name = incoming_name(&raw, self.os).map_err(|shown| {
                     TrzszError::Protocol(format!("a name that cannot be saved: {shown}"))
                 })?;
+                self.names.push(name.clone());
                 out.received.push(Received::File { name, size: None });
                 self.step = Step::Saving;
             }
@@ -285,8 +298,8 @@ impl Download {
             self.step = Step::Name;
             return;
         }
-        let mut text = format!("Saved {} file(s)", self.saved.len());
-        for name in &self.saved {
+        let mut text = format!("Saved {} file(s)", self.names.len());
+        for name in &self.names {
             text.push_str("\r\n- ");
             text.push_str(name);
         }
