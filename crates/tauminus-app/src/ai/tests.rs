@@ -687,3 +687,38 @@ async fn an_explanation_sent_while_the_pane_is_busy_can_be_sent_again() {
     *world.transport.hold.lock().unwrap() = None;
     world.assistant.explain(id, preview.id).await.unwrap();
 }
+
+#[tokio::test]
+async fn a_host_held_for_sync_review_lends_no_output() {
+    let World {
+        assistant,
+        sessions,
+        hosts,
+        vault,
+        transport,
+    } = world().await;
+    let notes = Arc::new(crate::fakes::FakeTrustStore::default());
+    let mut held = crate::trust::Approvals::new();
+    held.insert(HostId::parse("db").unwrap(), None);
+    let (_, read) = crate::ports::TrustStore::load(&*notes).await.unwrap();
+    crate::ports::TrustStore::save(&*notes, &held, read)
+        .await
+        .unwrap();
+    let trust = Arc::new(crate::trust::Trust::open(notes).await.unwrap());
+    let world = World {
+        assistant: assistant.with_trust(trust, None),
+        sessions,
+        hosts,
+        vault,
+        transport,
+    };
+    // Another device turned the leave on; this device has not seen it.
+    world.leave(Some(true), None).await;
+    let id = world
+        .session(saved(SessionKind::Ssh, "db.example.com"))
+        .await;
+    assert!(matches!(
+        world.assistant.preview(id).await,
+        Err(AssistantError::OutputNotAllowed)
+    ));
+}

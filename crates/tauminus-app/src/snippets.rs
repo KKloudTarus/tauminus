@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use tauminus_domain::{HostsError, Library, SnippetError, SnippetId};
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 
+use crate::hosts::Reading;
 use crate::ports::{SnippetStore, StoreError};
 
 #[derive(Debug, Error)]
@@ -33,6 +34,7 @@ pub struct Skipped {
 pub struct SnippetBook {
     store: Arc<dyn SnippetStore>,
     library: Mutex<Library>,
+    revision: watch::Sender<u64>,
 }
 
 impl std::fmt::Debug for SnippetBook {
@@ -47,6 +49,7 @@ impl SnippetBook {
         Ok(Self {
             store,
             library: Mutex::new(library),
+            revision: watch::Sender::new(0),
         })
     }
 
@@ -63,6 +66,14 @@ impl SnippetBook {
         &self,
         change: impl FnOnce(&mut Library) -> Result<(), SnippetError>,
     ) -> Result<Library, SnippetBookError> {
+        Ok(self.edit_both(change).await?.1)
+    }
+
+    /// As [`SnippetBook::edit`], and the library just before the change.
+    pub async fn edit_both(
+        &self,
+        change: impl FnOnce(&mut Library) -> Result<(), SnippetError>,
+    ) -> Result<(Library, Library), SnippetBookError> {
         let mut current = self.library.lock().await;
         let mut next = current.clone();
         change(&mut next)?;
@@ -71,12 +82,14 @@ impl SnippetBook {
             Err(StoreError::Conflict) => {
                 // Take the other window's library, so the next try builds on it.
                 *current = self.store.load().await?;
+                self.revision.send_modify(|r| *r += 1);
                 return Err(StoreError::Conflict.into());
             }
             Err(e) => return Err(e.into()),
         }
-        *current = next.clone();
-        Ok(next)
+        let before = std::mem::replace(&mut *current, next.clone());
+        self.revision.send_modify(|r| *r += 1);
+        Ok((before, next))
     }
 
     /// Replaces the library with `next` if it is still `expected`, and
@@ -93,8 +106,28 @@ impl SnippetBook {
         if *current != next {
             self.store.save(&next).await?;
             *current = next;
+            self.revision.send_modify(|r| *r += 1);
         }
         Ok(true)
+    }
+
+    /// As [`SnippetBook::replace_if`], and only while `hosts` still holds
+    /// `hosts_now`: a sync saves the snippets after the hosts, and a host
+    /// edited in between may list a snippet the merge changed without its
+    /// note. Takes the hosts' lock, then the snippets', as
+    /// [`crate::trust::Trust::check`] does.
+    pub async fn replace_if_hosts(
+        &self,
+        expected: &Library,
+        next: Library,
+        hosts: &crate::HostBook,
+        hosts_now: &tauminus_domain::Inventory,
+    ) -> Result<bool, SnippetBookError> {
+        let inventory = hosts.reading().await;
+        if *inventory != *hosts_now {
+            return Ok(false);
+        }
+        self.replace_if(expected, next).await
     }
 
     /// What to type to run snippet `id` with `values`. O(n + output).
@@ -110,29 +143,44 @@ impl SnippetBook {
         snippet.command(values)
     }
 
-    /// What to type for a host's startup snippets, in order, with their
-    /// defaults: one string for those that can run, and the rest with the
-    /// reason. A snippet deleted since, or with a placeholder that has no
-    /// default, is skipped. O(Σ n).
+    /// What to type for a host's startup snippets; see [`startup_text`].
     pub async fn startup(&self, ids: &[SnippetId]) -> (String, Vec<Skipped>) {
-        let library = self.library.lock().await;
-        let mut text = String::new();
-        let mut skipped = Vec::new();
-        for id in ids {
-            let result = library
-                .get(id)
-                .ok_or_else(|| SnippetError::NoSuch(id.clone()))
-                .and_then(|s| s.command(&BTreeMap::new()));
-            match result {
-                Ok(command) => text.push_str(&command),
-                Err(error) => skipped.push(Skipped {
-                    id: id.clone(),
-                    reason: error.to_string(),
-                }),
-            }
-        }
-        (text, skipped)
+        startup_text(&*self.library.lock().await, ids)
     }
+
+    /// The library as it is now, without a copy, read-only. Holds its lock
+    /// until dropped.
+    pub async fn reading(&self) -> Reading<'_, Library> {
+        Reading::new(self.library.lock().await)
+    }
+
+    /// Bumped on every change to the library, a sync's included.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.revision.subscribe()
+    }
+}
+
+/// What to type for a host's startup snippets, in order, with their
+/// defaults: one string for those that can run, and the rest with the
+/// reason. A snippet deleted since, or with a placeholder that has no
+/// default, is skipped. O(Σ n).
+pub fn startup_text(library: &Library, ids: &[SnippetId]) -> (String, Vec<Skipped>) {
+    let mut text = String::new();
+    let mut skipped = Vec::new();
+    for id in ids {
+        let result = library
+            .get(id)
+            .ok_or_else(|| SnippetError::NoSuch(id.clone()))
+            .and_then(|s| s.command(&BTreeMap::new()));
+        match result {
+            Ok(command) => text.push_str(&command),
+            Err(error) => skipped.push(Skipped {
+                id: id.clone(),
+                reason: error.to_string(),
+            }),
+        }
+    }
+    (text, skipped)
 }
 
 #[cfg(test)]

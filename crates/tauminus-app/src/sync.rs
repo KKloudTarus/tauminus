@@ -9,6 +9,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::ports::{Merged, StoreError, SyncData, SyncError, SyncPart, SyncRemote};
+use crate::trust::Trust;
 use crate::{HostBook, HostBookError, SnippetBook, SnippetBookError};
 
 /// Merges tried before giving up to edits that keep coming in.
@@ -24,6 +25,8 @@ pub enum SyncRunError {
     Snippets(#[from] SnippetBookError),
     #[error("the lists kept changing while syncing; try again")]
     Busy,
+    #[error("the sync review list could not be saved: {0}")]
+    Review(StoreError),
 }
 
 impl From<StoreError> for SyncRunError {
@@ -39,8 +42,9 @@ pub struct Syncer {
 }
 
 impl Syncer {
-    /// Merges, saves, publishes. A list edited while the merge ran is
-    /// merged again, at most three times. O(H + G + S) plus the target.
+    /// Merges, notes what the merge changes for `trust`, saves, publishes.
+    /// A list edited while the merge ran is merged again, at most three
+    /// times. O(H·(d + Σ startup) + G + S) plus the target.
     ///
     /// # Errors
     /// The target, its objects, a newer device, invalid merged lists, or
@@ -49,6 +53,7 @@ impl Syncer {
         &self,
         hosts: &HostBook,
         snippets: &SnippetBook,
+        trust: &Trust,
         remote: &dyn SyncRemote,
     ) -> Result<Merged, SyncRunError> {
         let _one = self.running.lock().await;
@@ -58,6 +63,12 @@ impl Syncer {
                 snippets: snippets.snapshot().await,
             };
             let merged = remote.merge(local.clone()).await?;
+            // Noted before anything is saved: a crash after the save
+            // leaves no change unseen.
+            trust
+                .note(&local, &merged.data)
+                .await
+                .map_err(SyncRunError::Review)?;
             // Each list saved is adopted at once: a sync that stops after
             // this compares against what this device holds, so it never
             // takes another device's values for edits of its own.
@@ -69,7 +80,12 @@ impl Syncer {
             }
             remote.adopt(SyncPart::Hosts).await?;
             if !snippets
-                .replace_if(&local.snippets, merged.data.snippets.clone())
+                .replace_if_hosts(
+                    &local.snippets,
+                    merged.data.snippets.clone(),
+                    hosts,
+                    &merged.data.hosts,
+                )
                 .await?
             {
                 continue;
@@ -81,6 +97,11 @@ impl Syncer {
         Err(SyncRunError::Busy)
     }
 }
+
+mod schedule;
+mod service;
+pub use schedule::{EVERY, SETTLE};
+pub use service::{Report, Setup, Status, Summary, SyncService, SyncServiceError, shown};
 
 #[cfg(test)]
 mod tests;

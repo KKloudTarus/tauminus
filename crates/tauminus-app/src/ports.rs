@@ -572,6 +572,79 @@ pub enum SyncError {
     Invalid(String),
 }
 
+/// Where sync reads and writes: a folder another tool shares, or a git
+/// remote. A remote's address may hold a token, so `Debug` hides it.
+#[derive(Clone, PartialEq, Eq)]
+pub enum SyncTarget {
+    Folder(String),
+    Git(Secret),
+}
+
+impl fmt::Debug for SyncTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Folder(path) => f.debug_tuple("Folder").field(path).finish(),
+            Self::Git(_) => f.write_str("Git(..)"),
+        }
+    }
+}
+
+/// A sync key, as the vault keeps it. Wiped when dropped.
+pub type SyncKeyBytes = Zeroizing<[u8; 32]>;
+
+/// Reaches sync targets and runs their slow setup. Keeps the target last
+/// opened, so what it learns, such as a git tip it refused, lasts from one
+/// sync to the next; `close` drops it, with any token its address holds.
+pub trait SyncConnector: Send + Sync + 'static {
+    /// Starts sync on an empty `target`: a new key, wrapped there under
+    /// `passphrase`. Runs Argon2id.
+    fn create<'a>(
+        &'a self,
+        target: &'a SyncTarget,
+        passphrase: &'a Secret,
+    ) -> BoxFuture<'a, Result<SyncKeyBytes, SyncError>>;
+    /// The key `target` holds, unwrapped with `passphrase`. Runs Argon2id.
+    fn join<'a>(
+        &'a self,
+        target: &'a SyncTarget,
+        passphrase: &'a Secret,
+    ) -> BoxFuture<'a, Result<SyncKeyBytes, SyncError>>;
+    /// The other devices, through `target`, sealed with `key`.
+    fn open(
+        &self,
+        target: &SyncTarget,
+        key: &SyncKeyBytes,
+    ) -> Result<Arc<dyn SyncRemote>, SyncError>;
+    fn close(&self);
+    /// Removes what this device kept about the last target: the next sync
+    /// starts as a first one.
+    fn wipe(&self) -> BoxFuture<'_, Result<(), SyncError>>;
+}
+
+/// Keeps the hosts a sync changed and what this device approved for each
+/// ([`crate::trust`]). Written durably: a note lost in a crash lets a
+/// change through unseen.
+pub trait TrustStore: Send + Sync + 'static {
+    /// None noted when nothing was saved yet, and the version read. Read
+    /// at every use of a saved host: an adapter may keep what it parsed
+    /// while the file holds the same bytes.
+    fn load(
+        &self,
+    ) -> BoxFuture<'_, Result<(Arc<crate::trust::Approvals>, StoreVersion), StoreError>>;
+    /// Saves `approvals` if the store still holds version `read`;
+    /// [`StoreError::Conflict`] when another window saved since.
+    fn save<'a>(
+        &'a self,
+        approvals: &'a crate::trust::Approvals,
+        read: StoreVersion,
+    ) -> BoxFuture<'a, Result<(), StoreError>>;
+}
+
+/// Which saved contents a load read, for a save to compare against: a hash
+/// of the bytes, or `None` when nothing was saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreVersion(pub Option<u64>);
+
 /// One of the lists a sync saves on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncPart {

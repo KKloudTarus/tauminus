@@ -25,10 +25,11 @@ mod serial;
 mod session;
 mod snippets;
 mod ssh;
-mod sync;
+pub mod sync;
 mod telnet;
 mod tmux;
 mod triggers;
+pub mod trust;
 pub mod vault;
 
 pub use ai::{AiSettings, AiSettingsInput, Assistant, AssistantError, Preview, Reply};
@@ -39,14 +40,14 @@ pub use files::{
 };
 pub use fill::{Fill, FillError, Offer};
 pub use forwards::{Forwards, HostMark, RuleState, StartError, Ticket};
-pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport};
+pub use hosts::{HostBook, HostBookError, IMPORT_GROUP, ImportReport, Reading};
 pub use local::LocalShells;
 pub use mosh::{MoshOpenError, MoshSessions};
 pub use serial::SerialSessions;
 pub use session::{RECENT_OUTPUT, SessionConfig, SessionError, SessionManager, SessionSlot};
-pub use snippets::{Skipped, SnippetBook, SnippetBookError};
+pub use snippets::{Skipped, SnippetBook, SnippetBookError, startup_text};
 pub use ssh::{SshOpenError, SshSessions};
-pub use sync::{SyncRunError, Syncer};
+pub use sync::{SyncRunError, SyncService, SyncServiceError, Syncer};
 pub use telnet::TelnetSessions;
 pub use tmux::{
     ControlId, Opened, TabWindow, TmuxError, TmuxSessions, TopologyEvent, TopologySink,

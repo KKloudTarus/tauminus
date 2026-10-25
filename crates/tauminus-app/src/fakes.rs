@@ -422,3 +422,56 @@ impl crate::ports::TriggerStore for FakeTriggerStore {
         format!("set{}", self.ids.fetch_add(1, Ordering::SeqCst))
     }
 }
+
+/// The sync review notes in memory. `fail_next` makes the next save fail.
+/// The version is a count of saves.
+#[derive(Default)]
+pub(crate) struct FakeTrustStore {
+    saved: Mutex<(crate::trust::Approvals, u64)>,
+    fail: AtomicBool,
+}
+
+impl FakeTrustStore {
+    pub(crate) fn saved(&self) -> crate::trust::Approvals {
+        self.saved.lock().unwrap().0.clone()
+    }
+
+    pub(crate) fn fail_next(&self) {
+        self.fail.store(true, Ordering::SeqCst);
+    }
+}
+
+impl crate::ports::TrustStore for FakeTrustStore {
+    fn load(
+        &self,
+    ) -> BoxFuture<
+        '_,
+        Result<
+            (Arc<crate::trust::Approvals>, crate::ports::StoreVersion),
+            crate::ports::StoreError,
+        >,
+    > {
+        let (saved, version) = self.saved.lock().unwrap().clone();
+        Box::pin(async move { Ok((Arc::new(saved), crate::ports::StoreVersion(Some(version)))) })
+    }
+
+    fn save<'a>(
+        &'a self,
+        approvals: &'a crate::trust::Approvals,
+        read: crate::ports::StoreVersion,
+    ) -> BoxFuture<'a, Result<(), crate::ports::StoreError>> {
+        Box::pin(async move {
+            if self.fail.swap(false, Ordering::SeqCst) {
+                return Err(crate::ports::StoreError::Io(std::io::Error::other(
+                    "disk full",
+                )));
+            }
+            let mut saved = self.saved.lock().unwrap();
+            if read != crate::ports::StoreVersion(Some(saved.1)) {
+                return Err(crate::ports::StoreError::Conflict);
+            }
+            *saved = (approvals.clone(), saved.1 + 1);
+            Ok(())
+        })
+    }
+}

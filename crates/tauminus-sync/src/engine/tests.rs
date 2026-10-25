@@ -8,9 +8,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tauminus_app::ports::SyncPart;
+use tauminus_app::trust::{Trust, TrustError};
 use tauminus_app::{HostBook, SnippetBook, Syncer};
 use tauminus_domain::{Host, HostId, HostName, Label};
-use tauminus_store::{JsonHostStore, JsonSnippetStore};
+use tauminus_store::{JsonHostStore, JsonSnippetStore, JsonTrustStore};
 
 use super::*;
 use crate::seal::Kdf;
@@ -19,6 +20,7 @@ use crate::target::Folder;
 struct Device {
     hosts: HostBook,
     snippets: SnippetBook,
+    trust: Trust,
     remote: Remote,
 }
 
@@ -38,6 +40,9 @@ async fn device(dir: &Path, target: &Arc<Folder>, key: SyncKey) -> Device {
         snippets: SnippetBook::open(Arc::new(JsonSnippetStore::new(dir.join("snippets.json"))))
             .await
             .unwrap(),
+        trust: Trust::open(Arc::new(JsonTrustStore::new(dir.join("sync-review.json"))))
+            .await
+            .unwrap(),
         remote: Remote::new(
             Arc::clone(target) as Arc<dyn Target>,
             key,
@@ -49,7 +54,7 @@ async fn device(dir: &Path, target: &Arc<Folder>, key: SyncKey) -> Device {
 impl Device {
     async fn sync(&self) -> Merged {
         Syncer::default()
-            .run(&self.hosts, &self.snippets, &self.remote)
+            .run(&self.hosts, &self.snippets, &self.trust, &self.remote)
             .await
             .unwrap()
     }
@@ -277,7 +282,7 @@ async fn a_wrong_passphrase_and_a_newer_device_stop_the_sync() {
         )
         .unwrap();
     let result = Syncer::default()
-        .run(&b.hosts, &b.snippets, &b.remote)
+        .run(&b.hosts, &b.snippets, &b.trust, &b.remote)
         .await;
     assert!(
         matches!(
@@ -544,7 +549,7 @@ async fn a_device_that_lost_its_state_does_not_undo_newer_edits() {
     // A loses its sync state, as on a reinstall, with its old hosts.json.
     std::fs::remove_file(root.join("a").join("sync-state.json")).unwrap();
     let on_a = Syncer::default()
-        .run(&a.hosts, &a.snippets, &a.remote)
+        .run(&a.hosts, &a.snippets, &a.trust, &a.remote)
         .await
         .unwrap();
     assert!(!on_a.clashes.is_empty(), "A is told its old values lost");
@@ -1623,5 +1628,65 @@ async fn folders_that_will_not_go_never_fill_what_is_remembered_of_them() {
     for inner in planted {
         std::fs::set_permissions(&inner, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn a_proxy_command_from_another_device_waits_for_the_user_here() {
+    let (a, b, root) = pair("trust").await;
+    a.hosts
+        .edit(|i| i.put_host(new_host("h1", "db", "db.internal")))
+        .await
+        .unwrap();
+    a.sync().await;
+    b.sync().await;
+    let id = HostId::parse("h1").unwrap();
+    let Err(TrustError::NeedsReview(review)) =
+        b.trust.check(&b.hosts, Some(&b.snippets), &id).await
+    else {
+        panic!("a host from A is used on B unseen");
+    };
+    assert!(review.new);
+    b.trust
+        .accept(
+            &b.hosts,
+            Some(&b.snippets),
+            &[(id.clone(), review.fingerprint)],
+        )
+        .await
+        .unwrap();
+    b.trust
+        .check(&b.hosts, Some(&b.snippets), &id)
+        .await
+        .unwrap();
+    // A's own edits are its own.
+    a.trust
+        .check(&a.hosts, Some(&a.snippets), &id)
+        .await
+        .unwrap();
+
+    a.hosts
+        .edit(|i| {
+            let mut host = i.host(&id).unwrap().clone();
+            host.settings.route = Some(tauminus_domain::Route::ProxyCommand("nc %h %p".into()));
+            i.put_host(host)
+        })
+        .await
+        .unwrap();
+    a.sync().await;
+    b.sync().await;
+    // Read back from disk, as after a restart.
+    let reopened = Trust::open(Arc::new(JsonTrustStore::new(
+        root.join("b").join("sync-review.json"),
+    )))
+    .await
+    .unwrap();
+    let Err(TrustError::NeedsReview(review)) =
+        reopened.check(&b.hosts, Some(&b.snippets), &id).await
+    else {
+        panic!("a synced ProxyCommand is used unseen");
+    };
+    assert!(!review.new);
+    assert!(review.lines.iter().any(|l| l.value.contains("nc %h %p")));
     let _ = std::fs::remove_dir_all(&root);
 }

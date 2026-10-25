@@ -6,6 +6,7 @@
 //! its own sealed objects, each holding its whole merged state; merging
 //! is per field, by hybrid logical clock stamps.
 
+pub mod connector;
 pub mod doc;
 pub mod engine;
 pub mod flat;

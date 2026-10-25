@@ -21,6 +21,7 @@ pub(crate) struct Memory {
     history: Arc<StdMutex<Option<HistoryKeys>>>,
     recordings: Arc<StdMutex<Option<[u8; 32]>>>,
     ai_key: Arc<StdMutex<Option<AiKey>>>,
+    sync: Arc<StdMutex<Option<SyncSetup>>>,
 }
 
 struct MemoryOpen {
@@ -174,6 +175,15 @@ impl OpenVault for MemoryOpen {
 
     fn set_ai_key(&mut self, key: Option<&AiKey>) -> Result<(), VaultError> {
         self.owner.ai_key.lock().unwrap().clone_from(&key.cloned());
+        Ok(())
+    }
+
+    fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError> {
+        Ok(self.owner.sync.lock().unwrap().clone())
+    }
+
+    fn set_sync_setup(&mut self, setup: Option<&SyncSetup>) -> Result<(), VaultError> {
+        self.owner.sync.lock().unwrap().clone_from(&setup.cloned());
         Ok(())
     }
 
@@ -813,4 +823,27 @@ async fn turning_presence_on_without_the_keychain_asks_nothing() {
         Err(VaultError::Invalid(_))
     ));
     assert_eq!(answer.asked(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sync_setup_is_kept_and_reading_it_is_no_use() {
+    let (_, vault) = vault();
+    assert_eq!(vault.sync_setup().await.unwrap_err(), VaultError::Locked);
+    vault.create(secret("correct horse")).await.unwrap();
+    assert!(vault.sync_setup().await.unwrap().is_none());
+    vault
+        .save_sync_setup(Some(SyncSetup {
+            target: SyncTarget::Git(secret("https://u:token@example.com/s.git")),
+            key: Zeroizing::new([3; 32]),
+        }))
+        .await
+        .unwrap();
+    let setup = vault.sync_setup().await.unwrap().unwrap();
+    assert_eq!(*setup.key, [3; 32]);
+    assert!(!format!("{setup:?}").contains("token"));
+    tokio::time::advance(DEFAULT_IDLE / 2 + Duration::from_secs(1)).await;
+    vault.sync_setup().await.unwrap();
+    tokio::time::advance(DEFAULT_IDLE / 2).await;
+    // Idle as long as it was: a background sync keeps nothing open.
+    assert_eq!(vault.identities().await, Err(VaultError::Locked));
 }

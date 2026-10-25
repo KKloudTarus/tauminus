@@ -12,6 +12,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+# Already in the tree; fingerprints what a connect to a synced host acts on.
+sha2 = { version = "0.11.1", default-features = false }
 tauminus-domain.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
