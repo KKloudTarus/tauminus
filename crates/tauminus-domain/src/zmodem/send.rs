@@ -116,6 +116,9 @@ pub enum Need {
     Read { offset: u64, max_len: usize },
     /// The host's next bytes.
     Wait,
+    /// Bytes for the host were written: poll again. A long line goes out
+    /// a part at a time, so the caller's queue stays bounded.
+    Write,
     /// The send ended.
     Ended,
 }
@@ -130,7 +133,7 @@ pub enum Sent {
     /// Every file went.
     Done,
     Aborted {
-        reason: &'static str,
+        reason: std::borrow::Cow<'static, str>,
     },
 }
 
@@ -487,7 +490,9 @@ impl Transmit {
     fn end(&mut self, out: &mut TransmitOutput, reason: &'static str) {
         if !self.ended {
             self.ended = true;
-            out.sent.push(Sent::Aborted { reason });
+            out.sent.push(Sent::Aborted {
+                reason: reason.into(),
+            });
         }
     }
 }

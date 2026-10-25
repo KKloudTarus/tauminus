@@ -50,6 +50,12 @@ impl Lines {
         self.scanned
     }
 
+    /// The bytes not read as a line, which are no longer the protocol's.
+    pub fn take_rest(&mut self) -> Vec<u8> {
+        self.scanned = 0;
+        std::mem::take(&mut self.buf)
+    }
+
     /// Bytes taken and not yet read as a line.
     #[must_use]
     pub fn pending(&self) -> usize {

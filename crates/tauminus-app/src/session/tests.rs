@@ -2033,7 +2033,7 @@ mod transfers {
     }
 
     #[tokio::test]
-    async fn a_decline_sends_ctrl_c_and_upload_and_folders_are_told_not_offered() {
+    async fn a_decline_sends_ctrl_c_and_folders_and_windows_are_told_not_offered() {
         let mut w = world();
         offered(&mut w).await;
         w.sessions
@@ -2042,10 +2042,10 @@ mod transfers {
         assert_eq!(said(&mut w, 1).await, ["\x03"]);
         for (trigger, reason) in [
             (
-                &b"::TRZSZ:TRANSFER:R:1.2.0:1729812345700:0\r\n"[..],
-                "trz is not",
+                &b"::TRZSZ:TRANSFER:D:1.2.0:1729812345800:0\r\n"[..],
+                "folders",
             ),
-            (b"::TRZSZ:TRANSFER:D:1.2.0:1729812345800:0\r\n", "folders"),
+            (b"::TRZSZ:TRANSFER:S:1.2.0:1729812345810:0\r\n", "Windows"),
         ] {
             let mut w = world();
             host(&w, trigger.to_vec()).await;
@@ -2062,6 +2062,76 @@ mod transfers {
             );
             assert!(w.input.try_recv().is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn files_go_to_trz_whole_as_base64_lines() {
+        let mut w = world();
+        host(
+            &w,
+            b"\x1b[s::TRZSZ:TRANSFER:R:1.2.0:1729812345900:0\r\n".to_vec(),
+        )
+        .await;
+        until("the offer", || w.host.offers.load(Ordering::Relaxed) == 1).await;
+        assert_eq!(*lock(&w.host.wants), Some(Wants::Send));
+        let big: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
+        w.sessions
+            .answer_transfer(
+                w.id,
+                1,
+                TransferAnswer::Send(vec![
+                    Box::new(MemFile("a.txt", b"hello\n".to_vec())),
+                    Box::new(MemFile("big.bin", big.clone())),
+                ]),
+            )
+            .unwrap();
+        // trz: answers each line as it comes, and keeps the files.
+        let mut got: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut exit = None;
+        while exit.is_none() {
+            for line in said(&mut w, 1).await {
+                let line = line.trim_end_matches('\n');
+                let (kind, payload) = line.split_once(':').unwrap();
+                let value = || decode(payload.as_bytes(), 4 << 20).unwrap();
+                let answer = match kind {
+                    "#ACT" => frame("CFG", &encode(b"{}")),
+                    "#NUM" | "#SIZE" | "#MD5" => frame("SUCC", payload),
+                    "#NAME" => {
+                        got.push((String::from_utf8(value()).unwrap(), Vec::new()));
+                        frame("SUCC", payload)
+                    }
+                    "#DATA" => {
+                        assert!(
+                            payload
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+                        );
+                        let bytes = value();
+                        got.last_mut().unwrap().1.extend_from_slice(&bytes);
+                        frame("SUCC", &bytes.len().to_string())
+                    }
+                    "#EXIT" => {
+                        exit = Some(String::from_utf8(value()).unwrap());
+                        b"\x1b[u\x1b[0JReceived 2 files\r\n$ ".to_vec()
+                    }
+                    other => panic!("{other}"),
+                };
+                host(&w, answer).await;
+            }
+        }
+        assert_eq!(
+            got,
+            [
+                ("a.txt".to_owned(), b"hello\n".to_vec()),
+                ("big.bin".to_owned(), big)
+            ]
+        );
+        until("the end", || {
+            matches!(w.host.events().last(), Some(TransferEvent::Finished { files, .. }) if files.len() == 2)
+        })
+        .await;
+        until("the prompt", || w.sink.output().ends_with(b"$ ")).await;
+        assert!(w.sessions.write(w.id, b"ls\r".to_vec()).await.is_ok());
     }
 
     #[tokio::test]
