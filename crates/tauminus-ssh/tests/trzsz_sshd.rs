@@ -313,3 +313,154 @@ async fn ctrl_c_stops_tsz_and_leaves_the_shell_usable() {
         sessions.close(id).unwrap();
     }
 }
+
+/// A local file in memory, as the desktop's opened file would be.
+#[derive(Debug)]
+struct MemFile(&'static str, Vec<u8>);
+
+impl tauminus_app::ports::OutgoingFile for MemFile {
+    fn name(&self) -> &str {
+        self.0
+    }
+
+    fn size(&self) -> u64 {
+        self.1.len() as u64
+    }
+
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let from = usize::try_from(offset).unwrap().min(self.1.len());
+        let n = buf.len().min(self.1.len() - from);
+        buf[..n].copy_from_slice(&self.1[from..from + n]);
+        Ok(n)
+    }
+}
+
+/// Bytes that look like nothing in particular, the same each run.
+fn noise(len: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state.to_le_bytes()[0]
+        })
+        .collect()
+}
+
+/// Sends a file to `trz` (`command`, run in a fresh folder `dir`), and
+/// checks the host's hash of what it saved.
+async fn give(command: &str, dir: &str) {
+    let scratch = Scratch::new("trz");
+    let (sessions, id, host, screen) = shell(&scratch).await;
+    sessions
+        .write_text(
+            id,
+            format!("rm -rf {dir}; mkdir {dir}; cd {dir} && {command}\n"),
+        )
+        .await
+        .unwrap();
+    until("the offer", || host.offers.load(Ordering::Relaxed) == 1).await;
+    let big = noise(4_000_000);
+    sessions
+        .answer_transfer(
+            id,
+            1,
+            TransferAnswer::Send(vec![
+                Box::new(MemFile("small.txt", b"hello to trz\n".to_vec())),
+                Box::new(MemFile("big.bin", big.clone())),
+            ]),
+        )
+        .unwrap();
+    until("the end", || {
+        matches!(
+            host.events.lock().unwrap().last(),
+            Some(TransferEvent::Finished { .. } | TransferEvent::Failed { .. })
+        )
+    })
+    .await;
+    let events = host.events.lock().unwrap().clone();
+    assert!(
+        matches!(events.last(), Some(TransferEvent::Finished { files, .. }) if files.len() == 2),
+        "{events:?}"
+    );
+    asked(
+        &sessions,
+        id,
+        &screen,
+        &format!("sha256sum {dir}/big.bin"),
+        &hex(&big),
+    )
+    .await;
+    sessions.close(id).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with trzsz: TAUMINUS_TRZSZ_SSHD"]
+async fn python_trz_takes_files_whole() {
+    give("trz", "/tmp/up-py").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with trzsz: TAUMINUS_TRZSZ_SSHD"]
+async fn go_trz_takes_files_whole() {
+    give("/opt/go/trz", "/tmp/up-go").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs an sshd with trzsz: TAUMINUS_TRZSZ_SSHD"]
+async fn trz_killed_mid_file_runs_no_line_of_it_in_bash_or_zsh() {
+    // Each line a command, should a shell run what it reads.
+    let mut lines = Vec::new();
+    while lines.len() < 50_000_000 {
+        lines.extend_from_slice(b"touch /tmp/pwned-trz\n");
+    }
+    for shell_name in ["bash", "zsh"] {
+        let scratch = Scratch::new("trz-kill");
+        let (sessions, id, host, screen) = shell(&scratch).await;
+        sessions
+            .write_text(id, format!("rm -f /tmp/pwned-trz; exec {shell_name}\n"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        sessions
+            .write_text(
+                id,
+                "rm -rf /tmp/k; mkdir /tmp/k; cd /tmp/k && timeout -s KILL 2 /opt/go/trz\n".into(),
+            )
+            .await
+            .unwrap();
+        until("the offer", || host.offers.load(Ordering::Relaxed) == 1).await;
+        sessions
+            .answer_transfer(
+                id,
+                1,
+                TransferAnswer::Send(vec![Box::new(MemFile("lines.sh", lines.clone()))]),
+            )
+            .unwrap();
+        until("the stop", || {
+            matches!(
+                host.events.lock().unwrap().last(),
+                Some(TransferEvent::Failed { .. } | TransferEvent::Finished { .. })
+            )
+        })
+        .await;
+        let events = host.events.lock().unwrap().clone();
+        assert!(
+            matches!(events.last(), Some(TransferEvent::Failed { .. })),
+            "{shell_name}: {events:?}"
+        );
+        // Enter with nothing typed, then ask: nothing ran.
+        sessions.write_text(id, "\n".into()).await.ok();
+        asked(
+            &sessions,
+            id,
+            &screen,
+            "test -e /tmp/pwned-trz && echo RAN-$((1+1)) || echo CLEAN-$((2+2))",
+            "CLEAN-4",
+        )
+        .await;
+        assert!(!screen.text().contains("RAN-2"), "{shell_name}");
+        sessions.close(id).unwrap();
+    }
+}
