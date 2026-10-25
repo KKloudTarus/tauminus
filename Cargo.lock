@@ -5659,6 +5659,8 @@ dependencies = [
 name = "tauminus-domain"
 version = "0.0.0"
 dependencies = [
+ "data-encoding",
+ "flate2",
  "memchr",
  "regex",
  "regex-syntax",
