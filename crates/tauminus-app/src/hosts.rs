@@ -339,6 +339,57 @@ impl HostBook {
     }
 }
 
+impl HostBook {
+    /// What importing `listing` would do, as saved now (ADR 0032).
+    pub async fn cloud_plan(
+        &self,
+        listing: &crate::cloud::Listing,
+        choice: crate::cloud::Address,
+    ) -> crate::cloud::Plan {
+        crate::cloud::plan(&*self.inventory.lock().await, listing, choice)
+    }
+
+    /// Imports `listing`, planned again against the hosts as saved now.
+    ///
+    /// # Errors
+    /// No ids, or the save failing.
+    pub async fn import_cloud(
+        &self,
+        listing: &crate::cloud::Listing,
+        choice: crate::cloud::Address,
+    ) -> Result<(crate::cloud::CloudReport, Inventory), HostBookError> {
+        let room = MAX_HOSTS.min(listing.instances.len());
+        let mut host_ids = Vec::with_capacity(room);
+        for _ in 0..room {
+            host_ids.push(self.new_host_id()?);
+        }
+        let regions: std::collections::HashSet<&str> = listing
+            .instances
+            .iter()
+            .map(|i| i.region.as_str())
+            .collect();
+        let mut group_ids = Vec::with_capacity(regions.len() + 2);
+        for _ in 0..regions.len() + 2 {
+            group_ids.push(self.new_group_id()?);
+        }
+        let mut report = None;
+        let inventory = self
+            .edit(|inventory| {
+                let plan = crate::cloud::plan(inventory, listing, choice);
+                report = Some(crate::cloud::apply(
+                    inventory,
+                    listing,
+                    plan,
+                    host_ids.into_iter(),
+                    group_ids.into_iter(),
+                )?);
+                Ok(())
+            })
+            .await?;
+        Ok((report.unwrap_or_default(), inventory))
+    }
+}
+
 /// Folders nest at most this deep inside the import's group, which takes
 /// one level of [`MAX_GROUP_DEPTH`]; deeper ones are cut there.
 const MAX_FOLDERS: usize = MAX_GROUP_DEPTH - 1;
