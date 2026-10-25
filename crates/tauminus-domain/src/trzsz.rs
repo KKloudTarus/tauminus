@@ -15,10 +15,12 @@ use memchr::memmem::Finder;
 use thiserror::Error;
 
 mod codec;
+mod download;
 mod json;
 mod line;
 
 pub use codec::{decode, encode};
+pub use download::{Download, MAX_FILES, closing};
 pub use json::{Config, MAX_BUFSIZE, action};
 pub use line::{Line, Lines, MAX_DATA_LINE, MAX_LINE, frame};
 

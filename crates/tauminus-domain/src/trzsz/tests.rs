@@ -249,3 +249,182 @@ fn a_host_message_is_shown_as_plain_text() {
     assert!(shown.len() <= 512);
     assert!(shown.starts_with("panic: x [31mgoroutine 1y"));
 }
+
+mod downloads {
+    use super::*;
+    use crate::sftp::LocalOs;
+    use crate::zmodem::{Output, Received};
+
+    fn line(kind: &str, payload: &str) -> Vec<u8> {
+        frame(kind, payload)
+    }
+
+    fn text(kind: &str, value: &[u8]) -> Vec<u8> {
+        frame(kind, &encode(value))
+    }
+
+    /// The wire as lines, each decoded where it is base64 of zlib.
+    fn said(out: &mut Output) -> Vec<String> {
+        let wire = std::mem::take(&mut out.wire);
+        String::from_utf8(wire)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let (kind, payload) = l.split_once(':').unwrap();
+                match decode(payload.as_bytes(), 1 << 20) {
+                    Ok(bytes)
+                        if kind != "#SUCC" || !payload.bytes().all(|b| b.is_ascii_digit()) =>
+                    {
+                        format!("{kind}:{}", String::from_utf8_lossy(&bytes))
+                    }
+                    _ => l.to_owned(),
+                }
+            })
+            .collect()
+    }
+
+    fn started() -> (Download, Output) {
+        let mut out = Output::default();
+        let download = Download::start(LocalOs::Unix, &mut out);
+        let act = said(&mut out);
+        assert!(act[0].starts_with("#ACT:{\"lang\":\"rs\""), "{act:?}");
+        (download, out)
+    }
+
+    #[test]
+    fn a_file_comes_checked_and_the_host_hears_only_its_name() {
+        let (mut download, mut out) = started();
+        let body = b"hello from tsz\n".repeat(1000);
+        let mut host = text("CFG", br#"{"lang":"go","timeout":20,"bufsize":4096}"#);
+        host.extend(line("NUM", "1"));
+        assert_eq!(download.feed(&host, &mut out), host.len());
+        assert_eq!(said(&mut out), ["#SUCC:1"]);
+        download.feed(&text("NAME", b"../../.bashrc"), &mut out);
+        assert_eq!(
+            out.received,
+            [Received::File {
+                name: "_bashrc".into(),
+                size: None
+            }]
+        );
+        out.received.clear();
+        // Nothing goes on until the file is saved.
+        download.feed(&line("SIZE", &body.len().to_string()), &mut out);
+        assert_eq!(said(&mut out), Vec::<String>::new());
+        download.named("_bashrc (1)", &mut out);
+        assert_eq!(said(&mut out), ["#SUCC:_bashrc (1)", "#SUCC:15000"]);
+        let mut wire = Vec::new();
+        for chunk in body.chunks(4096) {
+            wire.extend(text("DATA", chunk));
+        }
+        wire.extend(text("MD5", &md5::compute(&body).0));
+        // Cut anywhere: the lines are whole when read.
+        for piece in wire.chunks(777) {
+            download.feed(piece, &mut out);
+        }
+        let got: Vec<u8> = out
+            .received
+            .iter()
+            .filter_map(|r| match r {
+                Received::Data(bytes) => Some(bytes.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(got, body);
+        assert_eq!(
+            &out.received[out.received.len() - 2..],
+            [Received::FileDone, Received::Done]
+        );
+        let lines = said(&mut out);
+        assert_eq!(
+            lines.last().unwrap(),
+            "#EXIT:Saved 1 file(s)\r\n- _bashrc (1)"
+        );
+        assert!(download.completed());
+        // What the host prints after is the terminal's.
+        assert_eq!(download.feed(b"\x1b[u\x1b[0JSaved", &mut out), 0);
+    }
+
+    #[test]
+    fn a_damaged_or_overlong_file_is_not_kept() {
+        for (data, md5_of, reason) in [
+            (&b"abc"[..], &b"abd"[..], "MD5"),
+            (&b"abcd"[..], &b"abcd"[..], "more than the size"),
+        ] {
+            let (mut download, mut out) = started();
+            let mut host = text("CFG", b"{}");
+            host.extend(line("NUM", "1"));
+            host.extend(text("NAME", b"f"));
+            download.feed(&host, &mut out);
+            download.named("f", &mut out);
+            let mut host = line("SIZE", "3");
+            host.extend(text("DATA", data));
+            host.extend(text("MD5", &md5::compute(md5_of).0));
+            download.feed(&host, &mut out);
+            assert!(download.ended() && !download.completed());
+            match out.received.last() {
+                Some(Received::Aborted { reason: why }) => assert!(why.contains(reason), "{why}"),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(out.wire.last(), Some(&0x03), "the host is interrupted");
+            assert!(!out.received.contains(&Received::FileDone));
+        }
+    }
+
+    #[test]
+    fn the_host_s_refusals_and_bounds_end_it_before_any_file() {
+        for (host, reason) in [
+            (text("CFG", br#"{"binary":true}"#), "binary"),
+            (text("CFG", br#"{"bufsize":104857600}"#), "10 MiB"),
+            (
+                [text("CFG", b"{}"), line("NUM", "101")].concat(),
+                "at most 100",
+            ),
+            (
+                [text("CFG", b"{}"), line("NUM", "1"), text("NAME", b"dir/")].concat(),
+                "cannot be saved",
+            ),
+            (
+                text("fail", b"Interrupted"),
+                "the host stopped the transfer: Interrupted",
+            ),
+            (b"#CFG:\x03\n".to_vec(), "interrupted"),
+            (b"bash: oops\n".to_vec(), "no frame"),
+        ] {
+            let (mut download, mut out) = started();
+            download.feed(&host, &mut out);
+            match out.received.last() {
+                Some(Received::Aborted { reason: why }) => {
+                    assert!(why.contains(reason), "{why} for {reason}");
+                }
+                other => panic!("{reason}: {other:?}"),
+            }
+            assert!(
+                !out.received
+                    .iter()
+                    .any(|r| matches!(r, Received::File { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn a_zero_byte_file_needs_no_data() {
+        let (mut download, mut out) = started();
+        let mut host = text("CFG", b"{}");
+        host.extend(line("NUM", "1"));
+        host.extend(text("NAME", b"empty"));
+        download.feed(&host, &mut out);
+        download.named("empty", &mut out);
+        let mut host = line("SIZE", "0");
+        host.extend(text("MD5", &md5::compute(b"").0));
+        download.feed(&host, &mut out);
+        assert!(download.completed());
+    }
+
+    #[test]
+    fn the_host_s_closing_message_is_found() {
+        assert_eq!(closing(b"xx\x1b8\x1b[0JStopped"), Some(2));
+        assert_eq!(closing(b"#DATA:abc"), None);
+    }
+}
