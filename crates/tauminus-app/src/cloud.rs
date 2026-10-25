@@ -204,7 +204,7 @@ pub fn plan(inventory: &Inventory, listing: &Listing, choice: Address) -> Plan {
             origin
                 .as_str()
                 .strip_prefix(scope.as_str())
-                .is_some_and(|rest| rest.starts_with(':'))
+                .is_some_and(|rest| rest.starts_with([':', '/']))
         });
         let tagged = host.tags().iter().any(|t| t.as_str() == GONE_TAG);
         if whole && !taken.contains(origin) && !tagged {
