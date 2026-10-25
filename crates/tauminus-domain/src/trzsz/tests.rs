@@ -442,6 +442,8 @@ mod uploads {
     /// A `trz` that takes what comes, as protocol 1 does.
     #[derive(Default)]
     struct Trz {
+        /// Its #CFG; the default when empty.
+        config: &'static [u8],
         pending: Vec<u8>,
         files: Vec<(String, Vec<u8>)>,
         size: u64,
@@ -460,7 +462,12 @@ mod uploads {
                 let text = |p: &str| decode(p.as_bytes(), 16 << 20).unwrap();
                 match kind {
                     "#ACT" => {
-                        out.extend(frame("CFG", &encode(br#"{"timeout":20,"bufsize":262144}"#)));
+                        let config: &[u8] = if self.config.is_empty() {
+                            br#"{"timeout":20,"bufsize":262144}"#
+                        } else {
+                            self.config
+                        };
+                        out.extend(frame("CFG", &encode(config)));
                     }
                     "#NUM" => out.extend(frame("SUCC", payload)),
                     "#NAME" => {
@@ -623,10 +630,17 @@ mod uploads {
     /// An upload of one 200 KiB file, its configuration read, up to the
     /// first data line, part written.
     fn mid_line() -> (Upload, TransmitOutput) {
+        mid_line_with(br#"{"timeout":20,"bufsize":262144}"#)
+    }
+
+    fn mid_line_with(config: &'static [u8]) -> (Upload, TransmitOutput) {
         let mut out = TransmitOutput::default();
         let mut upload = Upload::start(1, &mut out);
         upload.next_file("a", 200 << 10).unwrap();
-        let mut trz = Trz::default();
+        let mut trz = Trz {
+            config,
+            ..Trz::default()
+        };
         loop {
             match upload.poll(&mut out) {
                 Need::Read { max_len, .. } => {
@@ -715,5 +729,24 @@ mod uploads {
             1 << 10,
             "at least"
         );
+    }
+
+    #[test]
+    fn a_host_s_tiny_chunks_and_a_short_last_one_move_sizes_safely() {
+        let ms = Duration::from_millis;
+        // A host that asks for 512 bytes: a slow ack keeps it, never less.
+        assert_eq!(next_chunk(512, 512, ms(3000), 512), 512);
+        // A short last chunk, slow: the size stands for the next file.
+        assert_eq!(next_chunk(64 << 10, 1000, ms(3000), 1 << 20), 64 << 10);
+    }
+
+    #[test]
+    fn under_tmux_only_its_status_passes_while_a_line_goes() {
+        for (echo, stops) in [(&b"\x1bP=1s\x1b\\"[..], false), (b"QUJDREVG", true)] {
+            let (mut upload, mut out) = mid_line_with(br#"{"tmux_output_junk":true}"#);
+            out.wire.clear();
+            upload.feed(echo, &mut out);
+            assert_eq!(upload.ended(), stops, "{}", String::from_utf8_lossy(echo));
+        }
     }
 }

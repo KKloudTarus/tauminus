@@ -28,12 +28,14 @@ const SLOW: Duration = Duration::from_secs(2);
 /// The next chunk's size: `chunk` bytes of a full chunk of `len` were
 /// acknowledged after `took`; at most `most`. O(1).
 pub(super) fn next_chunk(chunk: usize, len: usize, took: Duration, most: usize) -> usize {
-    if took >= SLOW {
+    // A short last chunk tells little of the link: it moves nothing.
+    if took >= SLOW && len * 2 >= chunk {
         let fits = u128::from(u32::try_from(QUICK.as_millis()).unwrap_or(u32::MAX)) * len as u128
             / took.as_millis().max(1);
+        // The host may ask for chunks smaller than the least here.
         return usize::try_from(fits)
             .unwrap_or(MIN_CHUNK)
-            .clamp(MIN_CHUNK, chunk);
+            .clamp(MIN_CHUNK.min(chunk), chunk);
     }
     if len == chunk && took < QUICK {
         return (chunk * 2).min(most);
@@ -253,10 +255,7 @@ impl Upload {
         // one goes is a shell echoing it, or tmux, which only draws its
         // status.
         let junk = self.config.as_ref().is_some_and(|config| config.junk);
-        if self.written > 0
-            && !input.is_empty()
-            && (!junk || memchr::memmem::find(input, b"#DATA:").is_some())
-        {
+        if self.written > 0 && !input.is_empty() && (!junk || !super::line::status_only(input)) {
             self.stop(
                 out,
                 "the host printed while a line went: trz is gone".into(),
