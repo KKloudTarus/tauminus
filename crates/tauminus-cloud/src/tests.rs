@@ -91,6 +91,7 @@ async fn ec2_asks_every_region_with_a_fixed_command_and_no_pager() {
     let log = dir.log("aws");
     assert!(log.contains("--profile|work|--output|json|sts|get-caller-identity|"));
     assert!(log.contains("|--region|us-east-1|"));
+    assert!(log.contains("ec2|describe-instances|--query|{Reservations: "));
     assert!(
         log.lines()
             .filter(|l| l.starts_with("pager="))

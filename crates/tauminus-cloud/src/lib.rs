@@ -24,8 +24,9 @@ mod parse;
 const DEADLINE: Duration = Duration::from_secs(120);
 /// Most bytes of output read from one command.
 const MAX_OUTPUT: u64 = 64 << 20;
-/// Regions asked at once.
-const PARALLEL: usize = 4;
+/// Regions asked at once: each `aws` is about a second of CPU, so more
+/// than a laptop's cores gains nothing.
+const PARALLEL: usize = 8;
 /// Regions asked, at most.
 const MAX_REGIONS: usize = 64;
 /// Most instances one listing holds.
@@ -294,11 +295,25 @@ impl Clis {
         for region in regions {
             let (clis, permits, account) = (self.clone(), Arc::clone(&permits), account.clone());
             let mut args: Vec<String> = base.iter().map(|&a| a.to_owned()).collect();
+            // `--query` keeps the fields read and nothing else: a large
+            // region's full answer runs to tens of MiB.
             args.extend(
                 if lightsail {
-                    ["lightsail", "get-instances", "--region"]
+                    [
+                        "lightsail",
+                        "get-instances",
+                        "--query",
+                        LIGHTSAIL_FIELDS,
+                        "--region",
+                    ]
                 } else {
-                    ["ec2", "describe-instances", "--region"]
+                    [
+                        "ec2",
+                        "describe-instances",
+                        "--query",
+                        EC2_FIELDS,
+                        "--region",
+                    ]
                 }
                 .map(str::to_owned),
             );
@@ -471,6 +486,11 @@ async fn gather(
     listing.instances.sort_by(|a, b| a.origin.cmp(&b.origin));
     Ok(listing)
 }
+
+/// The fields `parse::ec2` reads, in the shape it reads them.
+const EC2_FIELDS: &str = "{Reservations: Reservations[].{Instances: Instances[].{InstanceId: InstanceId, State: State, PublicIpAddress: PublicIpAddress, PrivateIpAddress: PrivateIpAddress, Tags: Tags, NetworkInterfaces: NetworkInterfaces[].{Ipv6Addresses: Ipv6Addresses}}}}";
+/// The fields `parse::lightsail` reads.
+const LIGHTSAIL_FIELDS: &str = "{instances: instances[].{name: name, arn: arn, username: username, publicIpAddress: publicIpAddress, privateIpAddress: privateIpAddress, tags: tags}}";
 
 /// A region name as AWS gives them, `eu-west-1`: it goes into a command
 /// line.

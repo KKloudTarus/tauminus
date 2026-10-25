@@ -379,9 +379,10 @@ pub fn apply(
         }
     }
     let mut groups: HashMap<String, GroupId> = HashMap::new();
+    let mut count = inventory.hosts().count();
     for planned in plan.add {
         let name = planned.label.as_str().to_owned();
-        if inventory.hosts().count() >= MAX_HOSTS {
+        if count >= MAX_HOSTS {
             report.skipped.push((name, "the host list is full".into()));
             continue;
         }
@@ -401,7 +402,10 @@ pub fn apply(
         host.set_tags(planned.tags)?;
         host.settings.user = planned.user;
         match inventory.put_host(host) {
-            Ok(()) => report.added.push(id),
+            Ok(()) => {
+                report.added.push(id);
+                count += 1;
+            }
             Err(HostsError::TooMany) => {
                 report.skipped.push((name, "the host list is full".into()));
             }
