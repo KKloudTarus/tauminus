@@ -87,7 +87,7 @@ async fn a_merge_is_saved_then_published() {
     let (hosts, snippets, store) = books().await;
     let remote = remote(&hosts, 0);
     Syncer::default()
-        .run(&hosts, &snippets, &trust().await, &remote)
+        .run(&hosts, &snippets, None, &trust().await, &remote)
         .await
         .unwrap();
     let saved = store.saved().unwrap();
@@ -100,7 +100,7 @@ async fn an_edit_made_while_merging_is_merged_again_not_overwritten() {
     let (hosts, snippets, _) = books().await;
     let remote = remote(&hosts, 1);
     Syncer::default()
-        .run(&hosts, &snippets, &trust().await, &remote)
+        .run(&hosts, &snippets, None, &trust().await, &remote)
         .await
         .unwrap();
     let now: Inventory = hosts.snapshot().await;
@@ -118,7 +118,7 @@ async fn edits_that_never_stop_end_the_sync_without_publishing() {
     let (hosts, snippets, _) = books().await;
     let remote = remote(&hosts, usize::MAX);
     let result = Syncer::default()
-        .run(&hosts, &snippets, &trust().await, &remote)
+        .run(&hosts, &snippets, None, &trust().await, &remote)
         .await;
     assert!(matches!(result, Err(SyncRunError::Busy)));
     assert_eq!(remote.published.load(Ordering::SeqCst), 0);
@@ -130,10 +130,10 @@ async fn what_a_merge_changes_is_noted_before_it_is_saved() {
     let notes = Arc::new(FakeTrustStore::default());
     let trust = Trust::open(notes.clone()).await.unwrap();
     Syncer::default()
-        .run(&hosts, &snippets, &trust, &remote(&hosts, 0))
+        .run(&hosts, &snippets, None, &trust, &remote(&hosts, 0))
         .await
         .unwrap();
-    let theirs = HostId::parse("theirs").unwrap();
+    let theirs = crate::trust::Subject::Host(HostId::parse("theirs").unwrap());
     assert_eq!(notes.saved().get(&theirs), Some(&None), "new from sync");
 }
 
@@ -145,7 +145,7 @@ async fn a_merge_whose_note_cannot_be_saved_is_not_saved_either() {
     notes.fail_next();
     let remote = remote(&hosts, 0);
     let result = Syncer::default()
-        .run(&hosts, &snippets, &trust, &remote)
+        .run(&hosts, &snippets, None, &trust, &remote)
         .await;
     assert!(matches!(result, Err(SyncRunError::Review(_))), "{result:?}");
     assert!(store.saved().is_none(), "nothing saved");
@@ -228,11 +228,16 @@ async fn a_host_edited_between_the_two_saves_is_merged_again_and_held() {
         edited: AtomicUsize::new(0),
     };
     Syncer::default()
-        .run(&hosts, &snippets, &trust, &remote)
+        .run(&hosts, &snippets, None, &trust, &remote)
         .await
         .unwrap();
     let held = trust
-        .check(&hosts, Some(&snippets), &HostId::parse("h").unwrap())
+        .check(
+            &hosts,
+            Some(&snippets),
+            async |_| Prints::new(),
+            &HostId::parse("h").unwrap(),
+        )
         .await;
     assert!(
         matches!(held, Err(crate::trust::TrustError::NeedsReview(_))),

@@ -164,6 +164,9 @@ pub struct Identity {
     /// The key's public half, in `authorized_keys` form, kept beside it so
     /// the list can show it without decrypting the key.
     pub public_key: Option<String>,
+    /// This device shares it through sync. Its own choice: nothing from
+    /// the target turns it on for an identity this device holds.
+    pub sync: bool,
 }
 
 impl std::fmt::Debug for Identity {
@@ -174,6 +177,7 @@ impl std::fmt::Debug for Identity {
             .field("user", &self.user)
             .field("password", &self.password.as_ref().map(|_| ".."))
             .field("private_key", &self.private_key.as_ref().map(|_| ".."))
+            .field("sync", &self.sync)
             .finish_non_exhaustive()
     }
 }
@@ -187,6 +191,7 @@ pub struct IdentitySummary {
     pub has_password: bool,
     pub has_key: bool,
     pub public_key: Option<String>,
+    pub sync: bool,
 }
 
 impl From<&Identity> for IdentitySummary {
@@ -198,6 +203,7 @@ impl From<&Identity> for IdentitySummary {
             has_password: identity.password.is_some(),
             has_key: identity.private_key.is_some(),
             public_key: identity.public_key.clone(),
+            sync: identity.sync,
         }
     }
 }
@@ -214,6 +220,9 @@ pub struct IdentityInput {
     pub private_key: Option<Secret>,
     pub passphrase: Option<Secret>,
     pub public_key: Option<String>,
+    /// Whether this device shares it through sync; `None` keeps the
+    /// choice, off for a new one.
+    pub sync: Option<bool>,
 }
 
 /// What a connect may use from an identity.
@@ -288,6 +297,10 @@ pub trait OpenVault: Send {
     fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError>;
     /// Saves where this device syncs and its key, or removes them.
     fn set_sync_setup(&mut self, setup: Option<&SyncSetup>) -> Result<(), VaultError>;
+    /// A random key, made on first use, that keys the sync review list's
+    /// digests of shared identities; `true` when it was just made and the
+    /// vault must be saved.
+    fn review_key(&mut self) -> Result<(Zeroizing<[u8; 32]>, bool), VaultError>;
     /// Writes the vault. Fails with [`VaultError::Conflict`] when another
     /// window saved it since it was read.
     fn save(&mut self) -> Result<(), VaultError>;
@@ -624,76 +637,8 @@ impl Vault {
     pub async fn save_identity(&self, input: IdentityInput) -> Result<String, VaultError> {
         check_identity(&input)?;
         let new_id = self.backend.new_id();
-        self.with_open(move |vault| {
-            let current = if let Some(id) = &input.id {
-                Some(
-                    vault
-                        .identity(id)?
-                        .ok_or_else(|| VaultError::NoSuchIdentity(id.clone()))?,
-                )
-            } else if vault.identity_count() >= MAX_IDENTITIES {
-                return Err(
-                    VaultError::Invalid(format!("at most {MAX_IDENTITIES} identities")).into(),
-                );
-            } else {
-                None
-            };
-            let keep = |given: Option<Secret>, old: Option<Secret>| match given {
-                Some(secret) if secret.is_empty() => None,
-                Some(secret) => Some(secret),
-                None => old,
-            };
-            let old = current.clone();
-            let key_changed = input.private_key.is_some();
-            let identity = Identity {
-                id: input.id.clone().unwrap_or(new_id),
-                name: input.name.trim().to_owned(),
-                user: input
-                    .user
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|u| !u.is_empty())
-                    .map(str::to_owned),
-                password: keep(
-                    input.password.clone(),
-                    old.as_ref().and_then(|o| o.password.clone()),
-                ),
-                private_key: keep(
-                    input.private_key.clone(),
-                    old.as_ref().and_then(|o| o.private_key.clone()),
-                ),
-                passphrase: keep(
-                    input.passphrase.clone(),
-                    old.as_ref().and_then(|o| o.passphrase.clone()),
-                ),
-                public_key: if key_changed {
-                    input.public_key.clone()
-                } else {
-                    old.and_then(|o| o.public_key)
-                },
-            };
-            let id = identity.id.clone();
-            vault.put_identity(&identity)?;
-            match vault.save() {
-                Ok(()) => Ok(id),
-                // Refused before writing (the vault is full): put back what
-                // was there, and keep the vault open.
-                Err(error @ VaultError::Invalid(_)) => {
-                    match &current {
-                        Some(previous) => vault.put_identity(previous)?,
-                        None => {
-                            vault.remove_identity(&id);
-                        }
-                    }
-                    Err(error.into())
-                }
-                Err(error) => Err(Failed {
-                    error,
-                    discard: true,
-                }),
-            }
-        })
-        .await
+        self.with_open(move |vault| save_into(vault, &input, new_id))
+            .await
     }
 
     pub async fn delete_identity(&self, id: String) -> Result<(), VaultError> {
@@ -1054,6 +999,83 @@ fn check_password(password: &Secret) -> Result<(), VaultError> {
     Ok(())
 }
 
+/// Adds or edits identity `input` in `vault` and saves it. Returns its id.
+fn save_into(
+    vault: &mut dyn OpenVault,
+    input: &IdentityInput,
+    new_id: String,
+) -> Result<String, Failed> {
+    let current = if let Some(id) = &input.id {
+        Some(
+            vault
+                .identity(id)?
+                .ok_or_else(|| VaultError::NoSuchIdentity(id.clone()))?,
+        )
+    } else if vault.identity_count() >= MAX_IDENTITIES {
+        return Err(VaultError::Invalid(format!("at most {MAX_IDENTITIES} identities")).into());
+    } else {
+        None
+    };
+    let keep = |given: Option<Secret>, old: Option<Secret>| match given {
+        Some(secret) if secret.is_empty() => None,
+        Some(secret) => Some(secret),
+        None => old,
+    };
+    let old = current.clone();
+    let key_changed = input.private_key.is_some();
+    let sync = input
+        .sync
+        .unwrap_or_else(|| old.as_ref().is_some_and(|o| o.sync));
+    let identity = Identity {
+        id: input.id.clone().unwrap_or(new_id),
+        name: input.name.trim().to_owned(),
+        user: input
+            .user
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .map(str::to_owned),
+        password: keep(
+            input.password.clone(),
+            old.as_ref().and_then(|o| o.password.clone()),
+        ),
+        private_key: keep(
+            input.private_key.clone(),
+            old.as_ref().and_then(|o| o.private_key.clone()),
+        ),
+        passphrase: keep(
+            input.passphrase.clone(),
+            old.as_ref().and_then(|o| o.passphrase.clone()),
+        ),
+        public_key: if key_changed {
+            input.public_key.clone()
+        } else {
+            old.and_then(|o| o.public_key)
+        },
+        sync,
+    };
+    let id = identity.id.clone();
+    vault.put_identity(&identity)?;
+    match vault.save() {
+        Ok(()) => Ok(id),
+        // Refused before writing (the vault is full): put back what
+        // was there, and keep the vault open.
+        Err(error @ VaultError::Invalid(_)) => {
+            match &current {
+                Some(previous) => vault.put_identity(previous)?,
+                None => {
+                    vault.remove_identity(&id);
+                }
+            }
+            Err(error.into())
+        }
+        Err(error) => Err(Failed {
+            error,
+            discard: true,
+        }),
+    }
+}
+
 fn check_identity(input: &IdentityInput) -> Result<(), VaultError> {
     let invalid = |message: &str| Err(VaultError::Invalid(message.into()));
     let name = input.name.trim();
@@ -1096,6 +1118,9 @@ fn check_identity(input: &IdentityInput) -> Result<(), VaultError> {
     }
     Ok(())
 }
+
+mod shared;
+pub use shared::Applied;
 
 #[cfg(test)]
 pub(crate) mod tests;

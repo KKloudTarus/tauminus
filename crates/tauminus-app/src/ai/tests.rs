@@ -699,7 +699,10 @@ async fn a_host_held_for_sync_review_lends_no_output() {
     } = world().await;
     let notes = Arc::new(crate::fakes::FakeTrustStore::default());
     let mut held = crate::trust::Approvals::new();
-    held.insert(HostId::parse("db").unwrap(), None);
+    held.insert(
+        crate::trust::Subject::Host(HostId::parse("db").unwrap()),
+        None,
+    );
     let (_, read) = crate::ports::TrustStore::load(&*notes).await.unwrap();
     crate::ports::TrustStore::save(&*notes, &held, read)
         .await

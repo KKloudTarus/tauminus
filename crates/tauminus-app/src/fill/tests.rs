@@ -345,3 +345,30 @@ async fn an_identity_without_a_password_is_not_offered() {
         Err(FillError::NoPassword)
     ));
 }
+
+#[tokio::test]
+async fn a_host_another_device_changed_gets_no_password_until_reviewed() {
+    let world = world(Some("s3cret")).await;
+    let notes = Arc::new(crate::fakes::FakeTrustStore::default());
+    let mut held = crate::trust::Approvals::new();
+    held.insert(crate::trust::Subject::Host(world.host.clone()), None);
+    let (_, read) = crate::ports::TrustStore::load(&*notes).await.unwrap();
+    crate::ports::TrustStore::save(&*notes, &held, read)
+        .await
+        .unwrap();
+    let trust = Arc::new(crate::trust::Trust::open(notes).await.unwrap());
+    let fill = Fill::new(
+        Arc::clone(&world.sessions),
+        Arc::clone(&world.hosts),
+        Arc::clone(&world.vault),
+    )
+    .with_trust(trust, None);
+    let (id, events, typed) = session(&world.sessions, world.saved(SessionKind::Ssh));
+    let seen = show(&world, id, &events, "[sudo] password for deploy: ").await;
+    assert!(matches!(
+        fill.type_password(id, seen).await,
+        Err(FillError::Trust(crate::trust::TrustError::NeedsReview(_)))
+    ));
+    settle().await;
+    assert!(typed.lock().unwrap().is_empty());
+}

@@ -728,7 +728,10 @@ async fn the_review_list_is_parsed_again_only_when_its_bytes_change() {
     let (empty, version) = here.load().await.unwrap();
     assert!(empty.is_empty());
     let mut notes = Approvals::new();
-    notes.insert(HostId::parse("h").unwrap(), None);
+    notes.insert(
+        tauminus_app::trust::Subject::Host(HostId::parse("h").unwrap()),
+        None,
+    );
     let (_, theirs) = other.load().await.unwrap();
     other.save(&notes, theirs).await.unwrap();
     // Saving what was read before the other window's save is refused,

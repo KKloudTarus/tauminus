@@ -526,3 +526,109 @@ fn a_startup_snippet_synced_from_another_device_waits_for_review() {
         1
     );
 }
+
+#[test]
+fn a_shared_identity_syncs_and_its_change_waits_for_review() {
+    let (a, _dir_a) = app("ids-a");
+    let (b, _dir_b) = app("ids-b");
+    let shared = std::env::temp_dir().join(format!("tauminus-ipc-ids-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&shared);
+    std::fs::create_dir_all(&shared).unwrap();
+    let _shared = Scratch(shared.clone());
+    let target = json!({"kind": "folder", "address": shared.to_string_lossy()});
+    for app in [&a, &b] {
+        call(app, "vault_create", json!({"password": "vault password 1"})).unwrap();
+    }
+    call(
+        &a,
+        "sync_create",
+        json!({"target": target, "passphrase": PASSPHRASE}),
+    )
+    .unwrap();
+    let identity = call(
+        &a,
+        "identity_save",
+        json!({"identity": {"name": "deploy", "user": "ops", "password": "pw-one", "generate": "ed25519", "sync": true}}),
+    )
+    .unwrap();
+    let id = identity.as_str().unwrap().to_owned();
+    call(
+        &a,
+        "host_save",
+        json!({"host": {"label": "db", "address": "db.internal", "settings": {"identity": id}}}),
+    )
+    .unwrap();
+    sync_now(&a);
+    call(
+        &b,
+        "sync_join",
+        json!({"target": target, "passphrase": PASSPHRASE}),
+    )
+    .unwrap();
+    sync_now(&b);
+    let on_b = call(&b, "identities_list", json!({})).unwrap();
+    assert_eq!(on_b[0]["id"], id.as_str());
+    assert_eq!(on_b[0]["sync"], true);
+    assert_eq!(on_b[0]["hasPassword"], true);
+    assert!(
+        on_b[0]["publicKey"]
+            .as_str()
+            .unwrap()
+            .starts_with("ssh-ed25519 ")
+    );
+    let page = call(&b, "sync_reviews", json!({})).unwrap();
+    let reviews = page["reviews"].as_array().unwrap();
+    // The identity first, then the host using it, each showing it.
+    assert_eq!(reviews.len(), 2, "{page}");
+    assert_eq!(reviews[0]["host"], format!("identity:{id}"));
+    for review in reviews {
+        let lines = review["lines"].as_array().unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l["field"] == "identity login" && l["value"] == "a password and a key")
+        );
+    }
+    assert!(!page.to_string().contains("pw-one"));
+    let install = |app| {
+        call(
+            app,
+            "identity_install",
+            json!({"identity": id, "host": "nowhere", "onPrompt": "__CHANNEL__:1"}),
+        )
+        .unwrap_err()["code"]
+            .clone()
+    };
+    assert_eq!(install(&b), "needs_review", "its key waits too");
+    let seen: Vec<_> = reviews
+        .iter()
+        .map(|r| json!({"host": r["host"], "fingerprint": r["fingerprint"]}))
+        .collect();
+    call(&b, "sync_review_accept", json!({"seen": seen})).unwrap();
+    let host = reviews[1]["host"].as_str().unwrap().to_owned();
+    assert!(call(&b, "host_startup", json!({"host": host})).is_ok());
+    assert_ne!(install(&b), "needs_review", "accepted");
+
+    // A changes the password: B's host waits again.
+    call(
+        &a,
+        "identity_save",
+        json!({"identity": {"id": id, "name": "deploy", "user": "ops", "password": "pw-two"}}),
+    )
+    .unwrap();
+    sync_now(&a);
+    sync_now(&b);
+    let held = call(
+        &b,
+        "sftp_open",
+        json!({"host": host, "onPrompt": "__CHANNEL__:1"}),
+    );
+    assert_eq!(held.unwrap_err()["code"], "needs_review");
+    assert_eq!(install(&b), "needs_review");
+    // Locked, nothing is shown or accepted without the identity's print.
+    call(&b, "vault_lock", json!({})).unwrap();
+    assert_eq!(
+        call(&b, "sync_reviews", json!({})).unwrap_err()["code"],
+        "vault_locked"
+    );
+}

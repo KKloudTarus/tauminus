@@ -11,8 +11,8 @@ use tauminus_domain::Repair;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
-use super::{SyncRunError, Syncer};
-use crate::ports::{Merged, Secret, SyncClash, SyncConnector, SyncError, SyncTarget};
+use super::{SharedIdentities, SyncRunError, Syncer};
+use crate::ports::{KeyDeriver, Merged, Secret, SyncClash, SyncConnector, SyncError, SyncTarget};
 use crate::trust::Trust;
 use crate::vault::{SyncSetup, Vault, VaultError};
 use crate::{HostBook, SnippetBook};
@@ -89,6 +89,7 @@ pub struct SyncService {
     pub(super) snippets: Arc<SnippetBook>,
     trust: Arc<Trust>,
     connector: Arc<dyn SyncConnector>,
+    deriver: Arc<dyn KeyDeriver>,
     /// Setup, leaving, and runs, one at a time.
     busy: Mutex<()>,
     last: StdMutex<Option<Report>>,
@@ -110,6 +111,7 @@ impl SyncService {
         snippets: Arc<SnippetBook>,
         trust: Arc<Trust>,
         connector: Arc<dyn SyncConnector>,
+        deriver: Arc<dyn KeyDeriver>,
     ) -> Self {
         Self {
             syncer: Syncer::default(),
@@ -118,6 +120,7 @@ impl SyncService {
             snippets,
             trust,
             connector,
+            deriver,
             busy: Mutex::new(()),
             last: StdMutex::new(None),
             settled: StdMutex::new((0, 0)),
@@ -258,7 +261,16 @@ impl SyncService {
         let remote = self.connector.open(&setup.target, &setup.key)?;
         let merged = self
             .syncer
-            .run(&self.hosts, &self.snippets, &self.trust, &*remote)
+            .run(
+                &self.hosts,
+                &self.snippets,
+                Some(&SharedIdentities {
+                    vault: &self.vault,
+                    deriver: Arc::clone(&self.deriver),
+                }),
+                &self.trust,
+                &*remote,
+            )
             .await?;
         Ok(summary(merged))
     }

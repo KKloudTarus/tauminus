@@ -30,6 +30,7 @@ impl From<FillError> for CommandError {
         match error {
             FillError::Session(error) => error.into(),
             FillError::Vault(error) => error.into(),
+            FillError::Trust(error) => error.into(),
             FillError::Stale | FillError::NoPrompt => {
                 Self::new(ErrorCode::Cancelled, error.to_string())
             }

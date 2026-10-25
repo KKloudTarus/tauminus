@@ -426,6 +426,32 @@ pub fn public_key_line(pem: &str, passphrase: Option<&str>) -> Result<String, St
     key.public_key().to_openssh().map_err(|e| e.to_string())
 }
 
+/// Most bcrypt rounds a key from elsewhere may ask for: `ssh-keygen`
+/// writes 16, and 1024 decode in some seconds.
+pub const MAX_KDF_ROUNDS: u32 = 1024;
+
+/// As [`public_key_line`], for a key another device wrote: its KDF cost
+/// is the writer's choice, so an OpenSSH key asking for more than
+/// [`MAX_KDF_ROUNDS`] bcrypt rounds is refused before it runs, and so is
+/// an encrypted PKCS#8 key, whose PBKDF2 or scrypt costs are as open.
+pub fn public_key_line_bounded(pem: &str, passphrase: Option<&str>) -> Result<String, String> {
+    use russh::keys::ssh_key::Kdf;
+    if pem.contains("BEGIN ENCRYPTED PRIVATE KEY") {
+        return Err("an encrypted PKCS#8 key is not taken from another device".into());
+    }
+    if pem.contains("BEGIN OPENSSH PRIVATE KEY") {
+        let key = PrivateKey::from_openssh(pem).map_err(|e| e.to_string())?;
+        if let Kdf::Bcrypt { rounds, .. } = key.kdf()
+            && *rounds > MAX_KDF_ROUNDS
+        {
+            return Err(format!(
+                "its passphrase asks for {rounds} rounds, more than {MAX_KDF_ROUNDS}"
+            ));
+        }
+    }
+    public_key_line(pem, passphrase)
+}
+
 /// A new key, as an OpenSSH private key (unencrypted: the vault encrypts
 /// it) and its `authorized_keys` line. RSA takes a few seconds, so call this
 /// off the async workers.

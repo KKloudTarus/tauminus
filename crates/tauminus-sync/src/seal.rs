@@ -16,6 +16,15 @@ use rand::TryRng as _;
 use zeroize::Zeroizing;
 
 const OBJECT: &[u8; 4] = b"TMS1";
+/// This device's own sync state on its disk, under its own derived key.
+const LOCAL: &[u8; 4] = b"TML1";
+
+/// Whether `file` is a local state file sealed by this build, whatever
+/// its key.
+#[must_use]
+pub fn is_sealed_local(file: &[u8]) -> bool {
+    file.starts_with(LOCAL)
+}
 const KEY_FILE: &[u8; 4] = b"TMK1";
 const NONCE: usize = 24;
 const SALT: usize = 16;
@@ -92,11 +101,62 @@ impl SyncKey {
     }
 
     fn cipher(&self) -> Result<XChaCha20Poly1305, SealError> {
+        self.derived(b"tauminus sync v1 objects")
+    }
+
+    fn derived(&self, info: &[u8]) -> Result<XChaCha20Poly1305, SealError> {
         let mut key = Zeroizing::new([0u8; KEY]);
         hkdf::Hkdf::<sha2::Sha256>::new(None, self.0.as_ref())
-            .expand(b"tauminus sync v1 objects", key.as_mut())
+            .expand(info, key.as_mut())
             .map_err(|_| SealError::Object)?;
         cipher(&key)
+    }
+
+    /// `plain`, sealed as this device's local state file `kind`, under a
+    /// key apart from the objects': a local file passes for no object.
+    /// O(n).
+    ///
+    /// # Errors
+    /// No randomness for the nonce.
+    pub fn seal_local(&self, kind: &str, plain: &[u8]) -> Result<Vec<u8>, SealError> {
+        let mut nonce = [0u8; NONCE];
+        fill(&mut nonce)?;
+        let aad = [LOCAL.as_slice(), kind.as_bytes()].concat();
+        let sealed = self
+            .derived(b"tauminus sync v1 local state")?
+            .encrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: plain,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| SealError::Object)?;
+        Ok([LOCAL.as_slice(), &nonce, &sealed].concat())
+    }
+
+    /// The plaintext of local state file `kind`. O(n).
+    ///
+    /// # Errors
+    /// A file not sealed with this key as that kind, or damaged.
+    pub fn open_local(&self, kind: &str, file: &[u8]) -> Result<Zeroizing<Vec<u8>>, SealError> {
+        let rest = file.strip_prefix(LOCAL).ok_or(SealError::Object)?;
+        if rest.len() < NONCE {
+            return Err(SealError::Object);
+        }
+        let (nonce, sealed) = rest.split_at(NONCE);
+        let nonce: [u8; NONCE] = nonce.try_into().map_err(|_| SealError::Object)?;
+        let aad = [LOCAL.as_slice(), kind.as_bytes()].concat();
+        self.derived(b"tauminus sync v1 local state")?
+            .decrypt(
+                &XNonce::from(nonce),
+                Payload {
+                    msg: sealed,
+                    aad: &aad,
+                },
+            )
+            .map(Zeroizing::new)
+            .map_err(|_| SealError::Object)
     }
 
     /// `plain`, sealed as the object named `name`. O(n).
@@ -262,6 +322,23 @@ mod tests {
         assert_eq!(key.open("devices/a/1", &flipped), Err(SealError::Object));
         // The plaintext is not in the object.
         assert!(!sealed.windows(5).any(|w| w == b"hosts"));
+    }
+
+    #[test]
+    fn a_local_file_opens_only_as_its_kind_and_never_as_an_object() {
+        let key = SyncKey::random().unwrap();
+        let sealed = key.seal_local("doc", b"base").unwrap();
+        assert_eq!(&*key.open_local("doc", &sealed).unwrap(), b"base");
+        assert!(key.open_local("state", &sealed).is_err());
+        assert!(key.open("doc", &sealed).is_err());
+        let object = key.seal("doc", b"base").unwrap();
+        assert!(key.open_local("doc", &object).is_err());
+        assert!(
+            SyncKey::random()
+                .unwrap()
+                .open_local("doc", &sealed)
+                .is_err()
+        );
     }
 
     #[test]

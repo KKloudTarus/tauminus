@@ -49,6 +49,8 @@ pub enum FillError {
     NoPrompt,
     #[error("the session showed more since the prompt was read: look again")]
     Stale,
+    #[error(transparent)]
+    Trust(#[from] crate::trust::TrustError),
 }
 
 /// What a pane may offer to type: the identity's name, or `None` for the
@@ -66,6 +68,9 @@ pub struct Fill {
     sessions: Arc<SessionManager>,
     hosts: Arc<HostBook>,
     vault: Arc<Vault>,
+    /// What another device changed waits for review before its password
+    /// is typed.
+    trust: Option<(Arc<crate::trust::Trust>, Option<Arc<crate::SnippetBook>>)>,
 }
 
 impl std::fmt::Debug for Fill {
@@ -80,7 +85,19 @@ impl Fill {
             sessions,
             hosts,
             vault,
+            trust: None,
         }
+    }
+
+    /// Checks each host against `trust` before its password is typed.
+    #[must_use]
+    pub fn with_trust(
+        mut self,
+        trust: Arc<crate::trust::Trust>,
+        snippets: Option<Arc<crate::SnippetBook>>,
+    ) -> Self {
+        self.trust = Some((trust, snippets));
+        self
     }
 
     /// The saved host session `id` logs in to, still saved as it was, and
@@ -164,6 +181,22 @@ impl Fill {
             .await?
             .password
             .ok_or(FillError::NoPassword)?;
+        // Read, then checked: a password another device changed waits.
+        if let Some((trust, snippets)) = &self.trust {
+            trust
+                .check(
+                    &self.hosts,
+                    snippets.as_deref(),
+                    async |ids| {
+                        self.vault
+                            .identity_prints(Some(ids))
+                            .await
+                            .unwrap_or_default()
+                    },
+                    &saved.id,
+                )
+                .await?;
+        }
         // Checked again past the vault's await: output may have come.
         if self.prompt(id, &saved)? != received || !self.sessions.mark_filled(id, received)? {
             return Err(FillError::Stale);

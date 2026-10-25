@@ -40,6 +40,9 @@ test("asks for the vault, joins another device, and reviews its host", async ({ 
   const staging = sync(page).getByRole("article", { name: "staging" });
   await expect(staging).toContainText('ProxyCommand("nc %h %p")');
   await staging.getByRole("button", { name: "Accept staging" }).click();
+  const deploy = sync(page).getByRole("article", { name: "deploy" });
+  await expect(deploy).toContainText("identity, changed on another device");
+  await deploy.getByRole("button", { name: "Accept deploy" }).click();
   await expect(sync(page).getByRole("region", { name: "Changes to review" })).toHaveCount(0);
 
   await sync(page)

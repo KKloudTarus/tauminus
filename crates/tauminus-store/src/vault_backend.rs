@@ -46,6 +46,9 @@ struct IdentityRecord {
     passphrase: Option<Zeroizing<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     public_key: Option<String>,
+    /// This device shares it through sync.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    sync: bool,
 }
 
 /// The vault file at its path, with `keys` for the keychain slot.
@@ -225,6 +228,7 @@ impl Opened {
             private_key: record.private_key,
             passphrase: record.passphrase,
             public_key: record.public_key,
+            sync: record.sync,
         })
     }
 }
@@ -260,6 +264,7 @@ impl OpenPort for Opened {
             private_key: identity.private_key.clone(),
             passphrase: identity.passphrase.clone(),
             public_key: identity.public_key.clone(),
+            sync: identity.sync,
         };
         let bytes = serde_json::to_vec(&record).map_err(|e| VaultError::Io(e.to_string()))?;
         self.vault
@@ -418,6 +423,24 @@ impl OpenPort for Opened {
         plain.extend_from_slice(key.key.as_bytes());
         // `put` wipes what it is given.
         self.vault.put(AI_KEY, plain).map_err(port_error)
+    }
+
+    fn review_key(&mut self) -> Result<(Zeroizing<[u8; 32]>, bool), VaultError> {
+        if let Some(stored) = self.vault.get(REVIEW_KEY) {
+            let mut bytes = Zeroizing::new([0u8; 32]);
+            if stored.len() != 32 {
+                return Err(VaultError::Corrupt("the review key is damaged".into()));
+            }
+            bytes.copy_from_slice(stored);
+            return Ok((bytes, false));
+        }
+        let key = SecretKey::random().map_err(port_error)?;
+        let mut bytes = Zeroizing::new([0u8; 32]);
+        bytes.copy_from_slice(key.as_bytes());
+        self.vault
+            .put(REVIEW_KEY, key.as_bytes().to_vec())
+            .map_err(port_error)?;
+        Ok((bytes, true))
     }
 
     /// Kept as the kind (`f`, `g` or `s`), the 32-byte key, and the
@@ -636,6 +659,8 @@ impl Opened {
 const AI_KEY: &str = "ai-key";
 /// Where this device syncs, and the sync key.
 const SYNC: &str = "sync";
+/// Keys the sync review list's digests of shared identities.
+const REVIEW_KEY: &str = "review-key";
 /// Vault records holding the history's keys.
 const HISTORY_DATABASE: &str = "history-database";
 /// Never rotated: every recording made is sealed to it.

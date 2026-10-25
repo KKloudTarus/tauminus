@@ -56,6 +56,7 @@ async fn a_folder_is_created_joined_and_synced_through() {
     remote.merge(SyncData::default()).await.unwrap();
     remote.adopt(SyncPart::Hosts).await.unwrap();
     remote.adopt(SyncPart::Snippets).await.unwrap();
+    remote.adopt(SyncPart::Identities).await.unwrap();
     remote.publish().await.unwrap();
     assert!(
         root.join("state").join("state").is_file(),

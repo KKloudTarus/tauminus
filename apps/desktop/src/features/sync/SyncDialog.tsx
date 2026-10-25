@@ -127,7 +127,7 @@ function SetUp({ store }: { store: SyncStore }) {
       <p className="mb-3 opacity-80">
         Sync keeps your hosts, groups and snippets the same on each device. Everything is encrypted
         on this device with a key only your passphrase opens; the folder, remote or bucket sees
-        ciphertext only. Passwords and keys in the vault never sync.
+        ciphertext only. A vault identity syncs only once you share it from the vault.
       </p>
       <fieldset className="mb-3 flex gap-4">
         <legend className="mb-1.5 text-[13px] font-medium text-muted">Sync through</legend>
@@ -465,8 +465,8 @@ function Reviews({
     <section className="mt-4 border-t border-line pt-3" aria-label="Changes to review">
       <h3 className="mb-1 font-medium">Changes from other devices</h3>
       <p className="mb-3 text-sm opacity-80">
-        Another device changed these hosts. Check what connecting to each now does; it is not used
-        until you accept it.
+        Another device changed these hosts and vault identities. Check what each now does; it is not
+        used until you accept it.
         {noted > reviews.length && ` Showing the first ${reviews.length} of up to ${noted}.`}
       </p>
       {error && (
@@ -483,15 +483,23 @@ function Reviews({
           <h4 className="mb-2 font-medium">
             {visible(review.label)}{" "}
             <span className="text-xs font-normal opacity-70">
+              {review.host.startsWith("identity:") ? "identity, " : ""}
               {review.new ? "new from another device" : "changed on another device"}
             </span>
           </h4>
           <table className="mb-2 w-full text-xs">
             <tbody>
               {review.lines.map((line) => (
-                <tr key={`${line.level}\u0000${line.field}`} className="align-top">
+                <tr
+                  key={`${line.level}\u0000${line.place}\u0000${line.field}`}
+                  className="align-top"
+                >
                   <td className="pr-2 whitespace-nowrap opacity-70">
-                    {line.level === 0 ? "host" : `group ${visible(line.place)}`}
+                    {line.level !== 0
+                      ? `group ${visible(line.place)}`
+                      : line.place === "identity" && line.field.startsWith("identity")
+                        ? "vault"
+                        : "host"}
                   </td>
                   <td className="pr-2 whitespace-nowrap">{line.field}</td>
                   <td className="font-mono break-all">{visible(line.value)}</td>

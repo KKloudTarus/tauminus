@@ -799,6 +799,8 @@ export type IdentityEdit = {
 	privateKey?: string | null,
 	passphrase?: string | null,
 	generate?: KeyKindSpec | null,
+	/**  Whether this device shares it through sync; left out keeps it. */
+	sync?: boolean | null,
 };
 
 /**  An identity as the view sees it: no secret, only whether one is stored. */
@@ -809,6 +811,8 @@ export type IdentityView = {
 	hasPassword: boolean,
 	hasKey: boolean,
 	publicKey: string | null,
+	/**  This device shares it through sync. */
+	sync: boolean,
 };
 
 /**  Where the hosts come from. */
@@ -936,6 +940,7 @@ export type ReportView = {
 };
 
 export type ReviewView = {
+	/**  A host's id, or `identity:<id>` for a vault identity. */
 	host: string,
 	label: string,
 	new: boolean,
@@ -976,6 +981,7 @@ export type S3Input = {
 
 /**  A host as the user saw it. */
 export type SeenInput = {
+	/**  As [`ReviewView::host`]. */
 	host: string,
 	fingerprint: string,
 };

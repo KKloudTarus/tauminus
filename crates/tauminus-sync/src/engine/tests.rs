@@ -54,7 +54,7 @@ async fn device(dir: &Path, target: &Arc<Folder>, key: SyncKey) -> Device {
 impl Device {
     async fn sync(&self) -> Merged {
         Syncer::default()
-            .run(&self.hosts, &self.snippets, &self.trust, &self.remote)
+            .run(&self.hosts, &self.snippets, None, &self.trust, &self.remote)
             .await
             .unwrap()
     }
@@ -282,7 +282,7 @@ async fn a_wrong_passphrase_and_a_newer_device_stop_the_sync() {
         )
         .unwrap();
     let result = Syncer::default()
-        .run(&b.hosts, &b.snippets, &b.trust, &b.remote)
+        .run(&b.hosts, &b.snippets, None, &b.trust, &b.remote)
         .await;
     assert!(
         matches!(
@@ -464,6 +464,7 @@ async fn a_sync_whose_publish_failed_does_not_take_others_values_for_its_own() {
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert!(
@@ -474,6 +475,7 @@ async fn a_sync_whose_publish_failed_does_not_take_others_values_for_its_own() {
     );
     a.remote.adopt(SyncPart::Hosts).await.unwrap();
     a.remote.adopt(SyncPart::Snippets).await.unwrap();
+    a.remote.adopt(SyncPart::Identities).await.unwrap();
     // A file where the folder was: nothing can be written there.
     std::fs::rename(&target, &aside).unwrap();
     std::fs::write(&target, b"").unwrap();
@@ -549,7 +551,7 @@ async fn a_device_that_lost_its_state_does_not_undo_newer_edits() {
     // A loses its sync state, as on a reinstall, with its old hosts.json.
     std::fs::remove_file(root.join("a").join("sync-state.json")).unwrap();
     let on_a = Syncer::default()
-        .run(&a.hosts, &a.snippets, &a.trust, &a.remote)
+        .run(&a.hosts, &a.snippets, None, &a.trust, &a.remote)
         .await
         .unwrap();
     assert!(!on_a.clashes.is_empty(), "A is told its old values lost");
@@ -816,6 +818,7 @@ async fn a_restart_between_saving_the_lists_and_the_base_keeps_the_others_values
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert!(
@@ -855,6 +858,7 @@ async fn a_first_sync_cut_short_is_still_a_first_sync_after() {
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert!(
@@ -894,6 +898,7 @@ async fn a_clash_whose_publish_failed_is_told_on_the_next() {
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert_eq!(merged.clashes.len(), 1);
@@ -905,6 +910,7 @@ async fn a_clash_whose_publish_failed_is_told_on_the_next() {
     );
     a.remote.adopt(SyncPart::Hosts).await.unwrap();
     a.remote.adopt(SyncPart::Snippets).await.unwrap();
+    a.remote.adopt(SyncPart::Identities).await.unwrap();
     break_target(&root);
     assert!(a.remote.publish().await.is_err());
     restore(&root);
@@ -925,6 +931,7 @@ async fn an_edit_whose_publish_failed_gets_out_on_a_sync_with_nothing_new() {
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert!(
@@ -935,6 +942,7 @@ async fn an_edit_whose_publish_failed_gets_out_on_a_sync_with_nothing_new() {
     );
     a.remote.adopt(SyncPart::Hosts).await.unwrap();
     a.remote.adopt(SyncPart::Snippets).await.unwrap();
+    a.remote.adopt(SyncPart::Identities).await.unwrap();
     break_target(&root);
     assert!(a.remote.publish().await.is_err());
     restore(&root);
@@ -1275,6 +1283,7 @@ async fn an_edit_whose_saved_state_lost_its_last_write_still_gets_out() {
     let local = SyncData {
         hosts: a.hosts.snapshot().await,
         snippets: a.snippets.snapshot().await,
+        identities: Vec::new(),
     };
     let merged = a.remote.merge(local.clone()).await.unwrap();
     assert!(
@@ -1641,8 +1650,15 @@ async fn a_proxy_command_from_another_device_waits_for_the_user_here() {
     a.sync().await;
     b.sync().await;
     let id = HostId::parse("h1").unwrap();
-    let Err(TrustError::NeedsReview(review)) =
-        b.trust.check(&b.hosts, Some(&b.snippets), &id).await
+    let Err(TrustError::NeedsReview(review)) = b
+        .trust
+        .check(
+            &b.hosts,
+            Some(&b.snippets),
+            async |_| tauminus_app::trust::Prints::new(),
+            &id,
+        )
+        .await
     else {
         panic!("a host from A is used on B unseen");
     };
@@ -1651,17 +1667,31 @@ async fn a_proxy_command_from_another_device_waits_for_the_user_here() {
         .accept(
             &b.hosts,
             Some(&b.snippets),
-            &[(id.clone(), review.fingerprint)],
+            &tauminus_app::trust::Prints::new(),
+            &[(
+                tauminus_app::trust::Subject::Host(id.clone()),
+                review.fingerprint,
+            )],
         )
         .await
         .unwrap();
     b.trust
-        .check(&b.hosts, Some(&b.snippets), &id)
+        .check(
+            &b.hosts,
+            Some(&b.snippets),
+            async |_| tauminus_app::trust::Prints::new(),
+            &id,
+        )
         .await
         .unwrap();
     // A's own edits are its own.
     a.trust
-        .check(&a.hosts, Some(&a.snippets), &id)
+        .check(
+            &a.hosts,
+            Some(&a.snippets),
+            async |_| tauminus_app::trust::Prints::new(),
+            &id,
+        )
         .await
         .unwrap();
 
@@ -1681,8 +1711,14 @@ async fn a_proxy_command_from_another_device_waits_for_the_user_here() {
     )))
     .await
     .unwrap();
-    let Err(TrustError::NeedsReview(review)) =
-        reopened.check(&b.hosts, Some(&b.snippets), &id).await
+    let Err(TrustError::NeedsReview(review)) = reopened
+        .check(
+            &b.hosts,
+            Some(&b.snippets),
+            async |_| tauminus_app::trust::Prints::new(),
+            &id,
+        )
+        .await
     else {
         panic!("a synced ProxyCommand is used unseen");
     };
@@ -1702,5 +1738,38 @@ async fn a_first_sync_with_nothing_in_it_leaves_a_whole_state() {
         .unwrap();
     let second = a.sync().await;
     assert!(second.notices.is_empty(), "{:?}", second.notices);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn this_device_s_sync_state_holds_only_ciphertext() {
+    let (a, b, root) = pair("local-cipher").await;
+    let canary = "canary-5e1d.internal";
+    a.hosts
+        .edit(|i| i.put_host(new_host("h1", "canary-label-77b", canary)))
+        .await
+        .unwrap();
+    a.sync().await;
+    b.sync().await;
+    for device in ["a", "b"] {
+        let dir = root.join(device);
+        let mut files = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            if !name.starts_with("sync-state") {
+                continue;
+            }
+            files += 1;
+            let bytes = std::fs::read(&path).unwrap();
+            for needle in [canary.as_bytes(), b"canary-label-77b", b"h1\""] {
+                assert!(
+                    !bytes.windows(needle.len()).any(|w| w == needle),
+                    "{name} holds plaintext"
+                );
+            }
+        }
+        assert!(files >= 2, "{device}: state and doc");
+    }
     let _ = std::fs::remove_dir_all(&root);
 }

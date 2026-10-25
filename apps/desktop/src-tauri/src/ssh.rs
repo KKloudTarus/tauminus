@@ -646,6 +646,8 @@ pub(crate) async fn identity_install(
         .public_key(&identity)
         .await?
         .ok_or_else(|| invalid("this identity has no key to install".into()))?;
+    // Read, then checked: a key another device changed waits for review.
+    gate.check_identity(&identity).await?;
     let line =
         tauminus_domain::PublicKeyLine::installable(&line).map_err(|e| invalid(e.to_string()))?;
     let login = login(&hosts, &vault, &gate, &host).await?;

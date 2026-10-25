@@ -14,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::{Secret, SyncError, SyncTarget};
 use tauminus_app::sync::{Report, Setup, Status, Through};
-use tauminus_app::trust::{Fingerprint, Review, Trust, TrustError};
+use tauminus_app::trust::{Fingerprint, Prints, Review, Subject, Trust, TrustError};
+use tauminus_app::vault::Vault;
 use tauminus_app::{SnippetBook, SyncRunError, SyncService, SyncServiceError};
 use tauminus_domain::{HostId, Inventory, Library};
 use tauri::State;
@@ -71,20 +72,57 @@ pub(crate) struct Gate {
     /// The list unreadable: no saved host is used.
     trust: Result<Arc<Trust>, String>,
     snippets: Option<Arc<SnippetBook>>,
+    /// Where the shared identities' prints come from.
+    vault: Arc<Vault>,
+}
+
+/// What a local edit's rebase reads of the books it does not edit, and
+/// the shared identities, before the edit: a sync saving there after it
+/// then leaves the hosts it touched held.
+pub(crate) struct Before<T> {
+    other: T,
+    prints: Prints,
 }
 
 impl Gate {
     pub(crate) fn new(
         trust: Result<Arc<Trust>, String>,
         snippets: Option<Arc<SnippetBook>>,
+        vault: Arc<Vault>,
     ) -> Self {
-        Self { trust, snippets }
+        Self {
+            trust,
+            snippets,
+            vault,
+        }
     }
 
     fn trust(&self) -> Result<&Arc<Trust>, CommandError> {
         self.trust
             .as_ref()
             .map_err(|reason| CommandError::new(ErrorCode::StoreFailed, reason.clone()))
+    }
+
+    /// The prints of the vault's identities, or of those `ids` names;
+    /// none with the vault locked, which leaves what uses one held.
+    async fn prints(&self, ids: Option<Vec<String>>) -> Prints {
+        self.vault.identity_prints(ids).await.unwrap_or_default()
+    }
+
+    /// Every identity's print, for what the user is shown and accepts:
+    /// with the vault locked, an error, so nothing is approved without the
+    /// identity it logs in with.
+    async fn all_prints(&self) -> Result<Prints, CommandError> {
+        Ok(self.vault.identity_prints(None).await?)
+    }
+
+    /// Whether anything is noted; `true` when that cannot be read, which
+    /// keeps a rebase from being skipped.
+    async fn any(&self) -> bool {
+        match &self.trust {
+            Ok(trust) => trust.any().await.unwrap_or(true),
+            Err(_) => false,
+        }
     }
 
     /// Whether a running session on host `id` may follow its settings as
@@ -94,36 +132,49 @@ impl Gate {
         self.check(hosts, id).await.is_ok()
     }
 
-    /// What a local edit's rebase reads of the other book, taken before
-    /// the edit: a sync saving there after it then leaves the hosts it
-    /// touched held. `None` without the review list.
-    pub(crate) async fn library_before(&self) -> Option<Library> {
-        self.trust.as_ref().ok()?;
-        Some(match &self.snippets {
-            Some(book) => book.snapshot().await,
-            None => Library::default(),
+    /// The snippets and prints before a host edit; `None` without the
+    /// review list, or with nothing on it: then the edit moves nothing,
+    /// and a note a sync adds meanwhile stays held.
+    pub(crate) async fn library_before(&self) -> Option<Before<Library>> {
+        if !self.any().await {
+            return None;
+        }
+        Some(Before {
+            other: match &self.snippets {
+                Some(book) => book.snapshot().await,
+                None => Library::default(),
+            },
+            prints: self.prints(None).await,
         })
     }
 
-    /// As [`Gate::library_before`], for a snippet edit.
-    pub(crate) async fn inventory_before(&self, hosts: &Hosts) -> Option<Inventory> {
-        self.trust.as_ref().ok()?;
-        Some(hosts.book().ok()?.snapshot().await)
+    /// The hosts and prints before a snippet edit.
+    pub(crate) async fn inventory_before(&self, hosts: &Hosts) -> Option<Before<Inventory>> {
+        if !self.any().await {
+            return None;
+        }
+        Some(Before {
+            other: hosts.book().ok()?.snapshot().await,
+            prints: self.prints(None).await,
+        })
     }
 
-    /// A local edit of the hosts, `before` read under the book's lock and
-    /// `library` before the edit: hosts the user accepted stay accepted
-    /// as edited.
+    /// A local edit of the hosts, `before` read under the book's lock:
+    /// hosts the user accepted stay accepted as edited.
     pub(crate) async fn hosts_edited(
         &self,
-        library: Option<Library>,
+        given: Option<Before<Library>>,
         before: &Inventory,
         after: &Inventory,
     ) {
-        let (Ok(trust), Some(library)) = (&self.trust, library) else {
+        let (Ok(trust), Some(given)) = (&self.trust, given) else {
             return;
         };
-        if let Err(error) = trust.rebase((before, &library), (after, &library)).await {
+        let (library, prints) = (&given.other, &given.prints);
+        if let Err(error) = trust
+            .rebase((before, library, prints), (after, library, prints))
+            .await
+        {
             // The hosts stay held, which is safe; the user accepts again.
             tracing::warn!(%error, "accepted hosts were not moved along with an edit");
         }
@@ -132,15 +183,41 @@ impl Gate {
     /// A local edit of the snippets, as [`Gate::hosts_edited`].
     pub(crate) async fn snippets_edited(
         &self,
-        inventory: Option<Inventory>,
+        given: Option<Before<Inventory>>,
         before: &Library,
         after: &Library,
     ) {
-        let (Ok(trust), Some(inventory)) = (&self.trust, inventory) else {
+        let (Ok(trust), Some(given)) = (&self.trust, given) else {
             return;
         };
+        let (inventory, prints) = (&given.other, &given.prints);
         if let Err(error) = trust
-            .rebase((&inventory, before), (&inventory, after))
+            .rebase((inventory, before, prints), (inventory, after, prints))
+            .await
+        {
+            tracing::warn!(%error, "accepted hosts were not moved along with an edit");
+        }
+    }
+
+    /// A local edit of an identity, its print read with the save: it, and
+    /// hosts using it, stay accepted if the user had accepted them.
+    pub(crate) async fn identities_edited(&self, hosts: &Hosts, before: &Prints, after: &Prints) {
+        if before == after {
+            return;
+        }
+        let (Ok(trust), Ok(book)) = (&self.trust, hosts.book()) else {
+            return;
+        };
+        let inventory = book.snapshot().await;
+        let library = match &self.snippets {
+            Some(book) => book.snapshot().await,
+            None => Library::default(),
+        };
+        if let Err(error) = trust
+            .rebase(
+                (&inventory, &library, before),
+                (&inventory, &library, after),
+            )
             .await
         {
             tracing::warn!(%error, "accepted hosts were not moved along with an edit");
@@ -151,7 +228,21 @@ impl Gate {
     pub(crate) async fn check(&self, hosts: &Hosts, id: &HostId) -> Result<(), CommandError> {
         Ok(self
             .trust()?
-            .check(hosts.book()?, self.snippets.as_deref(), id)
+            .check(
+                hosts.book()?,
+                self.snippets.as_deref(),
+                async |ids| self.prints(Some(ids)).await,
+                id,
+            )
+            .await?)
+    }
+
+    /// Whether identity `id` may be used as saved now, as to install its
+    /// key. Call it after reading the identity.
+    pub(crate) async fn check_identity(&self, id: &str) -> Result<(), CommandError> {
+        Ok(self
+            .trust()?
+            .check_identity(async |ids| self.prints(Some(ids)).await, id)
             .await?)
     }
 }
@@ -373,6 +464,7 @@ pub(crate) struct ExposedView {
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ReviewView {
+    /// A host's id, or `identity:<id>` for a vault identity.
     pub(crate) host: String,
     pub(crate) label: String,
     pub(crate) new: bool,
@@ -385,7 +477,7 @@ pub(crate) struct ReviewView {
 impl From<Review> for ReviewView {
     fn from(review: Review) -> Self {
         Self {
-            host: review.host.to_string(),
+            host: review.subject.to_string(),
             label: review.label,
             new: review.new,
             lines: review
@@ -410,6 +502,11 @@ impl From<Review> for ReviewView {
     }
 }
 
+fn subject(text: &str) -> Result<Subject, CommandError> {
+    Subject::parse(text)
+        .ok_or_else(|| CommandError::new(ErrorCode::InvalidArgument, "not a host or identity id"))
+}
+
 fn fingerprint(text: &str) -> Result<Fingerprint, CommandError> {
     let invalid = || CommandError::new(ErrorCode::InvalidArgument, "not a fingerprint");
     if text.len() != 64 || !text.is_ascii() {
@@ -422,10 +519,6 @@ fn fingerprint(text: &str) -> Result<Fingerprint, CommandError> {
         *byte = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
     }
     Ok(Fingerprint(out))
-}
-
-fn host_id(id: &str) -> Result<HostId, CommandError> {
-    HostId::parse(id).map_err(|e| CommandError::new(ErrorCode::InvalidArgument, e.to_string()))
 }
 
 /// Takes the passphrase into a wiped buffer.
@@ -522,6 +615,7 @@ pub(crate) struct ReviewsView {
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SeenInput {
+    /// As [`ReviewView::host`].
     pub(crate) host: String,
     pub(crate) fingerprint: String,
 }
@@ -535,7 +629,12 @@ pub(crate) async fn sync_reviews(
 ) -> Result<ReviewsView, CommandError> {
     let pending = gate
         .trust()?
-        .pending(hosts.book()?, gate.snippets.as_deref(), REVIEW_PAGE)
+        .pending(
+            hosts.book()?,
+            gate.snippets.as_deref(),
+            &gate.all_prints().await?,
+            REVIEW_PAGE,
+        )
         .await?;
     Ok(ReviewsView {
         reviews: pending.reviews.into_iter().map(ReviewView::from).collect(),
@@ -560,11 +659,16 @@ pub(crate) async fn sync_review_accept(
     }
     let seen = seen
         .iter()
-        .map(|s| Ok((host_id(&s.host)?, fingerprint(&s.fingerprint)?)))
+        .map(|s| Ok((subject(&s.host)?, fingerprint(&s.fingerprint)?)))
         .collect::<Result<Vec<_>, CommandError>>()?;
     let stale = gate
         .trust()?
-        .accept(hosts.book()?, gate.snippets.as_deref(), &seen)
+        .accept(
+            hosts.book()?,
+            gate.snippets.as_deref(),
+            &gate.all_prints().await?,
+            &seen,
+        )
         .await?;
     Ok(stale.iter().map(ToString::to_string).collect())
 }
@@ -606,6 +710,15 @@ pub(crate) fn schedule(state: &SyncState) {
             let _ = channel.send(SyncStatusView::from(status));
         }
     }));
+}
+
+/// Derives a key's public half as saving an identity does.
+pub(crate) struct SshKeys;
+
+impl tauminus_app::ports::KeyDeriver for SshKeys {
+    fn public_key(&self, private_key: &str, passphrase: Option<&str>) -> Result<String, String> {
+        tauminus_ssh::public_key_line_bounded(private_key, passphrase.filter(|p| !p.is_empty()))
+    }
 }
 
 #[cfg(test)]

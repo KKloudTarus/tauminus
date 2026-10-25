@@ -60,6 +60,7 @@ fn an_edit_never_shows_its_secrets_in_debug() {
         private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----".into()),
         passphrase: Some("swordfish".into()),
         generate: None,
+        sync: None,
     };
     let shown = format!("{edit:?}");
     assert!(
