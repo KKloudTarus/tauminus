@@ -547,3 +547,91 @@ async fn a_gc_the_users_settings_ask_for_drops_nothing_a_sync_needs() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A merge, saved whole and published.
+async fn sync(remote: &Remote, data: SyncData) -> SyncData {
+    let merged = remote.merge(data).await.unwrap();
+    for part in [SyncPart::Hosts, SyncPart::Snippets, SyncPart::Identities] {
+        remote.adopt(part).await.unwrap();
+    }
+    remote.publish().await.unwrap();
+    merged.data
+}
+
+#[tokio::test]
+async fn a_runbook_with_variables_reaches_the_other_device_through_git_and_fills_there() {
+    use std::collections::BTreeMap;
+
+    use tauminus_domain::{Snippet, SnippetId};
+
+    if !has_git() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("tauminus-runbook-git-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let bare = root.join("remote.git");
+    let status = Command::new("git")
+        .args(["init", "--quiet", "--bare"])
+        .arg(&bare)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let url = bare.to_string_lossy().into_owned();
+    let a_git = Arc::new(Git::local(&url, root.join("a-clone"), None));
+    let b_git = Arc::new(Git::local(&url, root.join("b-clone"), None));
+    let key = create(a_git.as_ref(), "correct horse", Kdf::LEAST).unwrap();
+    let b_key = join(b_git.as_ref(), "correct horse").unwrap();
+    let a = Remote::new(a_git, key, root.join("a-state.json"));
+    let b = Remote::new(b_git, b_key, root.join("b-state.json"));
+
+    let body = "systemctl stop {{service:canary-runbook-api}}\n\
+                pg_dump {{database}} > /backup/{{database}}.sql\n\
+                systemctl start {{service:canary-runbook-api}}";
+    let mut on_a = SyncData::default();
+    on_a.snippets
+        .put(
+            Snippet::new(
+                SnippetId::parse("restore").unwrap(),
+                Label::parse("Back up the database").unwrap(),
+                Some(Label::parse("Runbooks").unwrap()),
+                body.into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    sync(&a, on_a).await;
+    let on_b = sync(&b, SyncData::default()).await;
+
+    let runbook = on_b
+        .snippets
+        .get(&SnippetId::parse("restore").unwrap())
+        .expect("the runbook on B");
+    assert_eq!(runbook.body(), body);
+    assert_eq!(runbook.folder.as_ref().map(Label::as_str), Some("Runbooks"));
+    let names: Vec<String> = runbook.variables().into_iter().map(|v| v.name).collect();
+    assert_eq!(names, ["service", "database"]);
+    let typed = runbook
+        .command(&BTreeMap::from([(
+            "database".to_owned(),
+            "orders".to_owned(),
+        )]))
+        .unwrap();
+    // As typed: each line with its Enter.
+    assert_eq!(
+        typed,
+        "systemctl stop canary-runbook-api\r\
+         pg_dump orders > /backup/orders.sql\r\
+         systemctl start canary-runbook-api\r"
+    );
+
+    let all = Command::new("git")
+        .arg("-C")
+        .arg(&bare)
+        .args(["cat-file", "--batch-all-objects", "--batch"])
+        .output()
+        .unwrap();
+    let canary = b"canary-runbook-api";
+    assert!(!all.stdout.windows(canary.len()).any(|w| w == canary));
+    let _ = std::fs::remove_dir_all(&root);
+}
