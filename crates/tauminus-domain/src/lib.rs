@@ -27,6 +27,7 @@ mod telnet;
 mod terminal;
 mod tmux_control;
 mod trigger;
+pub mod trzsz;
 mod zmodem;
 
 pub use ai::{
