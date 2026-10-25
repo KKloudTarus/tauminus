@@ -551,24 +551,28 @@ pub(crate) async fn ssh_open(
     clippy::too_many_arguments,
     reason = "Tauri passes each IPC argument separately"
 )]
-pub(crate) async fn host_connect(
+pub(crate) async fn host_connect<R: tauri::Runtime>(
+    // The sync gate and the forwards, past specta's ten arguments.
+    app: tauri::AppHandle<R>,
     ssh: State<'_, SshSessions>,
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
-    forwards: State<'_, Arc<Forwards>>,
     id: String,
     size: GridSize,
     on_output: Channel<OutputChunk>,
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
+    use tauri::Manager as _;
+    let gate = app.state::<crate::sync::Gate>();
+    let forwards = app.state::<Arc<Forwards>>();
     // Before resolving: an edit that moves the host from here on voids
     // the rules that would start with it on what was resolved.
     let mark = tauminus_domain::HostId::parse(&id)
         .ok()
         .map(|host| forwards.host_mark(&host));
-    let login = login(&hosts, &vault, &id).await?;
+    let login = login(&hosts, &vault, &gate, &id).await?;
     let prompter = prompter(&broker, on_prompt);
     let sink = ChannelSink {
         output: on_output,
@@ -578,7 +582,7 @@ pub(crate) async fn host_connect(
         .open_saved(&login, size.try_into()?, sink, Arc::clone(&prompter))
         .await?;
     if let Some(mark) = mark {
-        crate::forwards::start_with_host(&hosts, &forwards, login, mark, prompter);
+        crate::forwards::start_with_host(&hosts, &gate, &forwards, login, mark, prompter);
     }
     SessionHandle::try_from(session)
 }
@@ -588,19 +592,23 @@ pub(crate) async fn host_connect(
 pub(crate) async fn login(
     hosts: &crate::hosts::Hosts,
     vault: &tauminus_app::vault::Vault,
+    gate: &crate::sync::Gate,
     id: &str,
 ) -> Result<Login, CommandError> {
     let invalid =
         |e: &dyn std::fmt::Display| CommandError::new(ErrorCode::InvalidArgument, e.to_string());
     let id = tauminus_domain::HostId::parse(id).map_err(|e| invalid(&e))?;
     let me = UserName::parse(&local_user()?).map_err(|e| invalid(&e))?;
-    Login::resolve(hosts.book()?, vault, &id, &me)
+    let login = Login::resolve(hosts.book()?, vault, &id, &me)
         .await
         .map_err(|error| match error {
             LoginError::Vault(error) => error.into(),
             LoginError::Hosts(error) => invalid(&error),
             LoginError::Name(error) => invalid(&error),
-        })
+        })?;
+    // After the read: a sync that saved what was read noted it first.
+    gate.check(hosts, &id).await?;
+    Ok(login)
 }
 
 /// Asks the view, on `channel`, whatever a login needs answered.
@@ -619,11 +627,16 @@ pub(crate) fn prompter(
 /// host, signing in as a connect to that host would, prompts included.
 #[tauri::command]
 #[specta::specta]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Tauri passes each IPC argument separately"
+)]
 pub(crate) async fn identity_install(
     ssh: State<'_, SshSessions>,
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    gate: State<'_, crate::sync::Gate>,
     identity: String,
     host: String,
     on_prompt: Channel<PromptRequest>,
@@ -635,7 +648,7 @@ pub(crate) async fn identity_install(
         .ok_or_else(|| invalid("this identity has no key to install".into()))?;
     let line =
         tauminus_domain::PublicKeyLine::installable(&line).map_err(|e| invalid(e.to_string()))?;
-    let login = login(&hosts, &vault, &host).await?;
+    let login = login(&hosts, &vault, &gate, &host).await?;
     let outcome = ssh
         .run_script(
             &login.target,

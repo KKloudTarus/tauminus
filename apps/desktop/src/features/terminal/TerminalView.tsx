@@ -14,13 +14,20 @@ interface TerminalViewProps {
   controller: TerminalController;
   className?: string;
   onUnlockVault?: (retry: () => void) => void;
+  /** Shows the review of the pane's saved host, then retries. */
+  onReview?: (retry: () => void, host: string | undefined) => void;
 }
 
 /** The host's padding above and beside the cells; the completion layer copies it. */
 const HOST_PAD = "px-3 pt-2";
 
 /** Shows a terminal. Mounting attaches it; unmounting detaches it and keeps the session. */
-export function TerminalView({ controller, className, onUnlockVault }: TerminalViewProps) {
+export function TerminalView({
+  controller,
+  className,
+  onUnlockVault,
+  onReview,
+}: TerminalViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const status = useSyncExternalStore(controller.subscribe, controller.getStatus);
   const prompt = useSyncExternalStore(controller.subscribe, controller.getPrompt);
@@ -85,6 +92,15 @@ export function TerminalView({ controller, className, onUnlockVault }: TerminalV
             message={status.message}
             onRetry={() => controller.retry()}
             {...(onUnlockVault ? { onUnlockVault } : {})}
+            {...(onReview
+              ? {
+                  onReview: (retry: () => void) =>
+                    onReview(
+                      retry,
+                      "hostId" in controller.spec ? controller.spec.hostId : undefined,
+                    ),
+                }
+              : {})}
           />
         ) : (
           <output className="block border-t border-line bg-surface-1 px-3 py-1.5 text-xs text-error">

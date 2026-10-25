@@ -110,4 +110,13 @@ const COMMANDS: &[&str] = &[
     "history_search",
     "history_output",
     "history_clear",
+    "sync_status",
+    "sync_listen",
+    "sync_create",
+    "sync_join",
+    "sync_now",
+    "sync_leave",
+    "sync_reviews",
+    "sync_review_accept",
+    "sync_choose_folder",
 ];

@@ -212,12 +212,13 @@ fn sftp_failed(error: SftpError) -> CommandError {
 pub(crate) async fn sftp_open(
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    gate: State<'_, crate::sync::Gate>,
     broker: State<'_, Arc<PromptBroker>>,
     files: State<'_, Arc<Files>>,
     host: String,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SftpHandle, CommandError> {
-    let login = crate::ssh::login(&hosts, &vault, &host).await?;
+    let login = crate::ssh::login(&hosts, &vault, &gate, &host).await?;
     let prompter = crate::ssh::prompter(&broker, on_prompt);
     let id = files.open(&login, prompter).await?;
     let home = match files.sftp(id)?.canonicalize(".").await {

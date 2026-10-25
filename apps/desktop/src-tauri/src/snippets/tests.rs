@@ -106,11 +106,11 @@ async fn an_unknown_id_is_not_created() {
         ErrorCode::NotFound
     );
     let saved = save(&book, input("real", None, "ls")).await.unwrap();
-    let id = saved.snippets().next().unwrap().id.to_string();
+    let id = saved.1.snippets().next().unwrap().id.to_string();
     let mut edit = input("renamed", None, "ls -la");
     edit.id = Some(id);
     let edited = save(&book, edit).await.unwrap();
-    assert_eq!(edited.snippets().next().unwrap().name.as_str(), "renamed");
+    assert_eq!(edited.1.snippets().next().unwrap().name.as_str(), "renamed");
 }
 
 #[tokio::test]

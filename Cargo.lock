@@ -5642,6 +5642,7 @@ dependencies = [
  "tauminus-serial",
  "tauminus-ssh",
  "tauminus-store",
+ "tauminus-sync",
  "tauminus-telnet",
  "tauri",
  "tauri-build",

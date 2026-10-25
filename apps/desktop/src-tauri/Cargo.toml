@@ -35,6 +35,7 @@ tauminus-pty.workspace = true
 tauminus-ssh.workspace = true
 tauminus-presence.workspace = true
 tauminus-store.workspace = true
+tauminus-sync.workspace = true
 tauminus-serial.workspace = true
 tauminus-telnet.workspace = true
 tauminus-mosh.workspace = true

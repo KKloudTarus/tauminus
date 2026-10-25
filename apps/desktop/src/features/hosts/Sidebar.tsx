@@ -22,6 +22,7 @@ interface SidebarProps {
   store: HostsStore;
   onConnect: (host: HostView) => void;
   onOpenVault?: () => void;
+  onOpenSync?: () => void;
   /** Opens the host's files; without it there is no files button. */
   onFiles?: (host: HostView) => void;
   /** Identities to pick from in the editors; empty while the vault is locked. */
@@ -70,6 +71,7 @@ export function Sidebar({
   store,
   onConnect,
   onOpenVault,
+  onOpenSync,
   onFiles,
   identities = NO_IDENTITIES,
   snippets,
@@ -163,6 +165,17 @@ export function Sidebar({
             className="icon-btn"
           >
             <Icon name="key" />
+          </button>
+        )}
+        {onOpenSync && (
+          <button
+            type="button"
+            onClick={onOpenSync}
+            aria-label="Sync"
+            title="Sync with other devices"
+            className="icon-btn"
+          >
+            <Icon name="sync" />
           </button>
         )}
         <ImportMenu

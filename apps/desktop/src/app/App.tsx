@@ -19,6 +19,7 @@ import { SnippetsDialog } from "@/features/snippets/SnippetsDialog.tsx";
 import { HistoryDialog } from "@/features/history/HistoryDialog.tsx";
 import { AiDialog } from "@/features/ai/AiDialog.tsx";
 import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
+import { SyncDialog } from "@/features/sync/SyncDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
 
@@ -36,6 +37,7 @@ export function App({ shell }: { shell: AppShell }) {
   const {
     sidebarOpen,
     vaultOpen,
+    syncOpen,
     historyOpen,
     forwardsOpen,
     snippetsOpen,
@@ -97,6 +99,7 @@ export function App({ shell }: { shell: AppShell }) {
     }
   }, [narrow, shell]);
   const openVault = useCallback(() => shell.setVaultOpen(true), [shell]);
+  const openSync = useCallback(() => shell.setSyncOpen(true), [shell]);
   const openFiles = useCallback((host: HostView) => shell.openFiles(host), [shell]);
   const chooseSnippet = useCallback((id: string) => shell.chooseSnippet(id), [shell]);
   const chooseSnippetHosts = useCallback((id: string) => shell.chooseSnippetHosts(id), [shell]);
@@ -159,6 +162,7 @@ export function App({ shell }: { shell: AppShell }) {
         state.paletteOpen ||
         state.connectOpen ||
         state.vaultOpen ||
+        state.syncOpen ||
         state.historyOpen ||
         state.forwardsOpen ||
         state.snippetsOpen ||
@@ -235,6 +239,7 @@ export function App({ shell }: { shell: AppShell }) {
             store={shell.hosts}
             onConnect={connectHost}
             onOpenVault={openVault}
+            {...(shell.sync ? { onOpenSync: openSync } : {})}
             {...(shell.files ? { onFiles: openFiles } : {})}
             identities={vault.identities}
             snippets={snippetList}
@@ -248,6 +253,7 @@ export function App({ shell }: { shell: AppShell }) {
               store={shell.hosts}
               onConnect={connectHost}
               onOpenVault={openVault}
+              {...(shell.sync ? { onOpenSync: openSync } : {})}
               {...(shell.files ? { onFiles: openFiles } : {})}
               identities={vault.identities}
               snippets={snippetList}
@@ -269,6 +275,12 @@ export function App({ shell }: { shell: AppShell }) {
               broadcast={shell.broadcast}
               tab={active}
               onUnlockVault={(retry) => shell.unlockVaultThen(retry)}
+              {...(shell.sync
+                ? {
+                    onReview: (retry: () => void, host: string | undefined) =>
+                      shell.reviewSyncThen(retry, host),
+                  }
+                : {})}
             />
           ) : (
             <EmptyState
@@ -374,6 +386,17 @@ export function App({ shell }: { shell: AppShell }) {
             void shell.runSnippet(snippetToFill.snippet.id, values, snippetToFill.hosts)
           }
           onClose={() => shell.closeSnippetForm()}
+        />
+      )}
+      {syncOpen && shell.sync && (
+        <SyncDialog
+          store={shell.sync}
+          onClose={() => shell.setSyncOpen(false)}
+          onOpenVault={() => {
+            shell.setSyncOpen(false);
+            shell.setVaultOpen(true);
+          }}
+          onReviewed={(hosts) => shell.syncReviewed(hosts)}
         />
       )}
       {vaultOpen && (

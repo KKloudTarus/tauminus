@@ -10,6 +10,8 @@ interface ConnectFailureProps {
   onRetry: () => void;
   /** Opens the vault, then retries; for a host whose identity is in it. */
   onUnlockVault?: (retry: () => void) => void;
+  /** Shows what another device changed, then retries once it is accepted. */
+  onReview?: (retry: () => void) => void;
 }
 
 /** Why an SSH connect failed, and what to do next. */
@@ -19,6 +21,7 @@ export function ConnectFailure({
   message,
   onRetry,
   onUnlockVault,
+  onReview,
 }: ConnectFailureProps) {
   const danger = code === "host_key_changed" || code === "host_key_revoked";
   return (
@@ -39,6 +42,11 @@ export function ConnectFailure({
             className="btn btn-primary mr-2"
           >
             Unlock the vault
+          </button>
+        )}
+        {code === "needs_review" && onReview && (
+          <button type="button" onClick={() => onReview(onRetry)} className="btn btn-primary mr-2">
+            Review the change
           </button>
         )}
         {!danger && (
@@ -65,6 +73,8 @@ function heading(code: ErrorCode | undefined, target: string): string {
       return `Could not reach ${target}`;
     case "vault_locked":
       return `Unlock the vault to sign in to ${target}`;
+    case "needs_review":
+      return `Another device changed ${target}`;
     default:
       return `Could not connect to ${target}`;
   }
@@ -88,6 +98,8 @@ function advice(code: ErrorCode | undefined): string {
       return "Check the host name and port, your network, and any proxy or jump host.";
     case "vault_locked":
       return "This host signs in with an identity kept in the vault.";
+    case "needs_review":
+      return "Sync brought a change to how this host connects. Nothing was sent; check what it runs and accept it first.";
     default:
       return "The server or a proxy ended the connection unexpectedly.";
   }

@@ -109,6 +109,11 @@ pub(crate) enum ErrorCode {
     /// A setting forbids it, such as a host that does not let the AI
     /// assistant read its output.
     NotAllowed,
+    /// Another device changed this saved host: the view shows what a
+    /// connect to it now does, and the user accepts it first.
+    NeedsReview,
+    /// Something like it is running; try again when it ends.
+    Busy,
     Internal,
 }
 

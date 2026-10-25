@@ -23,6 +23,7 @@ mod recordings;
 mod serial;
 mod snippets;
 mod ssh;
+mod sync;
 mod telnet;
 mod tmux;
 mod triggers;
@@ -115,7 +116,7 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         serial::serial_open,
         hosts::hosts_import_ssh_config,
         import::hosts_import_from::<tauri::Wry>,
-        ssh::host_connect,
+        ssh::host_connect::<tauri::Wry>,
         forwards::forward_start,
         forwards::forward_stop,
         forwards::forwards_status,
@@ -155,6 +156,15 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         history::history_search,
         history::history_output,
         history::history_clear,
+        sync::sync_status,
+        sync::sync_listen,
+        sync::sync_create,
+        sync::sync_join,
+        sync::sync_now,
+        sync::sync_leave,
+        sync::sync_reviews,
+        sync::sync_review_accept,
+        sync::sync_choose_folder::<tauri::Wry>,
     ])
 }
 
@@ -273,12 +283,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
             presence,
         )
     });
-    let history = tauri::async_runtime::block_on(tauminus_app::history::History::new(
-        Arc::new(FileHistoryBackend::new(&config_dir)),
-        Arc::clone(&vault),
-        tauminus_domain::Retention::default(),
-    ));
-    app.manage(history);
+    manage_history(app, &vault, &config_dir);
     app.manage(Arc::new(tauminus_app::recording::Recordings::new(
         Arc::new(tauminus_store::FileRecordingStore::new(
             config_dir.join("recordings"),
@@ -295,12 +300,76 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         hosts::Hosts::Unavailable(_) => None,
     };
     app.manage(fill::FillState(fill));
-    manage_assistant(app, ai_sessions, Arc::clone(&vault), &config_dir);
+    let trust = open_trust(&config_dir);
+    manage_assistant(app, ai_sessions, Arc::clone(&vault), &config_dir, &trust);
+    manage_sync(app, Arc::clone(&vault), &config_dir, trust);
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(
         home.map(|home| OpenSshConfig::user(home, local)),
     ));
+}
+
+/// The command history, sealed to the vault.
+fn manage_history<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+    vault: &Arc<Vault>,
+    config_dir: &std::path::Path,
+) {
+    let history = tauri::async_runtime::block_on(tauminus_app::history::History::new(
+        Arc::new(FileHistoryBackend::new(config_dir)),
+        Arc::clone(vault),
+        tauminus_domain::Retention::default(),
+    ));
+    app.manage(history);
+}
+
+/// The sync review list every use of a saved host checks.
+fn open_trust(config_dir: &std::path::Path) -> Result<Arc<tauminus_app::trust::Trust>, String> {
+    let store = Arc::new(tauminus_store::JsonTrustStore::new(
+        config_dir.join("sync-review.json"),
+    ));
+    tauri::async_runtime::block_on(tauminus_app::trust::Trust::open(store))
+        .map(Arc::new)
+        .map_err(|e| {
+            tracing::error!(error = %e, "sync review list unavailable");
+            e.to_string()
+        })
+}
+
+/// Sync, and the review list every use of a saved host checks. Without
+/// the review list no saved host is used; without the saved lists there is
+/// nothing to sync.
+fn manage_sync<R: tauri::Runtime>(
+    app: &tauri::App<R>,
+    vault: Arc<Vault>,
+    config_dir: &std::path::Path,
+    trust: Result<Arc<tauminus_app::trust::Trust>, String>,
+) {
+    let snippets = match &*app.state::<snippets::Snippets>() {
+        snippets::Snippets::Ready(book) => Some(Arc::clone(book)),
+        snippets::Snippets::Unavailable(_) => None,
+    };
+    let service = match (&*app.state::<hosts::Hosts>(), &snippets, &trust) {
+        (hosts::Hosts::Ready(hosts), Some(snippets), Ok(trust)) => {
+            Ok(Arc::new(tauminus_app::SyncService::new(
+                vault,
+                Arc::clone(hosts),
+                Arc::clone(snippets),
+                Arc::clone(trust),
+                Arc::new(tauminus_sync::connector::Connector::new(
+                    config_dir.join("sync"),
+                )),
+            )))
+        }
+        (hosts::Hosts::Unavailable(reason), _, _) => Err(reason.clone()),
+        (_, None, _) => Err("the saved snippets could not be read".to_owned()),
+        (_, _, Err(reason)) => Err(reason.clone()),
+    };
+    app.manage(sync::Gate::new(trust, snippets));
+    let state = sync::SyncState::new(service);
+    sync::schedule(&state);
+    app.manage(state);
 }
 
 /// The session kinds that reach other machines: serial ports, Telnet,
@@ -339,19 +408,31 @@ fn manage_assistant<R: tauri::Runtime>(
     sessions: Arc<SessionManager>,
     vault: Arc<Vault>,
     config_dir: &std::path::Path,
+    trust: &Result<Arc<tauminus_app::trust::Trust>, String>,
 ) {
+    let snippets = match &*app.state::<snippets::Snippets>() {
+        snippets::Snippets::Ready(book) => Some(Arc::clone(book)),
+        snippets::Snippets::Unavailable(_) => None,
+    };
     let assistant = match &*app.state::<hosts::Hosts>() {
-        hosts::Hosts::Ready(book) => tauminus_ai::OpenAiCompatible::new().map(|transport| {
-            Arc::new(tauminus_app::Assistant::new(
-                sessions,
-                Arc::clone(book),
-                vault,
-                Arc::new(tauminus_store::JsonAiSettingsStore::new(
-                    config_dir.join("ai.json"),
-                )),
-                Arc::new(transport),
-            ))
-        }),
+        hosts::Hosts::Ready(book) => match trust {
+            // Without the review list no saved host lends its output.
+            Err(reason) => Err(reason.clone()),
+            Ok(trust) => tauminus_ai::OpenAiCompatible::new().map(|transport| {
+                Arc::new(
+                    tauminus_app::Assistant::new(
+                        sessions,
+                        Arc::clone(book),
+                        vault,
+                        Arc::new(tauminus_store::JsonAiSettingsStore::new(
+                            config_dir.join("ai.json"),
+                        )),
+                        Arc::new(transport),
+                    )
+                    .with_trust(Arc::clone(trust), snippets),
+                )
+            }),
+        },
         hosts::Hosts::Unavailable(_) => Err("saved hosts could not be read".to_owned()),
     };
     app.manage(ai::AiState(assistant));

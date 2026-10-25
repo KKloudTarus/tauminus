@@ -151,19 +151,27 @@ pub(crate) async fn snippets_list(
 #[specta::specta]
 pub(crate) async fn snippet_save(
     snippets: State<'_, Snippets>,
+    hosts: State<'_, Hosts>,
+    gate: State<'_, crate::sync::Gate>,
     snippet: SnippetInput,
 ) -> Result<Vec<SnippetView>, CommandError> {
     let book = snippets.book()?;
-    Ok(view(&save(book, snippet).await?))
+    let inventory = gate.inventory_before(&hosts).await;
+    let (before, after) = save(book, snippet).await?;
+    gate.snippets_edited(inventory, &before, &after).await;
+    Ok(view(&after))
 }
 
 /// An id the caller names must be saved already: a deleted snippet that
 /// hosts still list does not come back under its old id.
-pub(crate) async fn save(book: &SnippetBook, input: SnippetInput) -> Result<Library, CommandError> {
+pub(crate) async fn save(
+    book: &SnippetBook,
+    input: SnippetInput,
+) -> Result<(Library, Library), CommandError> {
     let replaces = input.id.is_some();
     let snippet = parse(book, input)?;
     Ok(book
-        .edit(|library| {
+        .edit_both(|library| {
             if replaces && library.get(&snippet.id).is_none() {
                 return Err(SnippetError::NoSuch(snippet.id.clone()));
             }
@@ -177,13 +185,18 @@ pub(crate) async fn save(book: &SnippetBook, input: SnippetInput) -> Result<Libr
 #[specta::specta]
 pub(crate) async fn snippet_delete(
     snippets: State<'_, Snippets>,
+    hosts: State<'_, Hosts>,
+    gate: State<'_, crate::sync::Gate>,
     id: String,
 ) -> Result<Vec<SnippetView>, CommandError> {
     let book = snippets.book()?;
     let id = SnippetId::parse(&id).map_err(invalid)?;
-    Ok(view(
-        &book.edit(|library| library.remove(&id).map(drop)).await?,
-    ))
+    let inventory = gate.inventory_before(&hosts).await;
+    let (before, after) = book
+        .edit_both(|library| library.remove(&id).map(drop))
+        .await?;
+    gate.snippets_edited(inventory, &before, &after).await;
+    Ok(view(&after))
 }
 
 /// The text to type to run a snippet: placeholders filled from `values`
@@ -209,6 +222,7 @@ pub(crate) async fn snippet_command(
 pub(crate) async fn host_startup(
     hosts: State<'_, Hosts>,
     snippets: State<'_, Snippets>,
+    gate: State<'_, crate::sync::Gate>,
     host: String,
 ) -> Result<StartupView, CommandError> {
     let host = HostId::parse(&host).map_err(invalid)?;
@@ -224,6 +238,9 @@ pub(crate) async fn host_startup(
         });
     }
     let (text, skipped) = snippets.book()?.startup(&ids).await;
+    // After the read, as for a login: a sync's edit of these snippets, or
+    // of the host's list, waits for the user.
+    gate.check(&hosts, &host).await?;
     Ok(StartupView {
         text,
         skipped: skipped

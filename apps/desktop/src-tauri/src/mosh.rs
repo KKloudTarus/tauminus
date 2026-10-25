@@ -49,13 +49,14 @@ pub(crate) async fn mosh_connect(
     broker: State<'_, Arc<PromptBroker>>,
     hosts: State<'_, crate::hosts::Hosts>,
     vault: State<'_, Arc<tauminus_app::vault::Vault>>,
+    gate: State<'_, crate::sync::Gate>,
     id: String,
     size: GridSize,
     on_output: Channel<OutputChunk>,
     on_exit: Channel<SessionExit>,
     on_prompt: Channel<PromptRequest>,
 ) -> Result<SessionHandle, CommandError> {
-    let login = login(&hosts, &vault, &id).await?;
+    let login = login(&hosts, &vault, &gate, &id).await?;
     let prompter = prompter(&broker, on_prompt);
     let sink = ChannelSink {
         output: on_output,

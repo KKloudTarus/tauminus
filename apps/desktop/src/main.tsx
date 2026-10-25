@@ -19,6 +19,7 @@ import {
   serialClient,
   sessionClient,
   snippetsClient,
+  syncClient,
   triggersClient,
   textClipboard,
   vaultClient,
@@ -58,6 +59,7 @@ const shell = new AppShell({
   snippets: await snippetsClient(
     (host) => shell.hosts.getSnapshot().view.hosts.find((h) => h.id === host)?.startup ?? [],
   ),
+  sync: await syncClient(),
   triggers: await triggersClient((host) => triggersOf(host)),
   links: await linkOpener(),
   userAgent: navigator.userAgent,
@@ -71,6 +73,7 @@ const shell = new AppShell({
 shell.workspace.newTab();
 void shell.hosts.load();
 void shell.snippets?.load();
+void shell.sync?.listen().catch((error: unknown) => console.warn("sync listen failed", error));
 void shell.triggers?.load();
 // Only a benchmark build has this flag; other builds drop the import.
 if (import.meta.env.VITE_TAUMINUS_BENCH === "1") {

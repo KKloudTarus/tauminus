@@ -44,6 +44,7 @@ export type Action =
   | "hosts.importCsv"
   | "vault.open"
   | "vault.lock"
+  | "sync.open"
   | "history.open"
   | "forwards.open"
   | "files.open"
@@ -94,6 +95,7 @@ export const ACTIONS: readonly Action[] = [
   "hosts.importCsv",
   "vault.open",
   "vault.lock",
+  "sync.open",
   "history.open",
   "forwards.open",
   "files.open",
@@ -150,6 +152,7 @@ const OTHER: Bindings = {
   "hosts.importCsv": [],
   "vault.open": [],
   "vault.lock": [],
+  "sync.open": [],
   "history.open": ["ctrl+shift+r"],
   "forwards.open": [],
   "files.open": [],
@@ -203,6 +206,7 @@ const MAC: Bindings = {
   "hosts.importCsv": [],
   "vault.open": [],
   "vault.lock": [],
+  "sync.open": [],
   "history.open": ["meta+shift+r"],
   "forwards.open": [],
   "files.open": [],

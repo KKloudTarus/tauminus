@@ -21,6 +21,7 @@ import { type PaneId, type Template, paneIds } from "@/features/workspace/layout
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore, messageOf } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
+import { SyncStore } from "@/features/sync/sync-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
 import { SnippetsStore } from "@/features/snippets/snippets-store.ts";
@@ -45,6 +46,7 @@ import type {
   SerialSpec,
   SnippetView,
   SnippetsClient,
+  SyncClient,
   TabWindowView,
   TmuxClient,
   TmuxEvents,
@@ -97,6 +99,7 @@ export const ACTION_LABELS: Record<Action, string> = {
   "hosts.importCsv": "Import hosts from a CSV file",
   "vault.open": "Open the vault",
   "vault.lock": "Lock the vault",
+  "sync.open": "Sync hosts and snippets with other devices",
   "history.open": "Search the command history",
   "forwards.open": "Port forwarding",
   "files.open": "Files on this host (SFTP)",
@@ -130,6 +133,7 @@ interface ShellState {
   paletteOpen: boolean;
   connectOpen: boolean;
   vaultOpen: boolean;
+  syncOpen: boolean;
   historyOpen: boolean;
   forwardsOpen: boolean;
   snippetsOpen: boolean;
@@ -174,6 +178,10 @@ export class AppShell {
   readonly workspace: Workspace<TerminalController, SessionSpec>;
   readonly hosts: HostsStore;
   readonly vault: VaultStore;
+  /** Sync with other devices, when this window has a backend for it. */
+  readonly sync: SyncStore | undefined;
+  /** A connect waiting for the user to review a synced host. */
+  #afterReview: { retry: () => void; host: string | undefined } | undefined;
   /** Files on hosts, when this window has a backend for them. */
   readonly files: FilesClient | undefined;
   /** Port forwarding, when this window has a backend for it. */
@@ -240,6 +248,7 @@ export class AppShell {
     forwards?: ForwardsClient;
     files?: FilesClient;
     snippets?: SnippetsClient;
+    sync?: SyncClient;
     triggers?: TriggersClient;
     serial?: SerialClient;
     recordings?: RecordingsClient;
@@ -270,6 +279,13 @@ export class AppShell {
       ? new ForwardsStore(options.forwards, (retry) => this.unlockVaultThen(retry))
       : undefined;
     this.snippets = options.snippets ? new SnippetsStore(options.snippets) : undefined;
+    // A sync may have brought other devices' hosts and snippets.
+    this.sync = options.sync
+      ? new SyncStore(options.sync, () => {
+          void this.hosts.load();
+          void this.snippets?.load();
+        })
+      : undefined;
     this.triggers = options.triggers
       ? new TriggersStore(options.triggers, () => this.#refreshHighlights())
       : undefined;
@@ -291,6 +307,7 @@ export class AppShell {
       paletteOpen: false,
       connectOpen: false,
       vaultOpen: false,
+      syncOpen: false,
       historyOpen: false,
       forwardsOpen: false,
       snippetsOpen: false,
@@ -431,6 +448,29 @@ export class AppShell {
       this.#set({ ...this.#state, connectOpen: open });
       if (!open) this.#focusActivePane();
     }
+  }
+
+  setSyncOpen(open: boolean): void {
+    if (this.#state.syncOpen === open) return;
+    if (!open) this.#afterReview = undefined;
+    this.#set({ ...this.#state, syncOpen: open });
+    if (!open) this.#focusActivePane();
+  }
+
+  /** Shows the hosts other devices changed, then runs `retry` once the
+   * user accepts `host`, or any host when it is not known. */
+  reviewSyncThen(retry: () => void, host?: string): void {
+    this.#afterReview = { retry, host };
+    this.setSyncOpen(true);
+  }
+
+  /** The sync dialog accepted `hosts`: run what waited for one of them. */
+  syncReviewed(hosts: readonly string[]): void {
+    const after = this.#afterReview;
+    if (!after || hosts.length === 0) return;
+    if (after.host !== undefined && !hosts.includes(after.host)) return;
+    this.setSyncOpen(false);
+    after.retry();
   }
 
   setHistoryOpen(open: boolean): void {
@@ -1295,6 +1335,9 @@ export class AppShell {
         return;
       case "vault.open":
         this.setVaultOpen(true);
+        return;
+      case "sync.open":
+        this.setSyncOpen(true);
         return;
       case "history.open":
         this.setHistoryOpen(true);

@@ -144,13 +144,16 @@ type HistoryState<'a> = State<'a, Arc<History>>;
 pub(crate) async fn history_record(
     history: HistoryState<'_>,
     hosts: State<'_, crate::hosts::Hosts>,
+    gate: State<'_, crate::sync::Gate>,
     entry: HistoryRecordSpec,
 ) -> Result<RecordedSpec, CommandError> {
     if let Some(host) = &entry.host {
         let id = tauminus_domain::HostId::parse(host)
             .map_err(|e| CommandError::new(ErrorCode::InvalidArgument, e.to_string()))?;
         // A host deleted since the session opened records nothing.
-        let records = hosts.book()?.records_history(&id).await.unwrap_or(false);
+        let records = hosts.book()?.records_history(&id).await.unwrap_or(false)
+            // A host another device changed, unseen, records nothing.
+            && gate.passes(&hosts, &id).await;
         if !records {
             return Ok(RecordedSpec::Dropped);
         }
