@@ -16,10 +16,19 @@ use serde_json::Value;
 use crate::stamp::{Clock, Stamp};
 
 /// One field's value and when it got it. `Null` is a field taken away.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Cell {
     pub at: Stamp,
     pub value: Value,
+}
+
+/// Without the value: an identity's holds its password or key.
+impl std::fmt::Debug for Cell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cell")
+            .field("at", &self.at)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A record's fields, or, deleted, when it was: then no fields.

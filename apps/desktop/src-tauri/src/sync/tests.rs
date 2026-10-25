@@ -10,7 +10,7 @@ fn a_fingerprint_round_trips_and_anything_else_is_refused() {
         *b = u8::try_from(i * 7).unwrap();
     }
     let view = ReviewView::from(Review {
-        host: HostId::parse("h").unwrap(),
+        subject: Subject::Host(HostId::parse("h").unwrap()),
         label: "h".into(),
         new: true,
         lines: Vec::new(),

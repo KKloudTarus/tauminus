@@ -103,6 +103,8 @@ pub(crate) struct IdentityView {
     pub(crate) has_password: bool,
     pub(crate) has_key: bool,
     pub(crate) public_key: Option<String>,
+    /// This device shares it through sync.
+    pub(crate) sync: bool,
 }
 
 impl From<IdentitySummary> for IdentityView {
@@ -114,6 +116,7 @@ impl From<IdentitySummary> for IdentityView {
             has_password: summary.has_password,
             has_key: summary.has_key,
             public_key: summary.public_key,
+            sync: summary.sync,
         }
     }
 }
@@ -161,6 +164,9 @@ pub(crate) struct IdentityEdit {
     pub(crate) passphrase: Option<String>,
     #[serde(default)]
     pub(crate) generate: Option<KeyKindSpec>,
+    /// Whether this device shares it through sync; left out keeps it.
+    #[serde(default)]
+    pub(crate) sync: Option<bool>,
 }
 
 impl std::fmt::Debug for IdentityEdit {
@@ -290,6 +296,8 @@ pub(crate) async fn identities_list(
 #[specta::specta]
 pub(crate) async fn identity_save(
     vault: VaultState<'_>,
+    gate: State<'_, crate::sync::Gate>,
+    hosts: State<'_, crate::hosts::Hosts>,
     identity: IdentityEdit,
 ) -> Result<String, CommandError> {
     // Into wiped buffers first, so every return below wipes them.
@@ -301,6 +309,7 @@ pub(crate) async fn identity_save(
         private_key,
         passphrase,
         generate,
+        sync,
     } = identity;
     let password = password.map(secret);
     let mut private_key = private_key.map(secret);
@@ -360,14 +369,24 @@ pub(crate) async fn identity_save(
         private_key,
         passphrase,
         public_key,
+        sync,
     };
-    Ok(vault.save_identity(input).await?)
+    let (id, before, after) = vault.save_identity_printed(input).await?;
+    gate.identities_edited(&hosts, &before, &after).await;
+    Ok(id)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn identity_delete(vault: VaultState<'_>, id: String) -> Result<(), CommandError> {
-    Ok(vault.delete_identity(id).await?)
+pub(crate) async fn identity_delete(
+    vault: VaultState<'_>,
+    gate: State<'_, crate::sync::Gate>,
+    hosts: State<'_, crate::hosts::Hosts>,
+    id: String,
+) -> Result<(), CommandError> {
+    let (before, after) = vault.delete_identity_printed(id).await?;
+    gate.identities_edited(&hosts, &before, &after).await;
+    Ok(())
 }
 
 /// The `authorized_keys` line of an OpenSSH private key, which must decode

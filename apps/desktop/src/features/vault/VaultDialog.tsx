@@ -268,6 +268,7 @@ function Unlocked({
                     identity.user,
                     identity.hasPassword ? "password" : undefined,
                     identity.hasKey ? "key" : undefined,
+                    identity.sync ? "shared through sync" : undefined,
                   ]
                     .filter(Boolean)
                     .join(" · ") || "nothing stored"}
@@ -322,6 +323,7 @@ function IdentityForm({
   const [passphrase, setPassphrase] = useState("");
   const [removePassword, setRemovePassword] = useState(false);
   const [removeKey, setRemoveKey] = useState(false);
+  const [shared, setShared] = useState(identity?.sync ?? false);
   const [error, setError] = useState<string | undefined>();
   const [confirming, setConfirming] = useState(false);
   const first = useRef<HTMLInputElement>(null);
@@ -343,6 +345,7 @@ function IdentityForm({
         password: removePassword ? "" : password || null,
         privateKey: removeKey ? "" : privateKey || null,
         passphrase: removeKey ? "" : passphrase || null,
+        sync: shared,
       })
       .then(onDone)
       .catch((failure: unknown) => setError(messageOf(failure)))
@@ -439,6 +442,15 @@ function IdentityForm({
             />
           </Field>
         )}
+        <label className="mb-1 flex items-center gap-2">
+          <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+          Share through sync
+        </label>
+        <p className="mb-3 text-xs opacity-70">
+          {shared
+            ? "Its password and key go to every device that syncs, sealed with the sync key. Stopping later does not take them back from the other devices or the target: change the password and key then."
+            : "Kept on this device only. Hosts that use it still sync, and log in elsewhere only where this identity is too."}
+        </p>
         <Problem text={error} />
         <div className="flex gap-2">
           {identity && (

@@ -114,6 +114,7 @@ export function fakeVault(): FakeVault {
         privateKey: generated ?? keep(edit.privateKey, old?.privateKey),
         hasPassword: false,
         hasKey: false,
+        sync: edit.sync ?? old?.sync ?? false,
         publicKey: generated
           ? `ssh-${edit.generate} AAAAgenerated tauminus-${edit.name.trim()}`
           : edit.privateKey

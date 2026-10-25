@@ -11,6 +11,7 @@ pub mod doc;
 pub mod engine;
 pub mod flat;
 pub mod git;
+mod identities;
 pub mod s3;
 pub mod seal;
 pub mod stamp;

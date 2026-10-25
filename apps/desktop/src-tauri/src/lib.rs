@@ -291,18 +291,22 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         Arc::clone(&vault),
         recording_sessions,
     )));
-    let fill = match &*app.state::<hosts::Hosts>() {
-        hosts::Hosts::Ready(book) => Some(Arc::new(tauminus_app::Fill::new(
-            fill_sessions,
-            Arc::clone(book),
-            Arc::clone(&vault),
-        ))),
-        hosts::Hosts::Unavailable(_) => None,
+    let trust = open_trust(&config_dir);
+    let fill_snippets = match &*app.state::<snippets::Snippets>() {
+        snippets::Snippets::Ready(book) => Some(Arc::clone(book)),
+        snippets::Snippets::Unavailable(_) => None,
+    };
+    // Without the review list no saved host's password is typed.
+    let fill = match (&*app.state::<hosts::Hosts>(), &trust) {
+        (hosts::Hosts::Ready(book), Ok(trust)) => Some(Arc::new(
+            tauminus_app::Fill::new(fill_sessions, Arc::clone(book), Arc::clone(&vault))
+                .with_trust(Arc::clone(trust), fill_snippets),
+        )),
+        _ => None,
     };
     app.manage(fill::FillState(fill));
-    let trust = open_trust(&config_dir);
     manage_assistant(app, ai_sessions, Arc::clone(&vault), &config_dir, &trust);
-    manage_sync(app, Arc::clone(&vault), &config_dir, trust);
+    manage_sync(app, &vault, &config_dir, trust);
     app.manage(vault);
     let local = ssh::local_user().unwrap_or_default();
     app.manage(hosts::SshConfig(
@@ -342,7 +346,7 @@ fn open_trust(config_dir: &std::path::Path) -> Result<Arc<tauminus_app::trust::T
 /// nothing to sync.
 fn manage_sync<R: tauri::Runtime>(
     app: &tauri::App<R>,
-    vault: Arc<Vault>,
+    vault: &Arc<Vault>,
     config_dir: &std::path::Path,
     trust: Result<Arc<tauminus_app::trust::Trust>, String>,
 ) {
@@ -353,20 +357,21 @@ fn manage_sync<R: tauri::Runtime>(
     let service = match (&*app.state::<hosts::Hosts>(), &snippets, &trust) {
         (hosts::Hosts::Ready(hosts), Some(snippets), Ok(trust)) => {
             Ok(Arc::new(tauminus_app::SyncService::new(
-                vault,
+                Arc::clone(vault),
                 Arc::clone(hosts),
                 Arc::clone(snippets),
                 Arc::clone(trust),
                 Arc::new(tauminus_sync::connector::Connector::new(
                     config_dir.join("sync"),
                 )),
+                Arc::new(sync::SshKeys),
             )))
         }
         (hosts::Hosts::Unavailable(reason), _, _) => Err(reason.clone()),
         (_, None, _) => Err("the saved snippets could not be read".to_owned()),
         (_, _, Err(reason)) => Err(reason.clone()),
     };
-    app.manage(sync::Gate::new(trust, snippets));
+    app.manage(sync::Gate::new(trust, snippets, Arc::clone(vault)));
     let state = sync::SyncState::new(service);
     sync::schedule(&state);
     app.manage(state);

@@ -270,3 +270,26 @@ fn a_tombstone_is_dropped_once_old() {
     assert!(doc.records.contains_key("host:k"), "a live record stays");
     assert!(!serde_json::to_string(&doc).unwrap().contains("secret-name"));
 }
+
+#[test]
+fn a_doc_shows_no_value_when_debugged() {
+    let mut doc = Doc::default();
+    doc.records.insert(
+        "identity:a".into(),
+        Record {
+            fields: BTreeMap::from([(
+                "password".to_owned(),
+                Cell {
+                    at: Stamp {
+                        ms: 1,
+                        n: 0,
+                        device: "a".into(),
+                    },
+                    value: Value::from("hunter2-canary"),
+                },
+            )]),
+            gone: None,
+        },
+    );
+    assert!(!format!("{doc:?}").contains("hunter2"));
+}

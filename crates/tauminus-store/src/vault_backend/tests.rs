@@ -82,6 +82,7 @@ fn identity(id: &str) -> Identity {
         private_key: Some(secret("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")),
         passphrase: None,
         public_key: Some("ssh-ed25519 AAAA deploy@host".into()),
+        sync: false,
     }
 }
 

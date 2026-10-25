@@ -83,9 +83,11 @@ async fn two_devices_sync_through_a_bare_repository_that_holds_only_ciphertext()
     );
     b.adopt(SyncPart::Hosts).await.unwrap();
     b.adopt(SyncPart::Snippets).await.unwrap();
+    b.adopt(SyncPart::Identities).await.unwrap();
     b.publish().await.unwrap();
     a.adopt(SyncPart::Hosts).await.unwrap();
     a.adopt(SyncPart::Snippets).await.unwrap();
+    a.adopt(SyncPart::Identities).await.unwrap();
     a.publish().await.unwrap();
     assert_eq!(merged_a.data.hosts.hosts().count(), 1);
 
@@ -93,10 +95,12 @@ async fn two_devices_sync_through_a_bare_repository_that_holds_only_ciphertext()
     let on_b = b.merge(merged_b.data.clone()).await.unwrap();
     b.adopt(SyncPart::Hosts).await.unwrap();
     b.adopt(SyncPart::Snippets).await.unwrap();
+    b.adopt(SyncPart::Identities).await.unwrap();
     b.publish().await.unwrap();
     let on_a = a.merge(merged_a.data.clone()).await.unwrap();
     a.adopt(SyncPart::Hosts).await.unwrap();
     a.adopt(SyncPart::Snippets).await.unwrap();
+    a.adopt(SyncPart::Identities).await.unwrap();
     a.publish().await.unwrap();
     assert_eq!(on_a.data.hosts.hosts().count(), 2);
     assert_eq!(on_b.data.hosts.hosts().count(), 2);
@@ -356,6 +360,7 @@ async fn the_clone_keeps_one_copy_however_many_syncs() {
             .unwrap();
         remote.adopt(SyncPart::Hosts).await.unwrap();
         remote.adopt(SyncPart::Snippets).await.unwrap();
+        remote.adopt(SyncPart::Identities).await.unwrap();
         remote.publish().await.unwrap();
     }
     let out = Command::new("git")
@@ -536,6 +541,7 @@ async fn a_gc_the_users_settings_ask_for_drops_nothing_a_sync_needs() {
         for remote in [&b, &a] {
             remote.adopt(SyncPart::Hosts).await.unwrap();
             remote.adopt(SyncPart::Snippets).await.unwrap();
+            remote.adopt(SyncPart::Identities).await.unwrap();
             remote.publish().await.unwrap();
         }
     }

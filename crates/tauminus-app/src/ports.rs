@@ -523,11 +523,43 @@ pub trait HostStore: Send + Sync + 'static {
     fn new_id(&self) -> String;
 }
 
-/// What sync carries: the saved hosts and groups, and the snippets.
+/// What sync carries: the saved hosts and groups, the snippets, and the
+/// vault identities this device shares, in id order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncData {
     pub hosts: tauminus_domain::Inventory,
     pub snippets: tauminus_domain::Library,
+    pub identities: Vec<SyncedIdentity>,
+}
+
+/// A vault identity as sync carries it: all but its public key, which
+/// each device derives from the private key it got. Wiped when dropped;
+/// `Debug` shows no secret.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SyncedIdentity {
+    pub id: String,
+    pub name: String,
+    pub user: Option<String>,
+    pub password: Option<Secret>,
+    pub private_key: Option<Secret>,
+    pub passphrase: Option<Secret>,
+}
+
+impl fmt::Debug for SyncedIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SyncedIdentity")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("user", &self.user)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Derives an OpenSSH private key's public half, `authorized_keys` form.
+pub trait KeyDeriver: Send + Sync + 'static {
+    /// # Errors
+    /// Not a key, or the passphrase does not open it.
+    fn public_key(&self, private_key: &str, passphrase: Option<&str>) -> Result<String, String>;
 }
 
 /// A field this device and another both changed, to different values:
@@ -676,6 +708,7 @@ pub struct StoreVersion(pub Option<u64>);
 pub enum SyncPart {
     Hosts,
     Snippets,
+    Identities,
 }
 
 /// The other devices' state, through a sync target. `merge` reads and
@@ -686,6 +719,14 @@ pub trait SyncRemote: Send + Sync + 'static {
     fn merge(&self, local: SyncData) -> BoxFuture<'_, Result<Merged, SyncError>>;
     /// Called once `part` of the last merge is saved here.
     fn adopt(&self, part: SyncPart) -> BoxFuture<'_, Result<(), SyncError>>;
+    /// Before the identities are adopted: these, by id, were not taken
+    /// here, so the base keeps what it held for them, and the next sync
+    /// does not send this device's own copy as an edit. Theirs comes
+    /// again with their next object.
+    fn decline(&self, identities: Vec<String>) -> BoxFuture<'_, Result<(), SyncError>> {
+        let _ = identities;
+        Box::pin(async { Ok(()) })
+    }
     /// Writes the state adopted, if the target lacks it.
     fn publish(&self) -> BoxFuture<'_, Result<(), SyncError>>;
 }

@@ -408,7 +408,17 @@ impl Assistant {
                     // Read before the check, as every use is.
                     && match &self.trust {
                         Some((trust, snippets)) => trust
-                            .check(&self.hosts, snippets.as_deref(), &saved.id)
+                            .check(
+                                &self.hosts,
+                                snippets.as_deref(),
+                                async |ids| {
+                                    self.vault
+                                        .identity_prints(Some(ids))
+                                        .await
+                                        .unwrap_or_default()
+                                },
+                                &saved.id,
+                            )
                             .await
                             .is_ok(),
                         None => true,

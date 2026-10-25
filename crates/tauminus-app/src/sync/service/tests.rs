@@ -138,6 +138,7 @@ pub(crate) async fn service(
         snippets,
         trust,
         connector,
+        Arc::new(crate::fakes::Derive),
     ));
     (vault, hosts, service)
 }

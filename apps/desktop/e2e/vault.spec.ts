@@ -198,3 +198,18 @@ test("the keychain can ask for Touch ID first, and says what that guards", async
   await vault(page).getByRole("button", { name: "Unlock with Touch ID" }).click();
   await expect(vault(page).getByRole("heading", { name: "Identities" })).toBeVisible();
 });
+
+test("an identity is kept here unless shared through sync", async ({ page }) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Deploy");
+  await expect(form).toContainText("Kept on this device only");
+  await form.getByLabel("Share through sync").check();
+  await expect(form).toContainText("Stopping later does not take them back");
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await expect(list).toContainText("shared through sync");
+  await list.getByRole("button", { name: "Edit Deploy" }).click();
+  await expect(vault(page).getByLabel("Share through sync")).toBeChecked();
+});

@@ -22,6 +22,7 @@ pub(crate) struct Memory {
     recordings: Arc<StdMutex<Option<[u8; 32]>>>,
     ai_key: Arc<StdMutex<Option<AiKey>>>,
     sync: Arc<StdMutex<Option<SyncSetup>>>,
+    review: Arc<StdMutex<Option<[u8; 32]>>>,
 }
 
 struct MemoryOpen {
@@ -178,6 +179,12 @@ impl OpenVault for MemoryOpen {
         Ok(())
     }
 
+    fn review_key(&mut self) -> Result<(Zeroizing<[u8; 32]>, bool), VaultError> {
+        let mut slot = self.owner.review.lock().unwrap();
+        let made = slot.is_none();
+        Ok((Zeroizing::new(*slot.get_or_insert([9; 32])), made))
+    }
+
     fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError> {
         Ok(self.owner.sync.lock().unwrap().clone())
     }
@@ -286,6 +293,7 @@ async fn secrets_are_write_only_and_kept_unless_replaced() {
             has_password: true,
             has_key: true,
             public_key: Some("ssh-ed25519 AAAA deploy".into()),
+            sync: false,
         }
     );
     // An edit that leaves secrets out keeps them.

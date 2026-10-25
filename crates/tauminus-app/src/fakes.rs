@@ -475,3 +475,16 @@ impl crate::ports::TrustStore for FakeTrustStore {
         })
     }
 }
+
+/// Every key's public half is `ssh-ed25519 <key>`; a key starting `bad`
+/// is no key.
+pub(crate) struct Derive;
+
+impl crate::ports::KeyDeriver for Derive {
+    fn public_key(&self, private_key: &str, _: Option<&str>) -> Result<String, String> {
+        if private_key.starts_with("bad") {
+            return Err("not a key".into());
+        }
+        Ok(format!("ssh-ed25519 {private_key}"))
+    }
+}

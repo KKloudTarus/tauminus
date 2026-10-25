@@ -49,13 +49,14 @@ describe("SyncStore", () => {
     await store.now();
     expect(synced).toBe(1);
     expect(store.getSnapshot().status?.last?.clashes).toHaveLength(1);
-    const [review] = store.getSnapshot().reviews;
+    const [identity, review] = store.getSnapshot().reviews;
+    expect(identity?.host).toBe("identity:deploy1");
     expect(review?.label).toBe("staging");
-    if (!review) return;
-    expect(store.getSnapshot().noted).toBe(1);
+    if (!review || !identity) return;
+    expect(store.getSnapshot().noted).toBe(2);
     expect(await store.accept([{ ...review, fingerprint: "00".repeat(32) }])).toEqual(["staging"]);
-    expect(store.getSnapshot().reviews).toHaveLength(1);
-    expect(await store.accept([review])).toEqual([]);
+    expect(store.getSnapshot().reviews).toHaveLength(2);
+    expect(await store.accept([identity, review])).toEqual([]);
     expect(store.getSnapshot()).toMatchObject({ reviews: [], noted: 0 });
   });
 

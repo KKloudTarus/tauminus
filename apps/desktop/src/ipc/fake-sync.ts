@@ -42,6 +42,18 @@ const STAGING: ReviewView = {
   fingerprint: "ab".repeat(32),
 };
 
+const DEPLOY: ReviewView = {
+  host: "identity:deploy1",
+  label: "deploy",
+  new: false,
+  lines: [
+    { level: 0, place: "identity", field: "identity", value: "deploy" },
+    { level: 0, place: "identity", field: "identity login", value: "a password" },
+  ],
+  startup: "",
+  fingerprint: "cd".repeat(32),
+};
+
 function open(): void {
   if (!sharedFakeVault().unlocked()) fail("vault_locked", "the vault is locked");
 }
@@ -80,7 +92,7 @@ export function fakeSync(): SyncClient {
       if (passphrase !== THEIRS) fail("wrong_password", "the passphrase does not open this sync");
       setup = { kind: "on", through: target.kind, shown: shown(target) };
       last = null;
-      pending = [STAGING];
+      pending = [DEPLOY, STAGING];
       return status();
     },
     async now() {

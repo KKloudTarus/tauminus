@@ -27,8 +27,9 @@ use tauminus_app::ports::{
 };
 use tauminus_store::interchange;
 
-use crate::doc::{Clash, Doc, clashes, stamp_with};
+use crate::doc::{Clash, Doc, Record, clashes, stamp_with};
 use crate::flat::{Flat, flatten, unflatten};
+use crate::identities;
 use crate::seal::SyncKey;
 use crate::stamp::Clock;
 use crate::target::{KEY, MAX_KEY_FILE, MAX_OBJECT, Target, object_name, parse_object};
@@ -82,6 +83,9 @@ pub const MIN_PASSPHRASE: usize = 12;
 
 const HOST_KINDS: [(&str, &str); 2] = [("groups", "group"), ("hosts", "host")];
 const SNIPPET_KINDS: [(&str, &str); 1] = [("snippets", "snippet")];
+/// The parts a sync saves and adopts one by one: the identities, the
+/// hosts, the snippets.
+const PARTS: usize = 3;
 
 /// What one object holds, as written: borrowed, so the doc is not copied.
 #[derive(Serialize)]
@@ -179,6 +183,10 @@ struct State {
     /// cannot empty): left alone, and numbered past.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     stuck: BTreeSet<String>,
+    /// Devices whose newest object is read again at the next sync,
+    /// though read already: it held a change this device did not take.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    reread: BTreeSet<String>,
 }
 
 const fn yes() -> bool {
@@ -192,6 +200,7 @@ impl State {
         self.joined
             && self.published
             && !self.staged
+            && self.reread.is_empty()
             && self.untold.is_empty()
             && self
                 .echo_due
@@ -222,6 +231,7 @@ impl State {
             untold: Vec::new(),
             echo_due: None,
             stuck: BTreeSet::new(),
+            reread: BTreeSet::new(),
         })
     }
 }
@@ -245,6 +255,16 @@ struct Pending {
     /// failed, kept once every part is adopted.
     seen: BTreeMap<String, u64>,
     failed: Failed,
+    /// The devices whose objects this sync read, and those to read again
+    /// next time: their objects held what was declined.
+    read_from: BTreeSet<String>,
+    reread: BTreeSet<String>,
+    /// Whether this sync set the echo: undone when what was declined
+    /// leaves the base as it was.
+    echo_set: bool,
+    /// The identity records the others' objects held: a cell there is
+    /// theirs, whatever device its stamp names.
+    offered: BTreeMap<String, Record>,
     /// Names in this device's folder it did not write: removed at publish.
     forged: Vec<String>,
     /// The merged lists' fingerprint, kept likewise.
@@ -382,6 +402,14 @@ impl SyncRemote for Remote {
         })
     }
 
+    fn decline(&self, identities: Vec<String>) -> BoxFuture<'_, Result<(), SyncError>> {
+        let inner = Arc::clone(&self.inner);
+        Box::pin(async move {
+            inner.decline(&identities);
+            Ok(())
+        })
+    }
+
     fn publish(&self) -> BoxFuture<'_, Result<(), SyncError>> {
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
@@ -398,10 +426,12 @@ fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// The lists as their files hold them.
+/// The lists as their files hold them; the identities in a buffer wiped
+/// when dropped.
 struct Encoded {
     hosts: Vec<u8>,
     snippets: Vec<u8>,
+    identities: zeroize::Zeroizing<Vec<u8>>,
 }
 
 impl Encoded {
@@ -411,6 +441,7 @@ impl Encoded {
         Ok(Self {
             hosts: interchange::hosts_to_json(&data.hosts).map_err(invalid)?,
             snippets: interchange::snippets_to_json(&data.snippets).map_err(invalid)?,
+            identities: identities::to_json(&data.identities).map_err(invalid)?,
         })
     }
 
@@ -421,6 +452,8 @@ impl Encoded {
         hash.update(&self.hosts);
         hash.update([0]);
         hash.update(&self.snippets);
+        hash.update([0]);
+        hash.update(&*self.identities);
         hash.finalize()
             .iter()
             .fold(String::with_capacity(64), |mut hex, b| {
@@ -436,6 +469,7 @@ impl Encoded {
         };
         let mut flat = flatten(&parse(&self.hosts)?, &HOST_KINDS);
         flat.extend(flatten(&parse(&self.snippets)?, &SNIPPET_KINDS));
+        flat.extend(flatten(&parse(&self.identities)?, &identities::KINDS));
         Ok(flat)
     }
 }
@@ -485,6 +519,14 @@ fn cut_to_limits(lists: &mut Map<String, Value>) -> Vec<String> {
     cut
 }
 
+/// The identity records `doc` holds.
+fn identity_records(doc: Doc) -> BTreeMap<String, Record> {
+    doc.records
+        .into_iter()
+        .filter(|(key, _)| key.starts_with("identity:"))
+        .collect()
+}
+
 fn lists_of(doc: &Doc) -> Result<(SyncData, Vec<tauminus_domain::Repair>, Vec<String>), SyncError> {
     let flat: Flat = doc
         .records
@@ -506,13 +548,24 @@ fn lists_of(doc: &Doc) -> Result<(SyncData, Vec<tauminus_domain::Repair>, Vec<St
     )?;
     let (hosts, repairs) = interchange::hosts_from_json(&hosts).map_err(SyncError::Invalid)?;
     let snippets = interchange::snippets_from_json(&snippets).map_err(SyncError::Invalid)?;
-    Ok((SyncData { hosts, snippets }, repairs, cut))
+    let (identities, unread) = identities::from_lists(&unflatten(&flat, &identities::KINDS));
+    let mut cut = cut;
+    cut.extend(unread);
+    Ok((
+        SyncData {
+            hosts,
+            snippets,
+            identities,
+        },
+        repairs,
+        cut,
+    ))
 }
 
 /// A record's name for the user: a host's label, else its name, else its
 /// id.
 fn record_name(doc: &Doc, key: &str) -> String {
-    let values = doc.records.get(key).map(crate::doc::Record::values);
+    let values = doc.records.get(key).map(Record::values);
     values
         .as_ref()
         .and_then(|v| v.get("label").or_else(|| v.get("name")))
@@ -542,25 +595,73 @@ impl Inner {
         self.state_path.with_extension("staged")
     }
 
-    /// The state without its doc, and whether it was on disk.
+    /// The state without its doc, and whether it was on disk. A state
+    /// that does not open under this key (another key's, from before the
+    /// state was sealed, or damaged) counts as none: this device syncs
+    /// again as a first sync.
     fn load(&self) -> Result<(State, bool), SyncError> {
-        match std::fs::read(&self.state_path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
+        match self.read_local(&self.state_path, "state")? {
+            Some(plain) => serde_json::from_slice(&plain)
                 .map(|state| (state, true))
                 .map_err(|e| SyncError::Invalid(format!("the sync state: {e}"))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((State::new()?, false)),
+            None => Ok((State::new()?, false)),
+        }
+    }
+
+    /// The doc at `path`, sealed as `kind`; `None` when it is not there or
+    /// does not open.
+    fn load_doc(&self, path: &Path, kind: &str) -> Result<Option<Doc>, SyncError> {
+        match self.read_local(path, kind)? {
+            Some(plain) => serde_json::from_slice(&plain)
+                .map(Some)
+                .map_err(|e| SyncError::Invalid(format!("the sync state: {e}"))),
+            None => Ok(None),
+        }
+    }
+
+    /// A local state file's plaintext, `None` when it is missing or does
+    /// not open under this key.
+    fn read_local(
+        &self,
+        path: &Path,
+        kind: &str,
+    ) -> Result<Option<zeroize::Zeroizing<Vec<u8>>>, SyncError> {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                if let Ok(plain) = self.key.open_local(kind, &bytes) {
+                    return Ok(Some(plain));
+                }
+                // Written by a build that did not seal it: taken as it is,
+                // sealed at the next save, so an upgrade keeps this
+                // device's id and base.
+                if !crate::seal::is_sealed_local(&bytes)
+                    && serde_json::from_slice::<serde::de::IgnoredAny>(&bytes).is_ok()
+                {
+                    return Ok(Some(zeroize::Zeroizing::new(bytes)));
+                }
+                tracing::warn!(kind, "a sync state file does not open; it is taken as lost");
+                Ok(None)
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(SyncError::Target(format!("the sync state: {e}"))),
         }
     }
 
-    fn load_doc(path: &Path) -> Result<Option<Doc>, SyncError> {
-        match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|e| SyncError::Invalid(format!("the sync state: {e}"))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(SyncError::Target(format!("the sync state: {e}"))),
-        }
+    /// Writes `value` as local state file `kind`, sealed under this key.
+    fn save_local<T: Serialize>(
+        &self,
+        path: &Path,
+        kind: &str,
+        value: &T,
+    ) -> Result<(), SyncError> {
+        let plain = zeroize::Zeroizing::new(
+            serde_json::to_vec(value).map_err(|e| SyncError::Invalid(e.to_string()))?,
+        );
+        let sealed = self
+            .key
+            .seal_local(kind, &plain)
+            .map_err(|e| SyncError::Sealed(e.to_string()))?;
+        write_file(path, &sealed)
     }
 
     /// This device's newest object on the target, and the names in its
@@ -655,7 +756,7 @@ impl Inner {
         // there are another state's.
         let mut lost_base = false;
         if on_disk {
-            match Self::load_doc(&self.doc_path())? {
+            match self.load_doc(&self.doc_path(), "doc")? {
                 Some(doc) => state.doc = doc,
                 // The base went (a backup that kept one file): this device
                 // joins again, as a first sync, taking the target's values.
@@ -667,7 +768,7 @@ impl Inner {
             }
         }
         let staged = if on_disk && state.staged {
-            Self::load_doc(&self.staged_path())?
+            self.load_doc(&self.staged_path(), "staged")?
         } else {
             None
         };
@@ -701,16 +802,17 @@ impl Inner {
         // changed goes out too, a little later: an object holding what was
         // deleted or replaced since would keep it on the target.
         let own = edited || !normalized.is_empty() || !found.is_empty();
-        if !own && changed && state.echo_due.is_none() {
+        let echo_set = !own && changed && state.echo_due.is_none();
+        if echo_set {
             state.echo_due = Some(now.saturating_add(ECHO_DELAY_MS));
         }
-        let told = with_untold(&state.untold, found);
+        let told = with_untold(&state.untold, found.into_iter().map(masked).collect());
         let mut shown_clashes: Vec<SyncClash> = told.iter().map(|c| sync_clash(&base, c)).collect();
         shown_clashes.extend(read.told.iter().map(|c| sync_clash(&base, c)));
         // Kept ahead of the lists: a sync stopped after saving them reads
         // their values as this merge's. A base unchanged needs none.
         if changed {
-            save_json(&self.staged_path(), &base)?;
+            self.save_local(&self.staged_path(), "staged", &base)?;
             state.staged = true;
         }
         // Owed from now: a base saved without the header after it still
@@ -718,7 +820,7 @@ impl Inner {
         if own {
             state.published = false;
         }
-        save_json(&self.state_path, &state)?;
+        self.save_local(&self.state_path, "state", &state)?;
         *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(Pending {
             state,
             base,
@@ -727,6 +829,10 @@ impl Inner {
             own,
             seen: read.seen,
             failed: read.failed,
+            read_from: read.from,
+            echo_set,
+            offered: identity_records(read.theirs),
+            reread: BTreeSet::new(),
             forged,
             fingerprint: saved.print(),
             adopted: BTreeSet::new(),
@@ -770,7 +876,7 @@ impl Inner {
             let (mut failed, mut last_error) = (0, None);
             for (seq, name) in list.iter() {
                 // Read before: what it held is in the base already.
-                if seen == Some(*seq) {
+                if seen == Some(*seq) && !state.reread.contains(device) {
                     break;
                 }
                 // An older object than one read before is a rollback.
@@ -802,6 +908,13 @@ impl Inner {
                         ));
                         break;
                     }
+                    // Read again for what was declined: what it told was
+                    // shown the first time.
+                    Ok(payload) if seen == Some(*seq) => {
+                        read.theirs.merge(&payload.doc);
+                        read.from.insert(device.clone());
+                        break;
+                    }
                     Ok(payload) => {
                         read.theirs.merge(&payload.doc);
                         read.told.extend(
@@ -812,6 +925,7 @@ impl Inner {
                                 .take(MAX_CLASHES),
                         );
                         read.seen.insert(device.clone(), *seq);
+                        read.from.insert(device.clone());
                         break;
                     }
                     Err(newer @ SyncError::Newer(_)) => return Err(newer),
@@ -892,6 +1006,60 @@ impl Inner {
         Ok(payload)
     }
 
+    /// Keeps, for identities not taken here, what the base held of the
+    /// other devices' values in place of the merge's, with this device's
+    /// own edits; and reads again at the next sync every object this one
+    /// read, whichever carried what was not taken: it is offered until
+    /// taken. O(k·(f + log R)).
+    fn decline(&self, identities: &[String]) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(pending) = pending.as_mut() else {
+            return;
+        };
+        if identities.is_empty() {
+            return;
+        }
+        let own = pending.state.device.clone();
+        for id in identities {
+            let key = format!("identity:{id}");
+            let ours = pending.state.doc.records.get(&key).cloned();
+            let mut record = pending.base.records.remove(&key).unwrap_or_default();
+            let offered = pending.offered.get(&key);
+            // Theirs out, what was here back. A cell is this device's
+            // only if it stamped it and no other object held it: stamps
+            // are the writer's to choose.
+            record.fields.retain(|field, cell| {
+                cell.at.device == own && offered.and_then(|o| o.fields.get(field)) != Some(cell)
+            });
+            if let Some(ours) = &ours {
+                for (field, cell) in &ours.fields {
+                    record
+                        .fields
+                        .entry(field.clone())
+                        .or_insert_with(|| cell.clone());
+                }
+            }
+            let theirs_gone = record.gone.as_ref().is_some_and(|gone| {
+                gone.device != own || offered.and_then(|o| o.gone.as_ref()) == Some(gone)
+            });
+            if theirs_gone || record.gone.is_none() {
+                record.gone = ours.as_ref().and_then(|o| o.gone.clone());
+            }
+            if record.alive() && record.fields.is_empty() && ours.is_none() {
+                continue;
+            }
+            if !record.alive() {
+                record.fields.clear();
+            }
+            pending.base.records.insert(key, record);
+        }
+        pending.reread.extend(pending.read_from.iter().cloned());
+        // Nothing of theirs taken: no echo of it to write.
+        if pending.echo_set && pending.base == pending.state.doc {
+            pending.state.echo_due = None;
+        }
+    }
+
     /// Takes `part` of the merged state into the base on disk: it is what
     /// this device now holds.
     fn adopt(&self, part: SyncPart) -> Result<(), SyncError> {
@@ -902,10 +1070,11 @@ impl Inner {
         let (name, kinds): (&'static str, &[&str]) = match part {
             SyncPart::Hosts => ("hosts", &["group:", "host:"]),
             SyncPart::Snippets => ("snippets", &["snippet:"]),
+            SyncPart::Identities => ("identities", &["identity:"]),
         };
         let of_part = |key: &String| kinds.iter().any(|k| key.starts_with(k));
         pending.adopted.insert(name);
-        let whole = pending.adopted.len() == 2;
+        let whole = pending.adopted.len() == PARTS;
         // Compared in place, O(R), no copy.
         let mut doc_changed = !pending
             .state
@@ -942,13 +1111,24 @@ impl Inner {
             pending.state.fingerprint.clone_from(&pending.fingerprint);
             pending.state.joined = true;
             pending.state.staged = false;
+            // Those owed a read that this sync could not do stay owed.
+            let mut reread = std::mem::take(&mut pending.reread);
+            reread.extend(
+                pending
+                    .state
+                    .reread
+                    .iter()
+                    .filter(|d| !pending.read_from.contains(*d) && pending.seen.contains_key(*d))
+                    .cloned(),
+            );
+            pending.state.reread = reread;
         }
         // A joined state always has its doc beside it, an empty one
         // included: a doc missing there means a state cut short.
         if doc_changed || (whole && !self.doc_path().is_file()) {
-            save_json(&self.doc_path(), &pending.state.doc)?;
+            self.save_local(&self.doc_path(), "doc", &pending.state.doc)?;
         }
-        save_json(&self.state_path, &pending.state)?;
+        self.save_local(&self.state_path, "state", &pending.state)?;
         if whole {
             let _ = std::fs::remove_file(self.staged_path());
         }
@@ -971,7 +1151,7 @@ impl Inner {
             return Ok(());
         };
         // Only a sync saved whole publishes.
-        if adopted.len() < 2 {
+        if adopted.len() < PARTS {
             return Ok(());
         }
         let now = (self.now)();
@@ -1058,7 +1238,7 @@ impl Inner {
         state.written = now;
         state.untold.clear();
         state.echo_due = None;
-        save_json(&self.state_path, &state)
+        self.save_local(&self.state_path, "state", &state)
     }
 }
 
@@ -1142,6 +1322,8 @@ struct Read {
     notices: Vec<String>,
     seen: BTreeMap<String, u64>,
     failed: Failed,
+    /// The devices whose objects this sync read.
+    from: BTreeSet<String>,
 }
 
 /// This device's lists stamped against its base, joined with what the
@@ -1305,7 +1487,35 @@ fn nothing_new(state: &State, names: &[String], now: u64) -> bool {
     state.seen.keys().all(|d| listed.contains(d.as_str()))
 }
 
+/// Whether `clash` is over a secret field of an identity.
+fn secret(clash: &Clash) -> bool {
+    clash.record.starts_with("identity:")
+        && identities::SECRET_FIELDS.contains(&clash.field.as_str())
+}
+
+/// `clash` with a secret's values replaced: it is kept here and written
+/// for the others, who need only know it happened.
+fn masked(mut clash: Clash) -> Clash {
+    if secret(&clash) {
+        for value in [&mut clash.kept, &mut clash.lost] {
+            if !value.is_null() {
+                *value = Value::from("(secret)");
+            }
+        }
+    }
+    clash
+}
+
 fn sync_clash(doc: &Doc, clash: &Clash) -> SyncClash {
+    // A secret's values are not for the screen, whoever sent the clash.
+    let secret = secret(clash);
+    let shown = |value: &Value| {
+        if secret && !value.is_null() {
+            "(secret)".to_owned()
+        } else {
+            shown(value)
+        }
+    };
     SyncClash {
         record: record_name(doc, &clash.record),
         field: clash.field.clone(),
@@ -1314,13 +1524,10 @@ fn sync_clash(doc: &Doc, clash: &Clash) -> SyncClash {
     }
 }
 
-/// Writes the base beside the other files, readable by this user only:
+/// Writes `bytes` beside the other files, readable by this user only:
 /// under a fresh name, created new, then moved into place.
-fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), SyncError> {
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), SyncError> {
     use std::io::Write as _;
-    let bytes = zeroize::Zeroizing::new(
-        serde_json::to_vec(value).map_err(|e| SyncError::Invalid(e.to_string()))?,
-    );
     let failed = |e: std::io::Error| SyncError::Target(format!("the sync state: {e}"));
     let mut suffix = [0u8; 8];
     rand::TryRng::try_fill_bytes(&mut rand::rngs::SysRng, &mut suffix)
@@ -1334,7 +1541,7 @@ fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), SyncError> {
         options.mode(0o600);
     }
     let written = options.open(&partial).and_then(|mut file| {
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()
     });
     if let Err(e) = written {
@@ -1347,5 +1554,7 @@ fn save_json<T: Serialize>(path: &Path, value: &T) -> Result<(), SyncError> {
     })
 }
 
+#[cfg(test)]
+mod identity_tests;
 #[cfg(test)]
 mod tests;

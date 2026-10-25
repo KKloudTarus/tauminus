@@ -48,10 +48,13 @@ describe("SyncDialog", () => {
     await expect.element(staging.getByText('ProxyCommand("nc %h %p")')).toBeVisible();
     await expect.element(staging.getByText("cd /srv/app")).toBeVisible();
     await staging.getByRole("button", { name: "Accept staging" }).click();
+    const deploy = screen.getByRole("article", { name: "deploy" });
+    await expect.element(deploy.getByText(/identity, changed on another device/)).toBeVisible();
+    await deploy.getByRole("button", { name: "Accept deploy" }).click();
     await expect
       .element(screen.getByRole("region", { name: "Changes to review" }))
       .not.toBeInTheDocument();
-    expect(reviewed).toBe(1);
+    expect(reviewed).toBe(2);
   });
 
   it("starts a sync only with matching passphrases, and stops it on request", async () => {
