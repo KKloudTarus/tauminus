@@ -188,7 +188,7 @@ Goal: Termius Pro sync without a Termius account.
 - [x] Sync set up, run, and reviewed from the desktop: a folder, git or S3 target and the sync key in the vault, a schedule, the last run's clashes and notices, and no host another device changed used before the user accepts it (ADR 0030)
 - [x] Conflict handling with a CRDT: last-writer-wins per field on hybrid logical clocks, a delete winning over an edit, keyed lists per element, every clash listed on both devices; `automerge` and `yrs` weighed and not taken (ADR 0030)
 - [x] Per-item flag to keep credentials off the sync target: each vault identity is shared only where its device turns it on, never by another device (ADR 0030)
-- [ ] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP
+- [x] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP, through the user's own `aws`, `doctl`, `az` and `gcloud`, so Tauminus keeps no cloud key; a preview of what would be added, moved, brought back or marked gone comes before anything is saved, and a host is never deleted (ADR 0032; checked live with aws-cli 2.36 against LocalStack)
 - [x] Import CSV, PuTTY, MobaXterm, SecureCRT, with their folders and jump hosts (ADR 0029)
 - [x] Runbooks: snippets with variables shared through the git sync target: a multi-line snippet with `{{name:default}}` placeholders, in a folder, syncs sealed and fills on the other device (test: `a_runbook_with_variables_reaches_the_other_device_through_git_and_fills_there`); sharing with a team is the Hub's, in v0.6
 - [ ] Code signing for macOS (Developer ID, notarization)
