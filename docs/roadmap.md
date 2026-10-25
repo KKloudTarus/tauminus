@@ -184,8 +184,8 @@ Goal: Termius Pro sync without a Termius account.
 ### Scope
 
 - [ ] trzsz transfers, in Rust (moved from v0.4: ADR 0026)
-- [ ] End-to-end encrypted sync with `age` to a git remote, S3-compatible storage, or a synced folder
-- [x] Sync set up, run, and reviewed from the desktop: a folder or git target and the sync key in the vault, a schedule, the last run's clashes and notices, and no host another device changed used before the user accepts it (ADR 0030)
+- [x] End-to-end encrypted sync to a git remote, S3-compatible storage, or a synced folder: XChaCha20-Poly1305 under a key wrapped by Argon2id, which the vault already uses, in place of `age` (ADR 0030)
+- [x] Sync set up, run, and reviewed from the desktop: a folder, git or S3 target and the sync key in the vault, a schedule, the last run's clashes and notices, and no host another device changed used before the user accepts it (ADR 0030)
 - [x] Conflict handling with a CRDT: last-writer-wins per field on hybrid logical clocks, a delete winning over an edit, keyed lists per element, every clash listed on both devices; `automerge` and `yrs` weighed and not taken (ADR 0030)
 - [ ] Per-item flag to keep credentials off the sync target
 - [ ] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP
