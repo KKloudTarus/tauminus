@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import {
+  type CloudAsk,
+  type CloudPreview,
+  type CloudResult,
   type GroupInput,
   type EncodingSpec,
   type ProtocolSpec,
@@ -21,6 +24,9 @@ import {
 import { SessionCommandError } from "./sessions.ts";
 
 export type {
+  CloudAsk,
+  CloudPreview,
+  CloudResult,
   EncodingSpec,
   ProtocolSpec,
   EnvSpec,
@@ -54,6 +60,13 @@ export interface HostsClient {
    */
   importFrom(kind: ImportKind): Promise<ImportResult | null>;
   /**
+   * Lists a cloud account through its provider's CLI and shows what an
+   * import would do; nothing is saved.
+   */
+  cloudPreview(ask: CloudAsk): Promise<CloudPreview>;
+  /** Imports what the preview with `token` showed. */
+  cloudImport(token: number): Promise<CloudResult>;
+  /**
    * Checks the readings of a command line about to run on a saved host
    * against its prod guard. `incomplete` comes from the first.
    */
@@ -80,5 +93,7 @@ export const tauriHosts: HostsClient = {
   configAliases: () => unwrap(commands.sshConfigAliases()),
   importConfig: () => unwrap(commands.hostsImportSshConfig()),
   importFrom: (kind) => unwrap(commands.hostsImportFrom(kind)),
+  cloudPreview: (ask) => unwrap(commands.cloudPreview(ask)),
+  cloudImport: (token) => unwrap(commands.cloudImport(token)),
   checkCommand: (hostId, lines) => unwrap(commands.guardCheck(hostId, lines)),
 };

@@ -68,6 +68,8 @@
     "allow-ssh-config-aliases",
     "allow-hosts-import-ssh-config",
     "allow-hosts-import-from",
+    "allow-cloud-preview",
+    "allow-cloud-import",
     "allow-host-connect",
     "allow-forward-start",
     "allow-forward-stop",

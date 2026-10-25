@@ -7,17 +7,21 @@ import { Icon } from "@/app/icons.tsx";
 import type { ImportKind } from "@/ipc/index.ts";
 
 /** The menu's entries: `~/.ssh/config`, then every other client, in order. */
-export const IMPORT_ENTRIES: readonly { kind: ImportKind | "sshConfig"; label: string }[] = [
+/** Where an import comes from: a client's file, `~/.ssh/config`, or a cloud account. */
+export type ImportSource = ImportKind | "sshConfig" | "cloud";
+
+export const IMPORT_ENTRIES: readonly { kind: ImportSource; label: string }[] = [
   { kind: "sshConfig", label: "From ~/.ssh/config" },
   { kind: "putty", label: "From PuTTY on this computer" },
   { kind: "puttyExport", label: "From a PuTTY .reg export…" },
   { kind: "mobaXterm", label: "From MobaXterm (.ini, .mxtsessions)…" },
   { kind: "secureCrt", label: "From SecureCRT's session folder…" },
   { kind: "csv", label: "From a CSV file…" },
+  { kind: "cloud", label: "From a cloud account…" },
 ];
 
 interface ImportMenuProps {
-  onImport: (kind: ImportKind | "sshConfig") => void;
+  onImport: (kind: ImportSource) => void;
 }
 
 /**

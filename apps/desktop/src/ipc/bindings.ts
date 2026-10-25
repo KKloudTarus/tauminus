@@ -252,6 +252,13 @@ export const commands = {
 	skipped: SkippedHost[],
 	view: HostsView,
 } | null, CommandError>(__TAURI_INVOKE("hosts_import_from", { kind })),
+	/**
+	 *  Lists a cloud account through its CLI and shows what an import would
+	 *  do. Nothing is saved.
+	 */
+	cloudPreview: (ask: CloudAsk) => typedError<CloudPreview, CommandError>(__TAURI_INVOKE("cloud_preview", { ask })),
+	/**  Imports the listing preview `token` showed. */
+	cloudImport: (token: number) => typedError<CloudResult, CommandError>(__TAURI_INVOKE("cloud_import", { token })),
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**
@@ -459,6 +466,70 @@ export type ClashView = {
 	field: string,
 	kept: string,
 	lost: string,
+};
+
+/**  Which address a new host takes. */
+export type CloudAddress = "public" | "private";
+
+export type CloudAsk = {
+	provider: CloudProvider,
+	/**
+	 *  An AWS profile, a doctl context, an Azure subscription or a GCP
+	 *  project; none for the CLI's own default.
+	 */
+	scope: string | null,
+	address: CloudAddress,
+};
+
+export type CloudCounts = {
+	add: number,
+	moved: number,
+	back: number,
+	gone: number,
+	skipped: number,
+};
+
+export type CloudMoved = {
+	label: string,
+	from: string,
+	to: string,
+};
+
+export type CloudPlanned = {
+	label: string,
+	address: string,
+	region: string,
+};
+
+/**  What an import would do, for the user to accept by `token`. */
+export type CloudPreview = {
+	token: number,
+	/**  The program that ran, so the user sees which. */
+	program: string,
+	account: string,
+	add: CloudPlanned[],
+	moved: CloudMoved[],
+	back: string[],
+	gone: string[],
+	skipped: CloudSkipped[],
+	/**  How many of each there are in all, past what is shown. */
+	counts: CloudCounts,
+};
+
+/**  The provider asked. */
+export type CloudProvider = "ec2" | "lightsail" | "digitalOcean" | "azure" | "gcp";
+
+/**  What an import did. */
+export type CloudResult = {
+	moved: number,
+	back: number,
+	gone: number,
+	result: ImportResult,
+};
+
+export type CloudSkipped = {
+	name: string,
+	reason: string,
 };
 
 export type CommandError = {

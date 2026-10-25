@@ -30,6 +30,7 @@ specta-typescript.workspace = true
 tauminus-ai.workspace = true
 tauminus-app.workspace = true
 tauminus-import.workspace = true
+tauminus-cloud.workspace = true
 tauminus-domain.workspace = true
 tauminus-pty.workspace = true
 tauminus-ssh.workspace = true

@@ -15,6 +15,7 @@ import type {
   HostsClient,
   HostsView,
 } from "./hosts.ts";
+import { SessionCommandError } from "./sessions.ts";
 
 const ME = "me";
 
@@ -48,6 +49,7 @@ export function fakeHosts(): HostsClient {
   let hosts: Omit<HostView, "target" | "problem" | "guarded" | "forwardsAgent">[] = [];
   let next = 1;
   const id = () => `id${next++}`;
+  let cloudToken = 0;
 
   const nearest = <K extends "user" | "port">(
     start: string | null,
@@ -193,6 +195,58 @@ export function fakeHosts(): HostsClient {
         added += 1;
       }
       return { added, skipped, skippedCount: skipped.length, view: view() };
+    },
+    cloudPreview: async (ask) => {
+      if (ask.scope === "broken") {
+        throw new SessionCommandError({
+          code: "connect_failed",
+          message: "doctl failed (exit status: 1): Unable to authenticate you",
+        });
+      }
+      const listed = [
+        { label: "web-1", address: "203.0.113.7", region: "nyc3" },
+        { label: "db-1", address: "203.0.113.8", region: "nyc3" },
+      ].filter((p) => !hosts.some((h) => h.label === p.label));
+      cloudToken += 1;
+      return {
+        token: cloudToken,
+        program: "/usr/local/bin/doctl",
+        account: "b6fc48a1",
+        add: listed,
+        moved: [],
+        back: [],
+        gone: [],
+        skipped: [{ name: "meta", reason: "169.254.169.254 is not an address to connect to" }],
+        counts: { add: listed.length, moved: 0, back: 0, gone: 0, skipped: 1 },
+      };
+    },
+    cloudImport: async (token) => {
+      if (token !== cloudToken)
+        throw new SessionCommandError({ code: "not_found", message: "that list is gone" });
+      let group = groups.find((g) => g.name === "DigitalOcean");
+      if (!group) {
+        group = { id: id(), name: "DigitalOcean", parent: null, settings: {} };
+        groups = [...groups, group];
+      }
+      let added = 0;
+      for (const [label, address] of [
+        ["web-1", "203.0.113.7"],
+        ["db-1", "203.0.113.8"],
+      ] as const) {
+        if (hosts.some((h) => h.label === label)) continue;
+        saveHost({ label, address, group: group.id, settings: { user: "root" }, forwards: [] });
+        added += 1;
+      }
+      cloudToken += 1;
+      const skipped = [
+        { alias: "meta", reason: "169.254.169.254 is not an address to connect to" },
+      ];
+      return {
+        moved: 0,
+        back: 0,
+        gone: 0,
+        result: { added, skipped, skippedCount: 1, view: view() },
+      };
     },
     importConfig: async () => {
       let group = groups.find((g) => g.name === "SSH config");
