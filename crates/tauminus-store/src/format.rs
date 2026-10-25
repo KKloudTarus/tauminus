@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use tauminus_domain::{
     AuthMethod, Bind, BindAddress, Destination, Encoding, EnvVar, Forward, ForwardId, ForwardRule,
     Group, GroupId, GuardSettings, Hop, Host, HostId, HostName, IdentityAgent, IdentityId,
-    Inventory, Label, Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux, TmuxSession,
-    TriggerSetId, UserName,
+    Inventory, Label, Origin, Pattern, Protocol, Route, Settings, SnippetId, Tag, Tmux,
+    TmuxSession, TriggerSetId, UserName,
 };
 
 /// Bump when a change would make an older build misread the file. An older
@@ -19,11 +19,13 @@ use tauminus_domain::{
 /// Version 2 adds forwarding rules, version 3 startup snippets, version 4
 /// encodings, version 5 Telnet hosts, version 6 tmux sessions, version 7
 /// Mosh hosts, version 8 highlight sets, version 9 the AI's leave
-/// to read output, version 10 tmux windows as tabs, and version 11 the
-/// agent a host signs with; a file is written as the lowest version that
+/// to read output, version 10 tmux windows as tabs, version 11 the agent
+/// a host signs with, and version 12 the cloud instance a host came from;
+/// a file is written as the lowest version that
 /// holds what it has, so a build from before a feature keeps reading files
 /// that do not use it.
-pub(crate) const VERSION: u32 = 11;
+pub(crate) const VERSION: u32 = 12;
+const VERSION_WITHOUT_ORIGIN: u32 = 11;
 const VERSION_WITHOUT_IDENTITY_AGENT: u32 = 10;
 const VERSION_WITHOUT_TMUX_TABS: u32 = 9;
 const VERSION_WITHOUT_AI: u32 = 8;
@@ -62,6 +64,9 @@ struct HostRecord {
     id: String,
     label: String,
     address: String,
+    /// What it came from: a cloud instance (version 12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    origin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     group: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -242,9 +247,12 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
         || inventory.groups().any(|g| g.settings.encoding.is_some());
     let startup = inventory.hosts().any(|h| !h.startup.is_empty());
     let forwards = inventory.hosts().any(|h| !h.forwards.is_empty());
+    let origin = inventory.hosts().any(|h| h.origin.is_some());
     let file = File {
-        version: if identity_agent {
+        version: if origin {
             VERSION
+        } else if identity_agent {
+            VERSION_WITHOUT_ORIGIN
         } else if tmux_tabs {
             VERSION_WITHOUT_IDENTITY_AGENT
         } else if ai {
@@ -281,6 +289,7 @@ pub(crate) fn to_json(inventory: &Inventory) -> Result<Vec<u8>, serde_json::Erro
                 id: h.id.to_string(),
                 label: h.label.as_str().to_owned(),
                 address: h.address.to_string(),
+                origin: h.origin.as_ref().map(ToString::to_string),
                 group: h.group.as_ref().map(ToString::to_string),
                 tags: h.tags().iter().map(|t| t.as_str().to_owned()).collect(),
                 settings: settings_record(&h.settings),
@@ -340,6 +349,11 @@ pub(crate) fn parts(bytes: &[u8]) -> Result<(Vec<Group>, Vec<Host>), String> {
                 Label::parse(&h.label).map_err(|e| err("host label", &e))?,
                 HostName::parse(&h.address).map_err(|e| err("host address", &e))?,
             );
+            host.origin = h
+                .origin
+                .map(|o| Origin::parse(&o))
+                .transpose()
+                .map_err(|e| err("host origin", &e))?;
             host.group = h
                 .group
                 .map(|g| GroupId::parse(&g))

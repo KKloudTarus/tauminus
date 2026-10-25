@@ -1114,3 +1114,20 @@ fn exposure_lists_every_level_and_ignores_names_and_tags() {
         Err(HostsError::NoSuchHost(_))
     ));
 }
+
+#[test]
+fn an_origin_is_plain_ascii_of_a_bounded_length() {
+    for good in [
+        "aws-ec2:123456789012:eu-west-1:i-0abc",
+        "aws-lightsail:arn:aws:lightsail:us-east-1:1:Instance/a-b",
+        "do:12345",
+        "azure:/subscriptions/x/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+        "gcp:my-project:1234567890",
+    ] {
+        assert_eq!(Origin::parse(good).unwrap().as_str(), good);
+    }
+    let long = "a".repeat(MAX_ORIGIN + 1);
+    for bad in ["", "a b", "x\ny", "é", "a;b", long.as_str()] {
+        assert_eq!(Origin::parse(bad), Err(HostsError::Origin), "{bad}");
+    }
+}

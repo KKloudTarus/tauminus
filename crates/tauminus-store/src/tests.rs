@@ -338,6 +338,28 @@ async fn tmux_tabs_load_back_at_version_10() {
 }
 
 #[tokio::test]
+async fn a_host_s_origin_loads_back_and_alone_raises_the_version_to_12() {
+    let dir = Dir::new();
+    let store = dir.store();
+    let mut inventory = rich();
+    let mut host = inventory.hosts().next().unwrap().clone();
+    host.origin =
+        Some(tauminus_domain::Origin::parse("aws-ec2:123456789012:eu-west-1:i-0abc").unwrap());
+    inventory.put_host(host).unwrap();
+    store.save(&inventory).await.unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.0.join("hosts.json")).unwrap()).unwrap();
+    assert_eq!(json["version"], 12);
+    assert_eq!(store.load().await.unwrap(), inventory);
+    // A file whose origin is not one is refused, not read without it.
+    let text = std::fs::read_to_string(dir.0.join("hosts.json"))
+        .unwrap()
+        .replace("aws-ec2:123456789012:eu-west-1:i-0abc", "has space");
+    std::fs::write(dir.0.join("hosts.json"), text).unwrap();
+    assert!(store.load().await.is_err());
+}
+
+#[tokio::test]
 async fn an_identity_agent_loads_back_at_version_11() {
     let dir = Dir::new();
     let store = dir.store();
@@ -382,7 +404,7 @@ async fn a_damaged_or_newer_file_is_reported_and_kept() {
     let path = dir.0.join("hosts.json");
     for (label, contents) in [
         ("not json", "{ hosts: ".to_owned()),
-        ("newer", r#"{"version": 12, "hosts": []}"#.to_owned()),
+        ("newer", r#"{"version": 13, "hosts": []}"#.to_owned()),
         (
             "highlight set id",
             r#"{"version": 8, "hosts": [{"id": "a", "label": "a", "address": "a", "settings": {"triggers": ["no spaces"]}}]}"#.to_owned(),

@@ -1773,3 +1773,18 @@ async fn this_device_s_sync_state_holds_only_ciphertext() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn a_host_s_origin_reaches_the_other_device() {
+    let (a, b, root) = pair("origin").await;
+    let mut host = new_host("h1", "web", "203.0.113.7");
+    host.origin = Some(tauminus_domain::Origin::parse("do:123456").unwrap());
+    a.hosts.edit(|i| i.put_host(host)).await.unwrap();
+    a.sync().await;
+    b.sync().await;
+    assert_eq!(
+        b.host("h1").await.unwrap().origin.map(|o| o.to_string()),
+        Some("do:123456".to_owned())
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

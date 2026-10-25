@@ -638,3 +638,27 @@ async fn a_mosh_host_behind_a_proxy_cannot_open_but_keeps_its_files() {
         host.problem
     );
 }
+
+#[tokio::test]
+async fn an_edit_from_the_view_keeps_where_the_host_came_from() {
+    let book = book().await;
+    let mut imported = parse_host(&book, input("web", "203.0.113.7")).unwrap();
+    imported.origin = Some(tauminus_domain::Origin::parse("do:123456").unwrap());
+    let id = imported.id.clone();
+    book.edit(|i| i.put_host(imported)).await.unwrap();
+    let mut edit = input("web renamed", "203.0.113.8");
+    edit.id = Some(id.to_string());
+    let edited = parse_host(&book, edit).unwrap();
+    assert_eq!(edited.origin, None, "the view sends none");
+    let keep = Keep {
+        forwards: true,
+        startup: true,
+    };
+    book.edit(|i| put_host(i, edited, keep)).await.unwrap();
+    let saved = book.snapshot().await.host(&id).unwrap().clone();
+    assert_eq!(saved.label.as_str(), "web renamed");
+    assert_eq!(
+        saved.origin.map(|o| o.to_string()).as_deref(),
+        Some("do:123456")
+    );
+}

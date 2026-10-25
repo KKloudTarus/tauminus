@@ -710,6 +710,8 @@ fn put_host(inventory: &mut Inventory, mut host: Host, keep: Keep) -> Result<(),
     let stored = inventory.host(&host.id);
     keep_proxy_command(&host.settings, stored.map(|h| &h.settings))?;
     if let Some(stored) = stored {
+        // The view never sends where a host came from: an edit keeps it.
+        host.origin.clone_from(&stored.origin);
         if keep.forwards {
             host.forwards.clone_from(&stored.forwards);
         }
