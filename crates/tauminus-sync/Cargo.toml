@@ -20,6 +20,14 @@ chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["
 # Deflate for objects, already in the tree through png.
 flate2 = "1.1.10"
 hkdf = "0.13.0"
+# S3: SigV4 signs with HMAC-SHA256; responses list keys in XML. Both
+# already in the tree, as is the HTTP client the AI assistant uses.
+hmac = "0.13"
+quick-xml = "0.42"
+reqwest.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+url = "2.5"
 sha2 = { version = "0.11.1", default-features = false }
 rand = "0.10"
 serde.workspace = true
@@ -28,7 +36,7 @@ tauminus-app.workspace = true
 tauminus-domain.workspace = true
 tauminus-store.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "time"] }
 tracing.workspace = true
 zeroize.workspace = true
 

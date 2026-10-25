@@ -101,7 +101,7 @@ impl Syncer {
 mod schedule;
 mod service;
 pub use schedule::{EVERY, SETTLE};
-pub use service::{Report, Setup, Status, Summary, SyncService, SyncServiceError, shown};
+pub use service::{Report, Setup, Status, Summary, SyncService, SyncServiceError, Through, shown};
 
 #[cfg(test)]
 mod tests;

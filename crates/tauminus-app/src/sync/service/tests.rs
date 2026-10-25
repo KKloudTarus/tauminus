@@ -176,7 +176,7 @@ async fn create_keeps_the_target_and_key_in_the_vault_after_a_fresh_start() {
     assert_eq!(
         service.status().await.setup,
         Setup::On {
-            git: true,
+            through: Through::Git,
             shown: "https://example.com/me/sync.git".into()
         }
     );
@@ -301,4 +301,17 @@ fn a_remote_is_shown_without_its_password_or_token() {
         assert_eq!(shown(&SyncTarget::Git(secret(url))), expected, "{url}");
     }
     assert_eq!(shown(&SyncTarget::Folder("/srv/s".into())), "/srv/s");
+    let s3 = |prefix: &str| {
+        SyncTarget::S3(crate::ports::S3Target {
+            endpoint: "https://s3.example.com/".into(),
+            region: "auto".into(),
+            bucket: "team".into(),
+            prefix: prefix.into(),
+            key_id: "AKID".into(),
+            secret: secret("s3-secret"),
+        })
+    };
+    assert_eq!(shown(&s3("")), "team at https://s3.example.com");
+    assert_eq!(shown(&s3("/a/b/")), "team/a/b at https://s3.example.com");
+    assert!(!format!("{:?}", s3("")).contains("s3-secret"));
 }

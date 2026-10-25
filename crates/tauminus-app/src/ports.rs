@@ -572,12 +572,37 @@ pub enum SyncError {
     Invalid(String),
 }
 
-/// Where sync reads and writes: a folder another tool shares, or a git
-/// remote. A remote's address may hold a token, so `Debug` hides it.
+/// Where sync reads and writes: a folder another tool shares, a git
+/// remote, or an S3-compatible bucket. A remote's address may hold a
+/// token, and a bucket's key is a secret, so `Debug` hides them.
 #[derive(Clone, PartialEq, Eq)]
 pub enum SyncTarget {
     Folder(String),
     Git(Secret),
+    S3(S3Target),
+}
+
+/// A bucket, or a folder in one, and the key that may write it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct S3Target {
+    /// `https://host[:port]`.
+    pub endpoint: String,
+    pub region: String,
+    pub bucket: String,
+    /// Folders inside the bucket, `a/b`; empty for its top.
+    pub prefix: String,
+    pub key_id: String,
+    pub secret: Secret,
+}
+
+impl fmt::Debug for S3Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("S3Target")
+            .field("endpoint", &self.endpoint)
+            .field("bucket", &self.bucket)
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for SyncTarget {
@@ -585,6 +610,7 @@ impl fmt::Debug for SyncTarget {
         match self {
             Self::Folder(path) => f.debug_tuple("Folder").field(path).finish(),
             Self::Git(_) => f.write_str("Git(..)"),
+            Self::S3(s3) => f.debug_tuple("S3").field(s3).finish(),
         }
     }
 }

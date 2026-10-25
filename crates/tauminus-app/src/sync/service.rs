@@ -24,10 +24,19 @@ pub enum Setup {
     Locked,
     Off,
     On {
-        git: bool,
-        /// The folder, or the remote without any password or token in it.
+        through: Through,
+        /// The folder, the remote without any password or token in it, or
+        /// the bucket and its service.
         shown: String,
     },
+}
+
+/// What kind of target a sync goes through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Through {
+    Folder,
+    Git,
+    S3,
 }
 
 /// What a sync that went through brought.
@@ -128,7 +137,11 @@ impl SyncService {
             Err(_) => Setup::Locked,
             Ok(None) => Setup::Off,
             Ok(Some(setup)) => Setup::On {
-                git: matches!(setup.target, SyncTarget::Git(_)),
+                through: match setup.target {
+                    SyncTarget::Folder(_) => Through::Folder,
+                    SyncTarget::Git(_) => Through::Git,
+                    SyncTarget::S3(_) => Through::S3,
+                },
                 shown: shown(&setup.target),
             },
         };
@@ -287,6 +300,18 @@ fn summary(merged: Merged) -> Summary {
 pub fn shown(target: &SyncTarget) -> String {
     match target {
         SyncTarget::Folder(path) => path.clone(),
+        SyncTarget::S3(s3) => {
+            let folder = if s3.prefix.is_empty() {
+                String::new()
+            } else {
+                format!("/{}", s3.prefix.trim_matches('/'))
+            };
+            format!(
+                "{}{folder} at {}",
+                s3.bucket,
+                s3.endpoint.trim_end_matches('/')
+            )
+        }
         SyncTarget::Git(url) => {
             let Some((scheme, rest)) = url.split_once("://") else {
                 // `user@host:path`: ssh, with no password in it.
