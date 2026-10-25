@@ -1059,3 +1059,58 @@ fn a_merge_past_the_limits_is_refused_not_cut() {
         Some(HostsError::TooMany)
     );
 }
+
+#[test]
+fn exposure_lists_every_level_and_ignores_names_and_tags() {
+    let mut top = group("top", None);
+    top.settings.route = Some(Route::ProxyCommand("nc %h %p".into()));
+    let mut inner = group("inner", Some("top"));
+    inner.settings.forward_agent = Some(true);
+    let mut h = host("h", Some("inner"));
+    h.settings.port = Some(2222);
+    h.startup = vec![SnippetId::parse("s1").unwrap()];
+    let inventory = Inventory::new(vec![top, inner], vec![h.clone()]).unwrap();
+    let lines = inventory.exposure(&hid("h")).unwrap();
+    let fields: Vec<_> = lines.iter().map(|l| (l.level, l.field)).collect();
+    assert_eq!(
+        fields,
+        [
+            (0, "address"),
+            (0, "protocol"),
+            (0, "startup"),
+            (0, "port"),
+            (1, "forward_agent"),
+            (2, "route"),
+        ]
+    );
+    assert!(lines[5].value.contains("nc %h %p"), "{:?}", lines[5]);
+    assert_eq!(lines[5].place, "top");
+
+    // A rename, a tag, or a move to an identical group changes nothing.
+    let mut renamed = h.clone();
+    renamed.label = Label::parse("Renamed").unwrap();
+    renamed.set_tags(vec![Tag::parse("web").unwrap()]).unwrap();
+    let mut other = inventory.clone();
+    other.put_host(renamed).unwrap();
+    let strip = |lines: Vec<Exposed>| {
+        lines
+            .into_iter()
+            .map(|l| (l.level, l.field, l.value))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        strip(other.exposure(&hid("h")).unwrap()),
+        strip(inventory.exposure(&hid("h")).unwrap())
+    );
+    // `prod` turns the guard on: it is listed.
+    let mut tagged = h.clone();
+    tagged.set_tags(vec![Tag::parse("prod").unwrap()]).unwrap();
+    let mut prod = inventory.clone();
+    prod.put_host(tagged).unwrap();
+    let lines = prod.exposure(&hid("h")).unwrap();
+    assert!(lines.iter().any(|l| l.field == "tag" && l.value == "prod"));
+    assert!(matches!(
+        inventory.exposure(&hid("gone")),
+        Err(HostsError::NoSuchHost(_))
+    ));
+}
