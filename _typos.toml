@@ -11,5 +11,7 @@ mke = "mke"
 bck = "bck"
 # openssl's -passin flag
 passin = "passin"
+# the flate2 crate (zlib in Rust)
+flate = "flate"
 # Proper names and protocol terms
 tauminus = "tauminus"
