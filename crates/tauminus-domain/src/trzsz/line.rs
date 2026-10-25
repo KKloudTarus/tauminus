@@ -50,6 +50,11 @@ impl Lines {
         self.scanned
     }
 
+    /// Gives back what a long line took, past what is held now.
+    pub fn shrink(&mut self) {
+        self.buf.shrink_to(MAX_LINE);
+    }
+
     /// The bytes not read as a line, which are no longer the protocol's.
     pub fn take_rest(&mut self) -> Vec<u8> {
         self.scanned = 0;
@@ -91,7 +96,10 @@ impl Lines {
                 self.scanned = end - 1;
                 continue;
             }
-            let mut line: Vec<u8> = self.buf.drain(..=end).collect();
+            // The line keeps the buffer; what follows it moves: a long data
+            // line is not copied.
+            let rest = self.buf.split_off(end + 1);
+            let mut line = std::mem::replace(&mut self.buf, rest);
             self.scanned = 0;
             line.pop();
             if line.last() == Some(&b'\r') {
@@ -125,9 +133,13 @@ fn read_frame(mut line: Vec<u8>, expect: &str, junk: bool) -> Result<Line, Trzsz
     if kind.is_empty() || kind.len() > 8 || !kind.iter().all(u8::is_ascii_alphanumeric) {
         return Err(TrzszError::Protocol("a line that is no frame".into()));
     }
+    let kind = String::from_utf8_lossy(kind).into_owned();
+    // The payload in place: `#`, the kind and the colon go.
+    let start = line.len() - rest.len() + colon + 1;
+    line.drain(..start);
     Ok(Line {
-        kind: String::from_utf8_lossy(kind).into_owned(),
-        payload: rest[colon + 1..].to_vec(),
+        kind,
+        payload: line,
     })
 }
 

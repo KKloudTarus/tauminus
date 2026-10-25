@@ -13,12 +13,14 @@ use flate2::write::ZlibEncoder;
 
 use super::TrzszError;
 
-/// `bytes` as base64 of zlib. O(n).
+/// `bytes` as base64 of zlib, at zlib's fastest level: an upload's data
+/// is often compressed already (archives, media), where higher levels
+/// cost five times the CPU for nothing. Any level decodes. O(n).
 #[must_use]
 pub fn encode(bytes: &[u8]) -> String {
     let mut zlib = ZlibEncoder::new(
         Vec::with_capacity(bytes.len() / 2 + 64),
-        Compression::default(),
+        Compression::fast(),
     );
     // Writing to a Vec does not fail.
     let _ = zlib.write_all(bytes);
@@ -36,7 +38,8 @@ pub fn decode(payload: &[u8], max: usize) -> Result<Vec<u8>, TrzszError> {
     let compressed = BASE64
         .decode(payload)
         .map_err(|_| TrzszError::Protocol("base64".into()))?;
-    let mut out = Vec::new();
+    // Sized for what a chunk usually brings; a bomb stops at `max`.
+    let mut out = Vec::with_capacity(max.min(compressed.len().saturating_mul(4)));
     let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
     ZlibDecoder::new(compressed.as_slice())
         .take(limit)
