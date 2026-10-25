@@ -105,6 +105,11 @@ fn text(chunk: &[u8]) -> bool {
         })
 }
 
+/// A Zmodem offer in `bytes`: trzsz ones are not answered yet.
+fn zmodem_offer(bytes: &[u8]) -> Option<tauminus_domain::Offer> {
+    find_offer(bytes).filter(|offer| offer.protocol == tauminus_domain::TransferProtocol::Zmodem)
+}
+
 /// One session's transfers.
 pub(super) struct Transfer {
     id: SessionId,
@@ -319,12 +324,12 @@ impl Transfer {
         } else {
             let mut seam = tail.clone();
             seam.extend_from_slice(&chunk[..chunk.len().min(OFFER_KEEP + 1)]);
-            find_offer(&seam)
+            zmodem_offer(&seam)
                 .filter(|offer| offer.at < tail.len())
                 .map(|offer| (offer.at, tail.len() - offer.at, offer.wants))
         };
         let found = found
-            .or_else(|| find_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants)));
+            .or_else(|| zmodem_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants)));
         match found {
             Some((at, shown, wants)) if !cooling => {
                 let start = at + shown - tail.len();

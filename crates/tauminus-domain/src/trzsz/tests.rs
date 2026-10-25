@@ -54,9 +54,16 @@ fn a_trigger_cut_anywhere_or_wrong_anywhere_is_not_found() {
 }
 
 #[test]
-fn a_trigger_in_a_tmux_control_line_is_marked() {
+fn a_trigger_in_a_tmux_control_line_is_passed_over() {
     let line = b"%output %3 \x1b[s::TRZSZ:TRANSFER:R:1.2.0:1729812345600:0\r\n";
-    assert!(find_trigger(line).unwrap().tmux_control);
+    assert_eq!(find_trigger(line), None);
+    let mut then = line.to_vec();
+    then.extend_from_slice(TRIGGER);
+    assert_eq!(
+        find_trigger(&then).unwrap().at,
+        line.len() + 3,
+        "the next one counts"
+    );
 }
 
 #[test]

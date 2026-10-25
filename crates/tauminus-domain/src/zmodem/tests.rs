@@ -171,6 +171,7 @@ fn an_offer_is_found_whole_and_only_whole() {
         Some(Offer {
             at,
             wants: Wants::Receive,
+            protocol: TransferProtocol::Zmodem,
         })
     };
     assert_eq!(find_offer(offer), receive(3));
@@ -179,7 +180,8 @@ fn an_offer_is_found_whole_and_only_whole() {
         find_offer(b"rz waiting\r\n**\x18B0100000023be50\r\x8a"),
         Some(Offer {
             at: 12,
-            wants: Wants::Send
+            wants: Wants::Send,
+            protocol: TransferProtocol::Zmodem,
         })
     );
     // Other header types are not offers.
@@ -194,7 +196,8 @@ fn an_offer_is_found_whole_and_only_whole() {
         find_offer(b"**\x18B00zz**\x18B00000000000000\r"),
         receive(8)
     );
-    assert_eq!(OFFER_KEEP, 17);
+    // Kept across reads: the longer of a header (17) and a trigger.
+    assert_eq!(OFFER_KEEP, crate::trzsz::TRIGGER_KEEP - 1);
 }
 
 #[test]
@@ -230,4 +233,58 @@ fn a_host_that_stops_answering_ends_the_receive() {
         receive.timeout(&mut out);
     }
     assert!(receive.ended());
+}
+
+#[test]
+fn the_first_offer_wins_whichever_protocol_makes_it() {
+    let trigger = b"\x1b[s::TRZSZ:TRANSFER:S:1.2.0:1729812345600:0\r\n";
+    let zmodem = b"**\x18B00000000000000\r\n";
+    let mut both = trigger.to_vec();
+    both.extend_from_slice(zmodem);
+    let first = find_offer(&both).unwrap();
+    assert_eq!(first.at, 3);
+    assert_eq!(first.wants, Wants::Receive);
+    assert_eq!(
+        first.protocol,
+        TransferProtocol::Trzsz {
+            id: 1_729_812_345_600,
+            end: trigger.len(),
+            refused: None
+        }
+    );
+    let mut other = zmodem.to_vec();
+    other.extend_from_slice(trigger);
+    assert_eq!(
+        find_offer(&other).unwrap().protocol,
+        TransferProtocol::Zmodem
+    );
+    let folders = find_offer(b"::TRZSZ:TRANSFER:D:1.2.0:1729812345600:0\r\n").unwrap();
+    assert_eq!(folders.wants, Wants::Send);
+    assert!(matches!(
+        folders.protocol,
+        TransferProtocol::Trzsz {
+            refused: Some(Refused::Folders),
+            ..
+        }
+    ));
+    const { assert!(OFFER_KEEP + 1 >= crate::trzsz::TRIGGER_KEEP) };
+}
+
+#[test]
+fn a_name_from_a_host_is_its_last_part_made_safe() {
+    for (raw, saved) in [
+        ("report.pdf", "report.pdf"),
+        ("../../.bashrc", "_bashrc"),
+        ("/etc/passwd", "passwd"),
+        ("C:\\Windows\\win.ini", "win.ini"),
+    ] {
+        assert_eq!(
+            incoming_name(raw, LocalOs::Unix).as_deref(),
+            Ok(saved),
+            "{raw}"
+        );
+    }
+    for raw in ["..", "a/", "con", "x\u{200b}y"] {
+        assert!(incoming_name(raw, LocalOs::Windows).is_err(), "{raw}");
+    }
 }
