@@ -89,6 +89,13 @@ impl Outgoing {
         }
     }
 
+    /// The queue is empty: what a [`Need::Hold`] kept may go.
+    pub(super) fn release(&mut self) {
+        if let Self::Trzsz(upload) = self {
+            upload.release();
+        }
+    }
+
     pub(super) fn rest(&mut self) -> Vec<u8> {
         match self {
             Self::Zmodem(transmit) => transmit.rest(),

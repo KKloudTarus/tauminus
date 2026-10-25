@@ -34,7 +34,11 @@ use send::{Outgoing, Sending};
 /// declined, and the output shown.
 const MAX_HELD: usize = 256 << 10;
 /// After a decline, offers within this go unanswered: `sz` asks again.
-const COOLDOWN: Duration = Duration::from_secs(10);
+pub(super) const COOLDOWN: Duration = if cfg!(test) {
+    Duration::from_millis(500)
+} else {
+    Duration::from_secs(10)
+};
 /// A progress event per this many bytes and this long, at most.
 const PROGRESS_STEP: u64 = 256 << 10;
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
@@ -392,50 +396,71 @@ impl Transfer {
     /// and copies of at most 2 × [`OFFER_KEEP`] + 1 bytes at the seam.
     fn look(&mut self, chunk: Vec<u8>) -> Vec<u8> {
         let tail = std::mem::take(&mut self.tail);
-        let cooling = self.declined_at.is_some_and(|at| at.elapsed() < COOLDOWN);
+        // Bytes of `tail` and `chunk` together up to which an offer was
+        // looked at and passed: what is kept for the next read starts
+        // past them, so no offer is looked at twice.
+        let mut passed = 0;
         // A header that starts in the last read ends within this one's
         // first OFFER_KEEP + 1 bytes.
-        let found = if tail.is_empty() {
-            None
-        } else {
+        if !tail.is_empty() {
             let mut seam = tail.clone();
             seam.extend_from_slice(&chunk[..chunk.len().min(OFFER_KEEP + 1)]);
-            find_offer(&seam)
-                .filter(|offer| offer.at < tail.len())
-                .map(|offer| (offer.at, tail.len() - offer.at, offer.wants, offer.protocol))
+            if let Some(offer) = find_offer(&seam).filter(|offer| offer.at < tail.len()) {
+                if self.takes(offer.protocol) {
+                    let shown = tail.len() - offer.at;
+                    let mut held = tail[offer.at..].to_vec();
+                    held.extend_from_slice(&chunk);
+                    self.put_offer(held, shown, offer.wants, offer.protocol);
+                    return Vec::new();
+                }
+                passed = offer.at + 1;
+            }
+        }
+        let mut from = passed.saturating_sub(tail.len());
+        while let Some(offer) = find_offer(&chunk[from..]) {
+            let at = from + offer.at;
+            if self.takes(offer.protocol) {
+                let held = chunk[at..].to_vec();
+                self.put_offer(held, 0, offer.wants, offer.protocol);
+                return chunk[..at].to_vec();
+            }
+            from = at + 1;
+            passed = tail.len() + from;
+        }
+        // The last OFFER_KEEP bytes of the two, none passed.
+        let start = (tail.len() + chunk.len())
+            .saturating_sub(OFFER_KEEP)
+            .max(passed);
+        self.tail = if start >= tail.len() {
+            chunk[(start - tail.len()).min(chunk.len())..].to_vec()
+        } else {
+            let mut kept = tail[start..].to_vec();
+            kept.extend_from_slice(&chunk);
+            kept
         };
-        let found = found.or_else(|| {
-            find_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants, offer.protocol))
-        });
-        match found {
-            Some((at, shown, wants, protocol)) if !cooling && self.answers(protocol) => {
-                let start = at + shown - tail.len();
-                let mut held = tail[tail.len() - shown..].to_vec();
-                held.extend_from_slice(&chunk[start..]);
-                let before = chunk[..start].to_vec();
-                self.offers += 1;
-                let offer = self.offers;
-                self.state = State::Offered {
-                    held,
-                    shown,
-                    offer,
-                    wants,
-                    protocol,
-                };
-                self.unannounced = true;
-                before
-            }
-            _ => {
-                self.tail = if chunk.len() >= OFFER_KEEP {
-                    chunk[chunk.len() - OFFER_KEEP..].to_vec()
-                } else {
-                    let mut kept = tail;
-                    kept.extend_from_slice(&chunk);
-                    kept.drain(..kept.len().saturating_sub(OFFER_KEEP));
-                    kept
-                };
-                chunk
-            }
+        chunk
+    }
+
+    /// Puts an offer to the user, holding what came from it on.
+    fn put_offer(&mut self, held: Vec<u8>, shown: usize, wants: Wants, protocol: TransferProtocol) {
+        self.offers += 1;
+        self.state = State::Offered {
+            held,
+            shown,
+            offer: self.offers,
+            wants,
+            protocol,
+        };
+        self.unannounced = true;
+    }
+
+    /// Whether an offer found is put to the user: a Zmodem one not within
+    /// [`COOLDOWN`] of a decline, as `sz` asks again and again; a trzsz one
+    /// as [`Self::answers`] says, since its trigger comes once.
+    fn takes(&mut self, protocol: TransferProtocol) -> bool {
+        match protocol {
+            TransferProtocol::Zmodem => self.declined_at.is_none_or(|at| at.elapsed() >= COOLDOWN),
+            TransferProtocol::Trzsz { .. } => self.answers(protocol),
         }
     }
 
@@ -684,7 +709,10 @@ impl Transfer {
                         }
                     }
                     Need::Write => {}
-                    Need::Wait | Need::Ended => break,
+                    // A line's end goes once the queue is empty; the
+                    // writer wakes the pump when it is.
+                    Need::Hold if self.wire.pending() == 0 => sending.engine.release(),
+                    Need::Hold | Need::Wait | Need::Ended => break,
                 }
             }
             let waiting = out.wire.is_empty() && out.sent.is_empty();
@@ -827,6 +855,9 @@ impl Transfer {
         // `rz` never answered: none of the files went, and what the shell
         // printed while the user chose is its own.
         if !sending.engine.answered() {
+            // As after a decline: the trigger in what is shown now is not
+            // put to the user again at once.
+            self.declined_at = Some(Instant::now());
             let held = std::mem::take(&mut sending.held);
             return self.look(held);
         }
@@ -888,7 +919,7 @@ impl Transfer {
         };
         let mut failed: Option<String> =
             backlog.then(|| "the host stopped reading what the transfer sends".to_owned());
-        let mut named: Option<String> = None;
+        let mut named = false;
         for step in out.received {
             if failed.is_some() {
                 break;
@@ -903,9 +934,7 @@ impl Transfer {
                                 size,
                             },
                         );
-                        if matches!(receiving.engine, Incoming::Trzsz(_)) {
-                            named = Some(saved.clone());
-                        }
+                        named = matches!(receiving.engine, Incoming::Trzsz(_));
                         receiving.part = Some((saved, part));
                         receiving.size = size;
                         receiving.bytes = 0;
@@ -975,8 +1004,8 @@ impl Transfer {
     }
 
     /// After a batch of steps: a failure stops the receive; a trzsz file
-    /// saved under `named` lets the transfer go on.
-    fn handled(&mut self, failed: Option<String>, named: Option<String>) {
+    /// `named` (saved) lets the transfer go on.
+    fn handled(&mut self, failed: Option<String>, named: bool) {
         let State::Receiving(receiving) = &mut self.state else {
             return;
         };
@@ -992,9 +1021,9 @@ impl Transfer {
             return;
         }
         // trzsz goes on once the host hears the name the file got.
-        if let (Some(saved), Incoming::Trzsz(download)) = (named, &mut receiving.engine) {
+        if let (true, Incoming::Trzsz(download)) = (named, &mut receiving.engine) {
             let mut out = ZmodemOutput::default();
-            download.named(&saved, &mut out);
+            download.named(&mut out);
             self.handle(out);
         }
     }

@@ -24,6 +24,8 @@ pub use codec::{decode, encode};
 pub use download::{Download, MAX_FILES, closing};
 pub use json::{Config, MAX_BUFSIZE, action};
 pub use line::{Line, Lines, MAX_DATA_LINE, MAX_LINE, frame};
+#[cfg(test)]
+use upload::next_chunk;
 pub use upload::{MAX_UPLOAD_NAME, Upload};
 
 /// What the host wants, from the trigger's mode letter.
@@ -176,25 +178,12 @@ pub fn number(payload: &[u8]) -> Result<u64, TrzszError> {
         .ok_or_else(|| TrzszError::Protocol("a number".into()))
 }
 
-/// A message from the host, for the user: control and reordering
-/// characters dropped, at most 512 bytes.
+/// A message from the host, for the user, as other text from outside is
+/// shown: control, zero-width and reordering characters out, at most 512
+/// bytes.
 #[must_use]
 pub fn shown_message(text: &str) -> String {
-    const MAX: usize = 512;
-    let mut out = String::new();
-    for c in text.chars() {
-        let c = match c {
-            '\n' => ' ',
-            '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => continue,
-            c if c.is_control() => continue,
-            c => c,
-        };
-        if out.len() + c.len_utf8() > MAX {
-            break;
-        }
-        out.push(c);
-    }
-    out.trim().to_owned()
+    crate::history::shown_safely(&text.replace(['\r', '\n'], " "), 512)
 }
 
 #[cfg(test)]

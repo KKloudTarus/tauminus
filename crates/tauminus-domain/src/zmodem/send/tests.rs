@@ -49,7 +49,7 @@ fn run(files: &[(&str, Vec<u8>)], host: Host, chunk: usize) -> Run {
                 send.provide(&data[from..to], &mut out);
                 continue;
             }
-            Need::Write => continue,
+            Need::Write | Need::Hold => continue,
             Need::Ended => {
                 steps_seen.append(&mut out.sent);
                 wire.append(&mut out.wire);
@@ -293,7 +293,7 @@ fn a_host_that_asks_again_without_end_is_stopped() {
                 asked += 1;
                 send.provide(&vec![0; max_len], &mut out);
             }
-            Need::Write => {}
+            Need::Write | Need::Hold => {}
             Need::Ended => break,
             Need::Wait => {
                 // ZRPOS 0, as hex header with its CRC.

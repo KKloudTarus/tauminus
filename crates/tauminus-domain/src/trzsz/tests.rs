@@ -318,8 +318,10 @@ mod downloads {
         // Nothing goes on until the file is saved.
         download.feed(&line("SIZE", &body.len().to_string()), &mut out);
         assert_eq!(said(&mut out), Vec::<String>::new());
-        download.named("_bashrc (1)", &mut out);
-        assert_eq!(said(&mut out), ["#SUCC:_bashrc (1)", "#SUCC:15000"]);
+        // Saved as `_bashrc (1)`, say: the host hears its own name, made
+        // safe, never what the folder held.
+        download.named(&mut out);
+        assert_eq!(said(&mut out), ["#SUCC:_bashrc", "#SUCC:15000"]);
         let mut wire = Vec::new();
         for chunk in body.chunks(4096) {
             wire.extend(text("DATA", chunk));
@@ -344,10 +346,7 @@ mod downloads {
             [Received::FileDone, Received::Done]
         );
         let lines = said(&mut out);
-        assert_eq!(
-            lines.last().unwrap(),
-            "#EXIT:Saved 1 file(s)\r\n- _bashrc (1)"
-        );
+        assert_eq!(lines.last().unwrap(), "#EXIT:Saved 1 file(s)\r\n- _bashrc");
         assert!(download.completed());
         // What the host prints after is the terminal's.
         assert_eq!(download.feed(b"\x1b[u\x1b[0JSaved", &mut out), 0);
@@ -364,7 +363,7 @@ mod downloads {
             host.extend(line("NUM", "1"));
             host.extend(text("NAME", b"f"));
             download.feed(&host, &mut out);
-            download.named("f", &mut out);
+            download.named(&mut out);
             let mut host = line("SIZE", "3");
             host.extend(text("DATA", data));
             host.extend(text("MD5", &md5::compute(md5_of).0));
@@ -422,7 +421,7 @@ mod downloads {
         host.extend(line("NUM", "1"));
         host.extend(text("NAME", b"empty"));
         download.feed(&host, &mut out);
-        download.named("empty", &mut out);
+        download.named(&mut out);
         let mut host = line("SIZE", "0");
         host.extend(text("MD5", &md5::compute(b"").0));
         download.feed(&host, &mut out);
@@ -512,6 +511,8 @@ mod uploads {
             let before = out.wire.len();
             match upload.poll(&mut out) {
                 Need::Write => biggest = biggest.max(out.wire.len() - before),
+                // Nothing queued here: the line's end may go.
+                Need::Hold => upload.release(),
                 Need::Read { offset, max_len } => {
                     let data = &files[next - 1].1;
                     let from = usize::try_from(offset).unwrap();
@@ -602,6 +603,7 @@ mod uploads {
                     break;
                 }
                 Need::Write => {}
+                Need::Hold => upload.release(),
                 Need::Wait => {
                     let answer = trz.answer(&std::mem::take(&mut out.wire));
                     upload.feed(&answer, &mut out);
@@ -616,5 +618,102 @@ mod uploads {
 
     fn text(kind: &str, value: &[u8]) -> Vec<u8> {
         frame(kind, &encode(value))
+    }
+
+    /// An upload of one 200 KiB file, its configuration read, up to the
+    /// first data line, part written.
+    fn mid_line() -> (Upload, TransmitOutput) {
+        let mut out = TransmitOutput::default();
+        let mut upload = Upload::start(1, &mut out);
+        upload.next_file("a", 200 << 10).unwrap();
+        let mut trz = Trz::default();
+        loop {
+            match upload.poll(&mut out) {
+                Need::Read { max_len, .. } => {
+                    // Data zlib cannot shrink: the line is long.
+                    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+                    let data: Vec<u8> = (0..max_len)
+                        .map(|_| {
+                            state ^= state << 13;
+                            state ^= state >> 7;
+                            state ^= state << 17;
+                            state.to_le_bytes()[0]
+                        })
+                        .collect();
+                    upload.provide(&data, &mut out);
+                    assert_eq!(upload.poll(&mut out), Need::Write);
+                    return (upload, out);
+                }
+                Need::Write => {}
+                Need::Hold => upload.release(),
+                Need::Wait => {
+                    let answer = trz.answer(&std::mem::take(&mut out.wire));
+                    upload.feed(&answer, &mut out);
+                }
+                Need::Ended => panic!("ended"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_line_s_end_waits_for_the_queue_and_never_follows_an_echo() {
+        let (mut upload, mut out) = mid_line();
+        out.wire.clear();
+        // The line goes up to its last part, then waits.
+        while upload.poll(&mut out) == Need::Write {}
+        assert_eq!(upload.poll(&mut out), Need::Hold);
+        assert!(!out.wire.contains(&b'\n'), "no line end yet");
+        // A shell echoing it: trz is gone; the rest never goes.
+        upload.feed(b"#DATA:eJzt", &mut out);
+        assert!(upload.ended());
+        assert!(out.wire.ends_with(b"\x03\x05\x15"));
+        assert!(!out.wire.contains(&b'\n'));
+    }
+
+    #[test]
+    fn the_host_s_fail_mid_line_drops_the_line() {
+        let (mut upload, mut out) = mid_line();
+        out.wire.clear();
+        upload.feed(&text("fail", b"disk full"), &mut out);
+        assert!(upload.ended());
+        assert!(out.wire.ends_with(b"\x03\x05\x15"));
+    }
+
+    #[test]
+    fn no_configuration_in_time_writes_nothing_more() {
+        let mut out = TransmitOutput::default();
+        let mut upload = Upload::start(1, &mut out);
+        out.wire.clear();
+        upload.timed_out(&mut out);
+        assert!(upload.ended() && out.wire.is_empty());
+        let mut out = crate::zmodem::Output::default();
+        let mut download = Download::start(crate::sftp::LocalOs::Unix, &mut out);
+        out.wire.clear();
+        download.timed_out(&mut out);
+        assert!(download.ended() && out.wire.is_empty());
+    }
+
+    #[test]
+    fn chunks_grow_while_quick_and_shrink_when_the_link_slows() {
+        let ms = Duration::from_millis;
+        assert_eq!(next_chunk(16 << 10, 16 << 10, ms(100), 1 << 20), 32 << 10);
+        assert_eq!(
+            next_chunk(1 << 20, 1 << 20, ms(100), 1 << 20),
+            1 << 20,
+            "at most"
+        );
+        assert_eq!(
+            next_chunk(64 << 10, 1000, ms(100), 1 << 20),
+            64 << 10,
+            "a short last one"
+        );
+        assert_eq!(next_chunk(64 << 10, 64 << 10, ms(1000), 1 << 20), 64 << 10);
+        // 1 MiB in 8 s: what goes in half a second.
+        assert_eq!(next_chunk(1 << 20, 1 << 20, ms(8000), 1 << 20), 64 << 10);
+        assert_eq!(
+            next_chunk(4 << 10, 4 << 10, ms(60_000), 1 << 20),
+            1 << 10,
+            "at least"
+        );
     }
 }
