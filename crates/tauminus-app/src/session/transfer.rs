@@ -60,6 +60,9 @@ const MAX_NAMES: usize = 100;
 /// trzsz ids a session remembers: one seen again is old output, a log or
 /// a recording replayed, and is not answered.
 const MAX_IDS: usize = 100;
+/// Offers one read is searched for, at most: each search reads the rest
+/// of the chunk.
+const MAX_LOOKED: usize = 16;
 /// While sending: bytes queued for the host past which no more file is
 /// read, and below which reading starts again. They bound what an abort
 /// leaves on the way.
@@ -417,7 +420,13 @@ impl Transfer {
             }
         }
         let mut from = passed.saturating_sub(tail.len());
-        while let Some(offer) = find_offer(&chunk[from..]) {
+        // A log or a replayed recording may hold offers by the hundred:
+        // past a few in one read, the rest are shown, never offered.
+        let mut looked = 0;
+        while looked < MAX_LOOKED
+            && let Some(offer) = find_offer(&chunk[from..])
+        {
+            looked += 1;
             let at = from + offer.at;
             if self.takes(offer.protocol) {
                 let held = chunk[at..].to_vec();

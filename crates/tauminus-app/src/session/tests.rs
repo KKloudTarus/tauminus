@@ -2107,6 +2107,21 @@ mod transfers {
     }
 
     #[tokio::test]
+    async fn a_read_full_of_offers_is_looked_at_a_few_times_only() {
+        let w = world();
+        let mut log = Vec::new();
+        for n in 0..40 {
+            log.extend_from_slice(
+                format!("::TRZSZ:TRANSFER:D:1.2.0:17298123{n:05}:0\r\n").as_bytes(),
+            );
+        }
+        log.extend_from_slice(b"$ ");
+        host(&w, log.clone()).await;
+        until("shown", || w.sink.output() == log).await;
+        assert_eq!(w.host.events().len(), 16, "one reason per offer looked at");
+    }
+
+    #[tokio::test]
     async fn files_go_to_trz_whole_as_base64_lines() {
         let mut w = world();
         host(

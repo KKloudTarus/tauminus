@@ -171,6 +171,8 @@ impl Download {
             match self.lines.next(expect, max) {
                 Ok(None) => return,
                 Ok(Some(line)) if line.kind == expect => {
+                    // A data line's memory goes with it.
+                    self.lines.shrink();
                     if let Err(error) = self.take(&line, out) {
                         self.fail(out, error);
                     }
