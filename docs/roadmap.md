@@ -187,7 +187,7 @@ Goal: Termius Pro sync without a Termius account.
 - [x] End-to-end encrypted sync to a git remote, S3-compatible storage, or a synced folder: XChaCha20-Poly1305 under a key wrapped by Argon2id, which the vault already uses, in place of `age` (ADR 0030)
 - [x] Sync set up, run, and reviewed from the desktop: a folder, git or S3 target and the sync key in the vault, a schedule, the last run's clashes and notices, and no host another device changed used before the user accepts it (ADR 0030)
 - [x] Conflict handling with a CRDT: last-writer-wins per field on hybrid logical clocks, a delete winning over an edit, keyed lists per element, every clash listed on both devices; `automerge` and `yrs` weighed and not taken (ADR 0030)
-- [ ] Per-item flag to keep credentials off the sync target
+- [x] Per-item flag to keep credentials off the sync target: each vault identity is shared only where its device turns it on, never by another device (ADR 0030)
 - [ ] Cloud import: AWS EC2 and Lightsail, DigitalOcean, Azure, GCP
 - [x] Import CSV, PuTTY, MobaXterm, SecureCRT, with their folders and jump hosts (ADR 0029)
 - [ ] Runbooks: snippets with variables shared through the git sync target
