@@ -1690,3 +1690,17 @@ async fn a_proxy_command_from_another_device_waits_for_the_user_here() {
     assert!(review.lines.iter().any(|l| l.value.contains("nc %h %p")));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[tokio::test]
+async fn a_first_sync_with_nothing_in_it_leaves_a_whole_state() {
+    let (a, _b, root) = pair("empty-first").await;
+    let first = a.sync().await;
+    assert!(first.notices.is_empty(), "{:?}", first.notices);
+    a.hosts
+        .edit(|i| i.put_host(new_host("h1", "db", "db.internal")))
+        .await
+        .unwrap();
+    let second = a.sync().await;
+    assert!(second.notices.is_empty(), "{:?}", second.notices);
+    let _ = std::fs::remove_dir_all(&root);
+}
