@@ -1187,6 +1187,11 @@ export type TopologyView = {
 /**  Detached, the session gone, or the link lost. */
 ({ kind: "ended"; reason: string | null; lost: boolean }) & { name?: never; window?: never };
 
+/**  Which protocol an offer came in. */
+export type TransferProtocolView = "zmodem" | 
+/**  trzsz (ADR 0031). */
+"trzsz";
+
 export type TransferStatusSpec = { kind: "waiting" } | { kind: "running" } | { kind: "done" } | { kind: "cancelled" } | { kind: "failed"; reason: string };
 
 export type TransferView = {
@@ -1245,7 +1250,7 @@ export type ZmodemView =
  *  nothing is sent back until the user answers this offer, by its
  *  number.
  */
-{ kind: "offered"; session: SessionHandle; offer: number | null; wants: Direction } | 
+{ kind: "offered"; session: SessionHandle; offer: number | null; wants: Direction; protocol: TransferProtocolView } | 
 /**  Files come into `folder`, or, with none, go to the host. */
 { kind: "started"; session: SessionHandle; folder: string | null } | { kind: "file"; session: SessionHandle; name: string; size: number | null } | { kind: "progress"; session: SessionHandle; bytes: number | null; size: number | null } | 
 /**  The first 100 names of each list, and how many more. */

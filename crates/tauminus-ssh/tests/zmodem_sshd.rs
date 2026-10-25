@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use support::{Scratch, ScriptedPrompter};
 use tauminus_app::ports::{
     Answer, OutputSink, PartFile, Prompter, ReceiveFolder, SinkClosed, SshConnector,
-    TransferAnswer, TransferEvent, TransferHost,
+    TransferAnswer, TransferEvent, TransferHost, TransferKind,
 };
 use tauminus_app::{SessionConfig, SessionManager};
 use tauminus_domain::{
@@ -37,7 +37,7 @@ struct Host {
 }
 
 impl TransferHost for Host {
-    fn offered(&self, _id: SessionId, _offer: u64, _wants: Wants) {
+    fn offered(&self, _id: SessionId, _offer: u64, _wants: Wants, _kind: TransferKind) {
         self.offers.fetch_add(1, Ordering::Relaxed);
     }
 

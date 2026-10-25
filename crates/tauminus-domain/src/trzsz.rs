@@ -147,6 +147,13 @@ fn digits(bytes: &[u8], max: usize) -> Option<usize> {
     (1..=max).contains(&n).then_some(n)
 }
 
+/// The MD5 digest trzsz checks a file with: error detection, not
+/// authentication. O(n).
+#[must_use]
+pub fn md5(bytes: &[u8]) -> [u8; 16] {
+    ::md5::compute(bytes).0
+}
+
 /// A decimal count from the host: ASCII digits only, at most 20.
 ///
 /// # Errors
