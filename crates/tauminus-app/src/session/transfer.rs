@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use tauminus_domain::trzsz::{Download, closing};
+use tauminus_domain::trzsz::{Download, Upload, closing};
 use tauminus_domain::{
     LocalOs, Need, OFFER_KEEP, Receive, Received, Refused, Sent, SessionId, TransferProtocol,
     TransmitOutput, Wants, ZmodemOutput, find_offer,
@@ -28,7 +28,7 @@ use crate::ports::{
 
 mod send;
 
-use send::Sending;
+use send::{Outgoing, Sending};
 
 /// Output held back while an offer waits, at most: past it, the offer is
 /// declined, and the output shown.
@@ -314,7 +314,7 @@ impl Transfer {
     /// from when the host last moved the send on, not from its output.
     pub(super) fn due(&self) -> Option<Instant> {
         match &self.state {
-            State::Sending(sending) => Some(sending.moved_at + IDLE),
+            State::Sending(sending) => Some(sending.moved_at + sending.engine.idle()),
             _ => None,
         }
     }
@@ -378,7 +378,7 @@ impl Transfer {
             }
             State::Sending(sending) => {
                 let mut out = TransmitOutput::default();
-                sending.transmit.feed(&chunk, &mut out);
+                sending.engine.feed(&chunk, &mut out);
                 self.handle_sent(out);
                 return self.step();
             }
@@ -408,7 +408,7 @@ impl Transfer {
             find_offer(&chunk).map(|offer| (tail.len() + offer.at, 0, offer.wants, offer.protocol))
         });
         match found {
-            Some((at, shown, wants, protocol)) if !cooling && self.answers(wants, protocol) => {
+            Some((at, shown, wants, protocol)) if !cooling && self.answers(protocol) => {
                 let start = at + shown - tail.len();
                 let mut held = tail[tail.len() - shown..].to_vec();
                 held.extend_from_slice(&chunk[start..]);
@@ -442,7 +442,7 @@ impl Transfer {
     /// Whether an offer found is put to the user. A trzsz one is not when
     /// its id was seen before (old output), and is told of, not answered,
     /// when it asks what is not done. O(1).
-    fn answers(&mut self, wants: Wants, protocol: TransferProtocol) -> bool {
+    fn answers(&mut self, protocol: TransferProtocol) -> bool {
         let TransferProtocol::Trzsz { id, refused, .. } = protocol else {
             return true;
         };
@@ -458,7 +458,6 @@ impl Transfer {
                 Some("trz -d sends folders, which Tauminus does not take yet")
             }
             Some(Refused::Windows) => Some("trzsz on a Windows host is not supported yet"),
-            None if wants == Wants::Send => Some("trz is not supported yet; tsz is"),
             None => None,
         };
         if let Some(reason) = refused {
@@ -547,7 +546,20 @@ impl Transfer {
                     .position(|&b| b == b'\n' || b == 0x8a)
                     .map_or(held.len(), |end| end + 1);
                 let after = after + usize::from(held.get(after) == Some(&0x11));
-                self.state = State::Sending(Box::new(Sending::new(files, held[after..].to_vec())));
+                let engine = match protocol {
+                    TransferProtocol::Zmodem => Outgoing::Zmodem(Box::default()),
+                    TransferProtocol::Trzsz { .. } => {
+                        let mut out = TransmitOutput::default();
+                        let upload = Upload::start(files.len() as u64, &mut out);
+                        self.wire.send(out.wire);
+                        Outgoing::Trzsz(Box::new(upload))
+                    }
+                };
+                self.state = State::Sending(Box::new(Sending::new(
+                    engine,
+                    files,
+                    held[after..].to_vec(),
+                )));
                 self.next_file();
                 self.step()
             }
@@ -585,7 +597,7 @@ impl Transfer {
             State::Sending(sending) => {
                 let mut out = TransmitOutput::default();
                 self.wire.cut();
-                sending.transmit.abort(&mut out, "cancelled");
+                sending.engine.abort(&mut out, "cancelled");
                 self.handle_sent(out);
                 return self.step();
             }
@@ -609,13 +621,13 @@ impl Transfer {
             return Vec::new();
         }
         if let State::Sending(sending) = &mut self.state {
-            if sending.moved_at.elapsed() < IDLE {
+            if sending.moved_at.elapsed() < sending.engine.idle() {
                 return Vec::new();
             }
             sending.moved_at = Instant::now();
             let mut out = TransmitOutput::default();
-            sending.transmit.timeout(&mut out);
-            if sending.transmit.ended() {
+            sending.engine.timeout(&mut out);
+            if sending.engine.ended() {
                 self.wire.cut();
             }
             self.handle_sent(out);
@@ -643,7 +655,7 @@ impl Transfer {
             let State::Sending(sending) = &mut self.state else {
                 return Vec::new();
             };
-            if sending.transmit.ended() {
+            if sending.engine.ended() {
                 return self.after_send();
             }
             if self.wire.pending() >= HIGH {
@@ -655,22 +667,23 @@ impl Transfer {
             };
             // A chunk at a time, so the queue is checked between them.
             while out.wire.len() < CHUNK && out.sent.is_empty() {
-                match sending.transmit.poll(&mut out) {
+                match sending.engine.poll(&mut out) {
                     Need::Read { offset, max_len } => {
                         sending.moved_at = Instant::now();
                         let Some(file) = sending.current.as_mut() else {
-                            sending.transmit.abort(&mut out, "no file to read");
+                            sending.engine.abort(&mut out, "no file to read");
                             break;
                         };
                         sending.buffer.resize(max_len, 0);
                         if let Ok(n) = file.read_at(offset, &mut sending.buffer) {
                             sending.reached = sending.reached.max(offset + n as u64);
-                            sending.transmit.provide(&sending.buffer[..n], &mut out);
+                            sending.engine.provide(&sending.buffer[..n], &mut out);
                         } else {
                             self.wire.cut();
-                            sending.transmit.abort(&mut out, "a file could not be read");
+                            sending.engine.abort(&mut out, "a file could not be read");
                         }
                     }
+                    Need::Write => {}
                     Need::Wait | Need::Ended => break,
                 }
             }
@@ -685,7 +698,7 @@ impl Transfer {
     /// The send waits for the host, unless it ended.
     fn step_end(&mut self) -> Vec<u8> {
         match &self.state {
-            State::Sending(sending) if sending.transmit.ended() => self.after_send(),
+            State::Sending(sending) if sending.engine.ended() => self.after_send(),
             _ => Vec::new(),
         }
     }
@@ -699,14 +712,15 @@ impl Transfer {
         let mut out = TransmitOutput::default();
         let Some(file) = sending.queue.pop_front() else {
             sending.current = None;
-            sending.transmit.finish(&mut out);
-            self.wire.send(out.wire);
+            // trzsz ends here; Zmodem once the host answers.
+            sending.engine.finish(&mut out);
+            self.handle_sent(out);
             return;
         };
         let (name, size) = (file.name().to_owned(), file.size());
-        if let Err(error) = sending.transmit.start(&name, size) {
+        if let Err(error) = sending.engine.start(&name, size) {
             self.wire.cut();
-            sending.transmit.abort(&mut out, "a file could not be sent");
+            sending.engine.abort(&mut out, "a file could not be sent");
             self.host.event(
                 self.id,
                 TransferEvent::Failed {
@@ -772,7 +786,7 @@ impl Transfer {
                 Sent::Aborted { reason } => self.host.event(
                     self.id,
                     TransferEvent::Failed {
-                        reason: reason.to_owned(),
+                        reason: reason.into_owned(),
                     },
                 ),
             }
@@ -800,10 +814,10 @@ impl Transfer {
         let State::Sending(mut sending) = std::mem::replace(&mut self.state, State::Idle) else {
             return Vec::new();
         };
-        if sending.transmit.completed() {
+        if sending.engine.completed() {
             // The end of `rz`'s last header (line end, XON) is the
             // protocol's; the shell's prompt after it is not.
-            let rest = sending.transmit.rest();
+            let rest = sending.engine.rest();
             let start = rest
                 .iter()
                 .position(|b| !matches!(b, b'\r' | b'\n' | 0x8a | 0x11))
@@ -812,7 +826,7 @@ impl Transfer {
         }
         // `rz` never answered: none of the files went, and what the shell
         // printed while the user chose is its own.
-        if !sending.transmit.answered() {
+        if !sending.engine.answered() {
             let held = std::mem::take(&mut sending.held);
             return self.look(held);
         }
@@ -821,7 +835,7 @@ impl Transfer {
             since: now,
             last: now,
             inputs: self.inputs.load(Ordering::Relaxed),
-            trzsz: false,
+            trzsz: sending.engine.trzsz(),
         };
         Vec::new()
     }

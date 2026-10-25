@@ -49,6 +49,7 @@ fn run(files: &[(&str, Vec<u8>)], host: Host, chunk: usize) -> Run {
                 send.provide(&data[from..to], &mut out);
                 continue;
             }
+            Need::Write => continue,
             Need::Ended => {
                 steps_seen.append(&mut out.sent);
                 wire.append(&mut out.wire);
@@ -188,7 +189,7 @@ fn the_host_s_cancel_ends_the_send() {
     assert_eq!(
         run.sent.last(),
         Some(&Sent::Aborted {
-            reason: "the host stopped the transfer"
+            reason: "the host stopped the transfer".into()
         })
     ); // Then Ctrl+E Ctrl+U, for a shell that may read what follows.
     assert!(run.wire.ends_with(&[0x05, 0x15]));
@@ -240,7 +241,7 @@ fn an_abort_tells_the_host_to_stop() {
     assert_eq!(
         out.sent.last(),
         Some(&Sent::Aborted {
-            reason: "cancelled"
+            reason: "cancelled".into()
         })
     );
     assert_eq!(send.poll(&mut out), Need::Ended);
@@ -292,6 +293,7 @@ fn a_host_that_asks_again_without_end_is_stopped() {
                 asked += 1;
                 send.provide(&vec![0; max_len], &mut out);
             }
+            Need::Write => {}
             Need::Ended => break,
             Need::Wait => {
                 // ZRPOS 0, as hex header with its CRC.
@@ -303,7 +305,7 @@ fn a_host_that_asks_again_without_end_is_stopped() {
     assert_eq!(
         out.sent.last(),
         Some(&Sent::Aborted {
-            reason: "the host asked for the same bytes again and again"
+            reason: "the host asked for the same bytes again and again".into()
         })
     );
 }
@@ -342,7 +344,7 @@ fn answered(out: &mut TransmitOutput, size: u64) -> Transmit {
     send
 }
 
-fn reason(out: &TransmitOutput) -> &'static str {
+fn reason(out: &TransmitOutput) -> &str {
     match out.sent.last() {
         Some(Sent::Aborted { reason }) => reason,
         other => panic!("{other:?}"),

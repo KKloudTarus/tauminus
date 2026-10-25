@@ -18,11 +18,13 @@ mod codec;
 mod download;
 mod json;
 mod line;
+mod upload;
 
 pub use codec::{decode, encode};
 pub use download::{Download, MAX_FILES, closing};
 pub use json::{Config, MAX_BUFSIZE, action};
 pub use line::{Line, Lines, MAX_DATA_LINE, MAX_LINE, frame};
+pub use upload::{MAX_UPLOAD_NAME, Upload};
 
 /// What the host wants, from the trigger's mode letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

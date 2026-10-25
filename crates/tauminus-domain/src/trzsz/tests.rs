@@ -435,3 +435,186 @@ mod downloads {
         assert_eq!(closing(b"#DATA:abc"), None);
     }
 }
+
+mod uploads {
+    use super::*;
+    use crate::zmodem::{Need, Sent, TransmitOutput};
+
+    /// A `trz` that takes what comes, as protocol 1 does.
+    #[derive(Default)]
+    struct Trz {
+        pending: Vec<u8>,
+        files: Vec<(String, Vec<u8>)>,
+        size: u64,
+        exit: Option<String>,
+    }
+
+    impl Trz {
+        /// The answers to the terminal's whole lines so far.
+        fn answer(&mut self, wire: &[u8]) -> Vec<u8> {
+            self.pending.extend_from_slice(wire);
+            let mut out = Vec::new();
+            while let Some(end) = self.pending.iter().position(|&b| b == b'\n') {
+                let line: Vec<u8> = self.pending.drain(..=end).collect();
+                let line = std::str::from_utf8(&line[..line.len() - 1]).unwrap();
+                let (kind, payload) = line.split_once(':').unwrap();
+                let text = |p: &str| decode(p.as_bytes(), 16 << 20).unwrap();
+                match kind {
+                    "#ACT" => {
+                        out.extend(frame("CFG", &encode(br#"{"timeout":20,"bufsize":262144}"#)));
+                    }
+                    "#NUM" => out.extend(frame("SUCC", payload)),
+                    "#NAME" => {
+                        let name = String::from_utf8(text(payload)).unwrap();
+                        out.extend(frame("SUCC", &encode(name.as_bytes())));
+                        self.files.push((name, Vec::new()));
+                    }
+                    "#SIZE" => {
+                        self.size = payload.parse().unwrap();
+                        out.extend(frame("SUCC", payload));
+                    }
+                    "#DATA" => {
+                        assert!(
+                            payload
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+                        );
+                        let bytes = text(payload);
+                        out.extend(frame("SUCC", &bytes.len().to_string()));
+                        self.files.last_mut().unwrap().1.extend(bytes);
+                    }
+                    "#MD5" => {
+                        let digest = md5(&self.files.last().unwrap().1);
+                        assert_eq!(text(payload), digest);
+                        out.extend(frame("SUCC", &encode(&digest)));
+                    }
+                    "#EXIT" => self.exit = Some(String::from_utf8(text(payload)).unwrap()),
+                    other => panic!("{other}"),
+                }
+            }
+            out
+        }
+    }
+
+    /// Runs an upload of `files` against `trz` to its end. Returns what
+    /// it reported, and the biggest write per poll.
+    fn run(files: &[(&str, Vec<u8>)], trz: &mut Trz) -> (Vec<Sent>, usize) {
+        let mut out = TransmitOutput::default();
+        let mut upload = Upload::start(files.len() as u64, &mut out);
+        let mut next = 0;
+        upload
+            .next_file(files[0].0, files[0].1.len() as u64)
+            .unwrap();
+        next += 1;
+        let mut sent = Vec::new();
+        let mut biggest = 0;
+        for _ in 0..100_000 {
+            let before = out.wire.len();
+            match upload.poll(&mut out) {
+                Need::Write => biggest = biggest.max(out.wire.len() - before),
+                Need::Read { offset, max_len } => {
+                    let data = &files[next - 1].1;
+                    let from = usize::try_from(offset).unwrap();
+                    let to = (from + max_len).min(data.len());
+                    upload.provide(&data[from..to], &mut out);
+                }
+                Need::Ended => break,
+                Need::Wait => {
+                    let answer = trz.answer(&std::mem::take(&mut out.wire));
+                    upload.feed(&answer, &mut out);
+                }
+            }
+            for step in std::mem::take(&mut out.sent) {
+                if step == Sent::FileDone {
+                    if next < files.len() {
+                        upload
+                            .next_file(files[next].0, files[next].1.len() as u64)
+                            .unwrap();
+                        next += 1;
+                    } else {
+                        upload.finish(&mut out);
+                    }
+                }
+                sent.push(step);
+            }
+        }
+        trz.answer(&out.wire);
+        sent.extend(out.sent);
+        (sent, biggest)
+    }
+
+    #[test]
+    fn files_go_whole_in_growing_chunks_and_a_part_at_a_time() {
+        let big: Vec<u8> = (0..3_000_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let mut trz = Trz::default();
+        let (sent, biggest) = run(&[("big.bin", big.clone()), ("empty", Vec::new())], &mut trz);
+        assert_eq!(sent, [Sent::FileDone, Sent::FileDone, Sent::Done]);
+        assert_eq!(trz.files[0], ("big.bin".to_owned(), big));
+        assert_eq!(trz.files[1], ("empty".to_owned(), Vec::new()));
+        assert!(trz.exit.unwrap().contains("- big.bin"));
+        assert!(biggest <= 1024, "{biggest} bytes in one poll");
+    }
+
+    #[test]
+    fn the_host_s_own_end_or_noise_stops_it() {
+        for (answer, reason, ctrl_c) in [
+            (text("fail", b"No space left"), "No space left", false),
+            (b"#DATA:aGVsbG8=\n".to_vec(), "#DATA where", true),
+            (b"bash: trz: oops\n".to_vec(), "no frame", true),
+        ] {
+            let mut out = TransmitOutput::default();
+            let mut upload = Upload::start(1, &mut out);
+            upload.next_file("a", 5).unwrap();
+            upload.feed(&text("CFG", b"{}"), &mut out);
+            out.wire.clear();
+            upload.feed(&answer, &mut out);
+            assert!(upload.ended() && !upload.completed());
+            match out.sent.last() {
+                Some(Sent::Aborted { reason: why }) => assert!(why.contains(reason), "{why}"),
+                other => panic!("{other:?}"),
+            }
+            assert_eq!(out.wire == b"\x03\x05\x15", ctrl_c, "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_host_asking_for_binary_or_folders_gets_no_file() {
+        let mut out = TransmitOutput::default();
+        let mut upload = Upload::start(1, &mut out);
+        upload.next_file("a", 1).unwrap();
+        out.wire.clear();
+        upload.feed(&text("CFG", br#"{"binary":true}"#), &mut out);
+        assert!(upload.ended());
+        assert!(!String::from_utf8_lossy(&out.wire).contains("#NAME"));
+        assert!(upload.next_file("b", 1).is_err());
+    }
+
+    #[test]
+    fn a_file_that_shrinks_while_it_goes_stops_it() {
+        let mut out = TransmitOutput::default();
+        let mut upload = Upload::start(1, &mut out);
+        upload.next_file("a", 10).unwrap();
+        let mut trz = Trz::default();
+        loop {
+            match upload.poll(&mut out) {
+                Need::Read { .. } => {
+                    upload.provide(&[], &mut out);
+                    break;
+                }
+                Need::Write => {}
+                Need::Wait => {
+                    let answer = trz.answer(&std::mem::take(&mut out.wire));
+                    upload.feed(&answer, &mut out);
+                }
+                Need::Ended => panic!("ended"),
+            }
+        }
+        assert!(
+            matches!(out.sent.last(), Some(Sent::Aborted { reason }) if reason.contains("shorter"))
+        );
+    }
+
+    fn text(kind: &str, value: &[u8]) -> Vec<u8> {
+        frame(kind, &encode(value))
+    }
+}
