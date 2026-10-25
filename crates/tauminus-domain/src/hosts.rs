@@ -24,6 +24,9 @@ use crate::ssh::{EnvError, EnvVar, MAX_ENV, SessionOptions, env_list};
 use crate::telnet::{TELNET_PORT, TelnetTarget};
 use crate::trigger::MAX_LEVEL_SETS;
 
+mod exposure;
+pub use exposure::Exposed;
+
 /// Deepest group nesting. Deeper trees are hard to read in a sidebar and
 /// bound the cost of resolving a host.
 pub const MAX_GROUP_DEPTH: usize = 16;
