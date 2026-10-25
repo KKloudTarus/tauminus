@@ -37,6 +37,8 @@ impl Inventory {
             id: _,
             label,
             address,
+            // Where it came from changes nothing a connect does.
+            origin: _,
             group: _,
             tags,
             settings,

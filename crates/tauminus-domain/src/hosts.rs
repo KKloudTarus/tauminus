@@ -50,6 +50,8 @@ pub enum HostsError {
     Label,
     #[error("tag {0:?} must be 1 to 32 lowercase letters, digits, '-', '_' or '.'")]
     Tag(String),
+    #[error("an origin must be 1 to {MAX_ORIGIN} ASCII letters, digits or `._:/@+=,-`")]
+    Origin,
     #[error("at most {MAX_TAGS} tags per host")]
     TooManyTags,
     #[error("no group {0}")]
@@ -128,6 +130,44 @@ macro_rules! id_type {
 }
 
 id_type!(HostId, "saved host");
+
+/// Longest [`Origin`], in bytes.
+pub const MAX_ORIGIN: usize = 256;
+
+/// Where a host came from: `aws-ec2:<account>:<region>:<instance>`,
+/// `do:<droplet>`, and the like (ADR 0032). ASCII, no space.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Origin(String);
+
+impl Origin {
+    /// O(n) in the length.
+    ///
+    /// # Errors
+    /// Empty, too long, or a character outside `[A-Za-z0-9._:/@+=,-]`.
+    pub fn parse(text: &str) -> Result<Self, HostsError> {
+        let valid = !text.is_empty()
+            && text.len() <= MAX_ORIGIN
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._:/@+=,-".contains(&b));
+        if valid {
+            Ok(Self(text.to_owned()))
+        } else {
+            Err(HostsError::Origin)
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 id_type!(GroupId, "group of hosts");
 id_type!(ForwardId, "port forwarding rule");
 id_type!(SnippetId, "saved command");
@@ -329,6 +369,9 @@ pub struct Host {
     pub id: HostId,
     pub label: Label,
     pub address: HostName,
+    /// What outside this app the host stands for, so a later import finds
+    /// it again: a cloud instance (ADR 0032). The view never sets it.
+    pub origin: Option<Origin>,
     pub group: Option<GroupId>,
     /// Sorted and without repeats; see [`Host::set_tags`].
     tags: Vec<Tag>,
@@ -347,6 +390,7 @@ impl Host {
             id,
             label,
             address,
+            origin: None,
             group: None,
             tags: Vec::new(),
             settings: Settings::default(),
