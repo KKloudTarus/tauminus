@@ -943,7 +943,9 @@ impl Inner {
             pending.state.joined = true;
             pending.state.staged = false;
         }
-        if doc_changed {
+        // A joined state always has its doc beside it, an empty one
+        // included: a doc missing there means a state cut short.
+        if doc_changed || (whole && !self.doc_path().is_file()) {
             save_json(&self.doc_path(), &pending.state.doc)?;
         }
         save_json(&self.state_path, &pending.state)?;
