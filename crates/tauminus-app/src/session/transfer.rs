@@ -799,7 +799,7 @@ impl Transfer {
                     self.host.event(
                         self.id,
                         TransferEvent::Failed {
-                            reason: reason.to_owned(),
+                            reason: reason.into_owned(),
                         },
                     );
                 }

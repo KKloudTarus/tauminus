@@ -14,6 +14,7 @@ publish.workspace = true
 [dependencies]
 data-encoding = "2.11"
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+md5 = "0.8.1"
 memchr.workspace = true
 regex.workspace = true
 regex-syntax.workspace = true

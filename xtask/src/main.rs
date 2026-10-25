@@ -133,13 +133,14 @@ const LAYER_RULES: &[(&str, &[&str])] = &[
     // zmodem2: the Zmodem protocol as a state machine the caller drives,
     // with no I/O, for files a host sends with `sz` (ADR 0025). memchr:
     // the substring search that finds its offer in every output chunk.
-    // data-encoding and flate2 (Rust backend): base64 and zlib with no
-    // I/O, for trzsz's lines (ADR 0031).
+    // data-encoding, flate2 (Rust backend) and md5: base64, zlib and the
+    // MD5 check with no I/O, for trzsz's lines (ADR 0031).
     (
         "tauminus-domain",
         &[
             "data-encoding",
             "flate2",
+            "md5",
             "memchr",
             "regex",
             "regex-syntax",

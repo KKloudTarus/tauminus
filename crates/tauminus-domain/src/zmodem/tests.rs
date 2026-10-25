@@ -216,7 +216,7 @@ fn an_abort_tells_the_host_to_stop() {
     assert_eq!(
         out.received.last(),
         Some(&Received::Aborted {
-            reason: "cancelled"
+            reason: "cancelled".into()
         })
     );
 }

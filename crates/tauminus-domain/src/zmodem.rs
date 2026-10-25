@@ -161,7 +161,7 @@ pub enum Received {
     Done,
     /// The transfer ended before it was done.
     Aborted {
-        reason: &'static str,
+        reason: std::borrow::Cow<'static, str>,
     },
 }
 
@@ -317,7 +317,9 @@ impl Receive {
     fn end(&mut self, out: &mut Output, reason: &'static str) {
         if !self.ended {
             self.ended = true;
-            out.received.push(Received::Aborted { reason });
+            out.received.push(Received::Aborted {
+                reason: reason.into(),
+            });
         }
     }
 

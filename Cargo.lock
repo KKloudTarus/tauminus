@@ -5661,6 +5661,7 @@ version = "0.0.0"
 dependencies = [
  "data-encoding",
  "flate2",
+ "md5",
  "memchr",
  "regex",
  "regex-syntax",
