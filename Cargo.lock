@@ -5619,6 +5619,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauminus-cloud"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauminus-app",
+ "tauminus-domain",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "tauminus-desktop"
 version = "0.0.0"
 dependencies = [
