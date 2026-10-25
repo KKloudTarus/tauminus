@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauminus_app::ports::{Secret, SyncTarget};
+use tauminus_app::ports::{S3Target, Secret, SyncTarget};
 use tauminus_app::vault::{
     AiKey, HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
     RecordingKeys, SyncSetup, VaultBackend, VaultError,
@@ -420,7 +420,9 @@ impl OpenPort for Opened {
         self.vault.put(AI_KEY, plain).map_err(port_error)
     }
 
-    /// Kept as the kind (`f` or `g`), the 32-byte key, and the address.
+    /// Kept as the kind (`f`, `g` or `s`), the 32-byte key, and the
+    /// address; a bucket's is its endpoint, region, bucket, folder, key id
+    /// and secret, each ended by a NUL but the last.
     fn sync_setup(&self) -> Result<Option<SyncSetup>, VaultError> {
         let Some(stored) = self.vault.get(SYNC) else {
             return Ok(None);
@@ -435,6 +437,20 @@ impl OpenPort for Opened {
         let target = match kind {
             b'f' => SyncTarget::Folder(address.to_owned()),
             b'g' => SyncTarget::Git(Secret::new(address.to_owned())),
+            b's' => {
+                let parts: Vec<&str> = address.split('\0').collect();
+                let [endpoint, region, bucket, prefix, key_id, secret] = parts[..] else {
+                    return Err(corrupt());
+                };
+                SyncTarget::S3(S3Target {
+                    endpoint: endpoint.to_owned(),
+                    region: region.to_owned(),
+                    bucket: bucket.to_owned(),
+                    prefix: prefix.to_owned(),
+                    key_id: key_id.to_owned(),
+                    secret: Secret::new(secret.to_owned()),
+                })
+            }
             _ => return Err(corrupt()),
         };
         let mut bytes = Zeroizing::new([0; 32]);
@@ -447,10 +463,27 @@ impl OpenPort for Opened {
             self.vault.remove(SYNC);
             return Ok(());
         };
-        let (kind, address) = match &setup.target {
-            SyncTarget::Folder(path) => (b'f', path.as_str()),
-            SyncTarget::Git(url) => (b'g', url.as_str()),
+        let parts: Vec<&str> = match &setup.target {
+            SyncTarget::Folder(path) => vec![path],
+            SyncTarget::Git(url) => vec![url],
+            SyncTarget::S3(s3) => vec![
+                &s3.endpoint,
+                &s3.region,
+                &s3.bucket,
+                &s3.prefix,
+                &s3.key_id,
+                &s3.secret,
+            ],
         };
+        if parts.iter().any(|p| p.contains('\0')) {
+            return Err(VaultError::Invalid("a sync setting holds a NUL".into()));
+        }
+        let kind = match &setup.target {
+            SyncTarget::Folder(_) => b'f',
+            SyncTarget::Git(_) => b'g',
+            SyncTarget::S3(_) => b's',
+        };
+        let address = Zeroizing::new(parts.join("\0"));
         let mut plain = Vec::with_capacity(1 + 32 + address.len());
         plain.push(kind);
         plain.extend_from_slice(&*setup.key);

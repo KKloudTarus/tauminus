@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The app's way to its sync targets: a folder or a git remote, and this
+//! The app's way to its sync targets: a folder, a git remote or a bucket, and this
 //! device's state for it in one folder of its own, `state` and `git`.
 
 use std::path::PathBuf;
@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 
 use crate::engine::{Remote, create, join};
 use crate::git::Git;
+use crate::s3::{S3, S3Config};
 use crate::seal::{Kdf, SyncKey};
 use crate::target::{Folder, Target};
 
@@ -75,6 +76,17 @@ impl Connector {
                 }
                 Arc::new(Folder::new(path))
             }
+            SyncTarget::S3(s3) => Arc::new(
+                S3::new(&S3Config {
+                    endpoint: s3.endpoint.clone(),
+                    region: s3.region.clone(),
+                    bucket: s3.bucket.clone(),
+                    prefix: s3.prefix.clone(),
+                    key_id: s3.key_id.clone(),
+                    secret: s3.secret.clone(),
+                })
+                .map_err(|e| target_error(&e))?,
+            ),
             SyncTarget::Git(url) => {
                 Arc::new(Git::new(url, self.dir.join("git")).map_err(|e| target_error(&e))?)
             }

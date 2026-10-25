@@ -438,7 +438,7 @@ fn the_ai_key_is_kept_with_its_origin_and_can_be_removed() {
 
 #[test]
 fn the_sync_setup_is_kept_with_its_target_and_can_be_removed() {
-    use tauminus_app::ports::SyncTarget;
+    use tauminus_app::ports::{S3Target, SyncTarget};
     use tauminus_app::vault::SyncSetup;
     let (_dir, backend) = backend(Arc::default());
     let mut open = backend.create(&secret("correct horse")).unwrap();
@@ -447,6 +447,14 @@ fn the_sync_setup_is_kept_with_its_target_and_can_be_removed() {
         SyncTarget::Git(secret("https://user:token@example.com/sync.git")),
         SyncTarget::Folder("/srv/shared/tauminus".into()),
         SyncTarget::Folder(String::new()),
+        SyncTarget::S3(S3Target {
+            endpoint: "https://s3.example.com".into(),
+            region: "auto".into(),
+            bucket: "team".into(),
+            prefix: String::new(),
+            key_id: "AKID".into(),
+            secret: secret("token-s3"),
+        }),
     ] {
         open.set_sync_setup(Some(&SyncSetup {
             target: target.clone(),
@@ -462,6 +470,11 @@ fn the_sync_setup_is_kept_with_its_target_and_can_be_removed() {
         assert!(!format!("{setup:?}").contains("token"));
         open = again;
     }
+    let nul = SyncSetup {
+        target: SyncTarget::Folder("a\0b".into()),
+        key: Zeroizing::new([7; 32]),
+    };
+    assert!(open.set_sync_setup(Some(&nul)).is_err());
     open.set_sync_setup(None).unwrap();
     open.save().unwrap();
     let open = backend.unlock(&secret("correct horse")).unwrap();
