@@ -9,6 +9,7 @@
 //! library.
 
 mod ai;
+pub mod cloud;
 mod connections;
 #[cfg(test)]
 mod fakes;
