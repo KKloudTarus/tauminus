@@ -192,6 +192,8 @@ Goal: Termius Pro sync without a Termius account.
 - [x] Import CSV, PuTTY, MobaXterm, SecureCRT, with their folders and jump hosts (ADR 0029)
 - [x] Runbooks: snippets with variables shared through the git sync target: a multi-line snippet with `{{name:default}}` placeholders, in a folder, syncs sealed and fills on the other device (test: `a_runbook_with_variables_reaches_the_other_device_through_git_and_fills_there`); sharing with a team is the Hub's, in v0.6
 - [ ] Code signing for macOS (Developer ID, notarization)
+  - [x] The release signs and notarizes the macOS bundle when the `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_P8` secrets exist, and builds unsigned otherwise
+  - [ ] A Developer ID account, the secrets set, and a signed `.dmg` that opens on a Mac with no Gatekeeper warning
 - [ ] Native keys bound to the Secure Enclave (signed builds, data protection keychain) and to Windows Hello (NCrypt, Passport provider), each after a spike on real hardware (moved from v0.4: ADR 0028)
 - [ ] Auto-update with `tauri-plugin-updater`, signing key in CI secrets
 
