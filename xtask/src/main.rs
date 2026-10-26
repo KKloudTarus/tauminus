@@ -12,6 +12,7 @@ use std::process::{Command, ExitCode};
 use anyhow::{Context, Result, bail};
 
 mod flood;
+mod updater;
 
 const BINDINGS: &str = "apps/desktop/src/ipc/bindings.ts";
 
@@ -25,12 +26,14 @@ Tasks:
   web       Frontend format check, lint, type check, and tests
   bindings  Regenerate the TypeScript IPC bindings
   flood     Benchmark output: flood text <MiB> | yes <seconds> | report <hex> | note <hex>
+  updater-sign  Sign a release's update bundles and write latest.json (see --help)
 ";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
         Some("flood") => flood::run(&args[1..]),
+        Some("updater-sign") => updater::run(&args[1..], &workspace_root()),
         task => run(task),
     };
     match result {

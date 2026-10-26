@@ -14,6 +14,13 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 serde_json.workspace = true
+# Signing update bundles (ADR 0033), with the versions already in the tree.
+blake2 = "0.11"
+data-encoding = "2.11"
+ed25519-dalek = "3.0.0"
+getrandom = "0.3"
+minisign-verify = "0.3"
+scrypt = { version = "0.12", default-features = false }
 
 [lints]
 workspace = true
