@@ -347,6 +347,8 @@ export class AppShell {
       this.#stopScheme = () => scheme.removeEventListener("change", onScheme);
     }
 
+    // On Windows the backend runs local shells through ConPTY.
+    const conpty = /\bWindows\b/u.test(options.userAgent);
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
       // Set once the controller exists: triggers fire only after output.
@@ -368,6 +370,7 @@ export class AppShell {
             }
           : {}),
         mac: this.platform === "mac",
+        conpty,
         ...(this.zmodem ? { zmodem: this.zmodem } : {}),
         ...(spec?.kind === "tmux" && spec.control === undefined
           ? { tmux: this.#tmuxEvents(paneId, spec) }
@@ -1516,7 +1519,7 @@ export class AppShell {
         this.#paste();
         return;
       case "terminal.clear":
-        this.#activeController()?.terminal.clear();
+        this.#activeController()?.clearScrollback();
         return;
       case "theme.cycle":
         this.setTheme(nextTheme(this.#state.theme));

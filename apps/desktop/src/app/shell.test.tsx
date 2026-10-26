@@ -19,13 +19,13 @@ afterEach(() => {
   for (const made of shells.splice(0)) made.dispose();
 });
 
-function shell(hosts = fakeHosts()): AppShell {
+function shell(hosts = fakeHosts(), userAgent = "test"): AppShell {
   const made = new AppShell({
     sessions: fakeSessions,
     hosts,
     vault: fakeVault(),
     snippets: fakeSnippets(() => []),
-    userAgent: "test",
+    userAgent,
     storage: localStorage,
     root: document.documentElement,
     clipboard: undefined,
@@ -278,5 +278,43 @@ describe("AppShell sync", () => {
     made.setSyncOpen(false);
     made.syncReviewed(["db"]);
     expect(retried).toBe(1);
+  });
+});
+
+const WINDOWS =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
+
+/** The cursor row of a local pane after 30 lines of output and Clear scrollback. */
+async function cursorAfterClear(userAgent: string) {
+  const app = shell(fakeHosts(), userAgent);
+  app.workspace.newTab();
+  await show(app);
+  const pane = app.workspace.terminal(app.workspace.activeTab!.focused)!;
+  await vi.waitFor(() => expect(pane.getStatus().kind).toBe("running"));
+  // Without the app's styles the pane has no height of its own.
+  pane.terminal.resize(80, 24);
+  await new Promise<void>((resolve) => {
+    pane.terminal.write(`${"output\r\n".repeat(30)}prompt>`, resolve);
+  });
+  const before = pane.terminal.buffer.active.cursorY;
+  app.run("terminal.clear");
+  await new Promise<void>((resolve) => {
+    pane.terminal.write("", resolve);
+  });
+  const buffer = pane.terminal.buffer.active;
+  return { before, after: buffer.cursorY, baseY: buffer.baseY };
+}
+
+describe("AppShell clearing the scrollback", () => {
+  it("leaves a local pane's cursor row alone on Windows, where ConPTY places output", async () => {
+    const { before, after, baseY } = await cursorAfterClear(WINDOWS);
+    expect(before).toBeGreaterThan(0);
+    expect([after, baseY]).toEqual([before, 0]);
+  });
+
+  it("moves a local pane's prompt to the top elsewhere", async () => {
+    const { before, after, baseY } = await cursorAfterClear("test");
+    expect(before).toBeGreaterThan(0);
+    expect([after, baseY]).toEqual([0, 0]);
   });
 });
