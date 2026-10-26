@@ -6,7 +6,7 @@ import { render } from "vitest-browser-react";
 
 import { paneIds, paneRects } from "@/features/workspace/layout.ts";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
-import { fakeSessions } from "@/ipc/fake.ts";
+import { FAKE_SHELLS, fakeSessions } from "@/ipc/fake.ts";
 import { fakeHosts } from "@/ipc/fake-hosts.ts";
 import { fakeSnippets } from "@/ipc/fake-snippets.ts";
 import { fakeSync } from "@/ipc/fake-sync.ts";
@@ -245,6 +245,79 @@ describe("AppShell workspaces", () => {
     await broken.openWorkspace(saved!.id);
     expect(broken.workspace.getSnapshot().tabs).toHaveLength(0);
     expect(broken.hosts.getSnapshot().notice).toMatch(/not opened/u);
+  });
+});
+
+describe("AppShell choosing the local shell", () => {
+  const [pwsh, ubuntu] = FAKE_SHELLS;
+  afterEach(() => {
+    localStorage.removeItem("tauminus.defaultShell");
+    localStorage.removeItem("tauminus.workspaces");
+  });
+
+  it("lists the shells the backend finds", async () => {
+    const app = shell();
+    expect(await app.listLocalShells()).toEqual(FAKE_SHELLS);
+    expect(app.getState().localShells).toEqual(FAKE_SHELLS);
+  });
+
+  it("opens new tabs and their splits in the default shell, which it remembers", () => {
+    const app = shell();
+    app.setDefaultShell(pwsh);
+    app.workspace.newTab();
+    // A split opens what its pane opened, even once the default changes.
+    app.setDefaultShell(ubuntu);
+    app.run("pane.splitRight");
+    const panes = paneIds(app.workspace.activeTab!.root);
+    expect(panes.map((id) => app.workspace.terminal(id)!.spec)).toEqual([
+      { kind: "local", shell: pwsh },
+      { kind: "local", shell: pwsh },
+    ]);
+    expect(app.workspace.focusedSpec()).toEqual({ kind: "local", shell: pwsh });
+    app.saveWorkspace("win");
+    expect(JSON.stringify(app.workspaces.getSnapshot()[0]?.tabs)).toContain('"id":"pwsh"');
+
+    // The next window reads it back; the system default forgets it.
+    const next = shell();
+    expect(next.getState().defaultShell).toEqual(ubuntu);
+    next.setDefaultShell(undefined);
+    next.workspace.newTab();
+    expect(next.workspace.focusedSpec()).toBeUndefined();
+    expect(next.workspace.terminal(next.workspace.activeTab!.focused)!.spec).toEqual({
+      kind: "local",
+    });
+    expect(shell().getState().defaultShell).toBeUndefined();
+  });
+
+  it("opens one tab in another shell, which the backend starts", async () => {
+    const app = shell();
+    expect(app.newLocalTab(ubuntu)).toBe(true);
+    await show(app);
+    const pane = app.workspace.terminal(app.workspace.activeTab!.focused)!;
+    expect(pane.defaultTitle).toBe("Ubuntu (WSL)");
+    // The fake backend prints the name of the shell it started.
+    await expect
+      .poll(() => pane.terminal.buffer.active.getLine(0)?.translateToString(true))
+      .toBe("Ubuntu (WSL)");
+  });
+
+  it("saves a pane's shell, and opens the default where that shell is gone", async () => {
+    const app = shell();
+    app.newLocalTab(pwsh);
+    app.workspace.split("row", { kind: "local", shell: { id: "gone", name: "Old shell" } });
+    expect(app.saveWorkspace("win")).toBeUndefined();
+    const [saved] = app.workspaces.getSnapshot();
+
+    const fresh = shell();
+    await fresh.openWorkspace(saved!.id);
+    const panes = paneIds(fresh.workspace.activeTab!.root);
+    expect(panes.map((id) => fresh.workspace.terminal(id)!.spec)).toEqual([
+      { kind: "local", shell: pwsh },
+      { kind: "local" },
+    ]);
+    expect(fresh.hosts.getSnapshot().notice).toMatch(
+      /win: Old shell is not on this computer and opened the default shell/u,
+    );
   });
 });
 

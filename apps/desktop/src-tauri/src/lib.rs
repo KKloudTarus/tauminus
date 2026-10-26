@@ -56,6 +56,7 @@ use tracing_subscriber::EnvFilter;
 pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new().commands(tauri_specta::collect_commands![
         commands::session_open,
+        commands::local_shells,
         commands::session_write,
         fill::session_fill_offer,
         fill::session_fill_password,
@@ -230,10 +231,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
             .unwrap_or_else(|| config_dir.join("received"))
             .join("Tauminus"),
     ));
-    app.manage(LocalShells::new(
-        Arc::new(NativePtyLauncher),
-        Arc::clone(&sessions),
-    ));
+    manage_local_shells(app, &sessions);
     app.manage(Arc::new(ssh::PromptBroker::default()));
     app.manage(clipboard::Clipboard::default());
     app.manage(notices::Notices::default());
@@ -382,6 +380,15 @@ fn manage_sync<R: tauri::Runtime>(
     let state = sync::SyncState::new(service);
     sync::schedule(&state);
     app.manage(state);
+}
+
+/// Shells on this computer: the default one, and the others it has by id.
+fn manage_local_shells<R: tauri::Runtime>(app: &tauri::App<R>, sessions: &Arc<SessionManager>) {
+    app.manage(LocalShells::new(
+        Arc::new(NativePtyLauncher),
+        Arc::clone(sessions),
+    ));
+    app.manage(commands::ShellCatalog::default());
 }
 
 /// The session kinds that reach other machines: serial ports, Telnet,

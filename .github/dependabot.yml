@@ -32,11 +32,6 @@ updates:
     groups:
       npm-minor:
         update-types: [minor, patch]
-    # The Node types follow the Node major the project runs (engines,
-    # CI and the release use 24); bump that major by hand with them.
-    ignore:
-      - dependency-name: "@types/node"
-        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /

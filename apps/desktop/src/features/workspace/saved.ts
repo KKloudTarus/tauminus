@@ -25,7 +25,8 @@ const MAX_ID = 128;
  * storage would run whatever was written there.
  */
 export type SavedSpec =
-  | { readonly kind: "local" }
+  /** A shell is kept by the id the backend lists it under; one gone since opens the default. */
+  | { readonly kind: "local"; readonly shell?: SavedShell }
   | { readonly kind: "host"; readonly hostId: string }
   | {
       readonly kind: "ssh";
@@ -34,6 +35,11 @@ export type SavedSpec =
     }
   /** A serial port and its line settings; the backend checks them when it opens. */
   | { readonly kind: "serial"; readonly port: SerialSpec };
+
+export interface SavedShell {
+  readonly id: string;
+  readonly name: string;
+}
 
 export interface SavedWorkspace {
   readonly id: string;
@@ -173,8 +179,11 @@ function isDirection(value: unknown): value is Direction {
 
 function savedSpec(value: unknown): SavedSpec | undefined {
   if (!isObject(value)) return undefined;
-  const { kind, hostId, destination, jumps, port } = value;
-  if (kind === "local") return { kind: "local" };
+  const { kind, hostId, destination, jumps, port, shell } = value;
+  if (kind === "local") {
+    const parsed = savedShell(shell);
+    return parsed ? { kind: "local", shell: parsed } : { kind: "local" };
+  }
   if (kind === "serial") {
     const parsed = serialPort(port);
     return parsed ? { kind: "serial", port: parsed } : undefined;
@@ -191,6 +200,19 @@ function savedSpec(value: unknown): SavedSpec | undefined {
     via.push(parsed);
   }
   return to ? { kind: "ssh", destination: to, jumps: via } : undefined;
+}
+
+/**
+ * A saved shell, or undefined for one that is malformed. Only the backend
+ * turns the id into a program, and only for a shell it lists, so a
+ * crafted id opens nothing.
+ */
+export function savedShell(value: unknown): SavedShell | undefined {
+  if (!isObject(value)) return undefined;
+  const { id, name } = value;
+  if (typeof id !== "string" || typeof name !== "string") return undefined;
+  if (!id || id.length > MAX_ID || !name.trim() || name.length > MAX_NAME) return undefined;
+  return { id, name };
 }
 
 const ENCODINGS: readonly EncodingSpec[] = [

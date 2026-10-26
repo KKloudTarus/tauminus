@@ -9,6 +9,7 @@ import {
   type EndpointSpec,
   type ErrorCode,
   type GridSize,
+  type LocalShellView,
   type PromptKind,
   type PromptRequest,
   type RouteSpec,
@@ -25,6 +26,7 @@ export type {
   EndpointSpec,
   ErrorCode,
   GridSize,
+  LocalShellView,
   PromptKind,
   RouteSpec,
   SshTargetSpec,
@@ -39,7 +41,8 @@ export type {
  * for showing where it goes.
  */
 export type SessionSpec =
-  | { kind: "local" }
+  /** The platform's default shell, or one `localShells` listed. */
+  | { kind: "local"; shell?: LocalShellView }
   | { kind: "ssh"; target: SshTargetSpec }
   | { kind: "host"; hostId: string; label: string; target: SshTargetSpec }
   /** A saved Telnet host: clear text, no host key, no prompts. */
@@ -160,6 +163,8 @@ export interface TerminalSession {
 /** Opens terminal sessions. Components depend on this, never on Tauri. */
 export interface SessionClient {
   open(spec: SessionSpec, size: GridSize, events: SessionEvents): Promise<TerminalSession>;
+  /** The shells a local tab can open besides the default; none off Windows. */
+  localShells?(): Promise<LocalShellView[]>;
 }
 
 type CommandResult<T> = Promise<
@@ -194,7 +199,7 @@ export const tauriSessions: SessionClient = {
     } else if (spec.kind === "tmux") {
       opening = openTmux(spec.hostId, size, output, exit, prompts(), events.tmux);
     } else if (spec.kind === "local") {
-      opening = commands.sessionOpen(size, output, exit);
+      opening = commands.sessionOpen(size, spec.shell?.id ?? null, output, exit);
     } else if (spec.kind === "telnet") {
       opening = commands.telnetConnect(spec.hostId, size, output, exit);
     } else if (spec.kind === "serial") {
@@ -220,6 +225,7 @@ export const tauriSessions: SessionClient = {
       fillPassword: (seen) => done(commands.sessionFillPassword(id, seen)),
     };
   },
+  localShells: () => unwrap(commands.localShells()),
 };
 
 /**

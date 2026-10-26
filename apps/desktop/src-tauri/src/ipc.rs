@@ -40,6 +40,13 @@ pub(crate) struct SessionExit {
     pub(crate) lost: bool,
 }
 
+/// A shell a local tab can open besides the default, by `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub(crate) struct LocalShellView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
 /// Session id as the webview sees it. A `u32` keeps it a plain JavaScript
 /// number; `u64` would need `bigint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
