@@ -195,7 +195,7 @@ Goal: Termius Pro sync without a Termius account.
   - [x] The release signs and notarizes the macOS bundle when the `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, `APPLE_API_ISSUER`, `APPLE_API_KEY` and `APPLE_API_KEY_P8` secrets exist, and builds unsigned otherwise
   - [ ] A Developer ID account, the secrets set, and a signed `.dmg` that opens on a Mac with no Gatekeeper warning
 - [ ] Native keys bound to the Secure Enclave (signed builds, data protection keychain) and to Windows Hello (NCrypt, Passport provider), each after a spike on real hardware (moved from v0.4: ADR 0028)
-- [ ] Auto-update with `tauri-plugin-updater`, signing key in CI secrets
+- [x] Auto-update with `tauri-plugin-updater`, signing key in CI secrets: signed bundles and `latest.json` from release builds, a look at start once a day that the user can turn off, install only when asked, checked live against a local server with a good and a bad signature (ADR 0033)
 
 ### Exit criteria
 
