@@ -13,6 +13,7 @@ import type { TriggersClient } from "./triggers.ts";
 import type { HistoryClient } from "./history.ts";
 import type { SyncClient } from "./sync.ts";
 import type { VaultClient } from "./vault.ts";
+import type { UpdatesClient } from "./updates.ts";
 import type { HostsClient } from "./hosts.ts";
 import type { LinkOpener } from "./links.ts";
 import type { ZmodemClient } from "./zmodem.ts";
@@ -49,6 +50,7 @@ export {
   tauriAi,
 } from "./ai.ts";
 export { type TextClipboard, tauriClipboard } from "./clipboard.ts";
+export type { UpdatesClient, UpdateView } from "./updates.ts";
 export {
   type ChangeSpec,
   type DroppedFiles,
@@ -186,6 +188,14 @@ export async function linkOpener(): Promise<LinkOpener> {
     return (await import("./fake-links.ts")).fakeLinks;
   }
   return (await import("./links.ts")).tauriLinks;
+}
+
+/** New versions; the `e2e` build offers one only when a test asks. */
+export async function updatesClient(storage: Storage | undefined): Promise<UpdatesClient> {
+  if (import.meta.env.MODE === "e2e") {
+    return (await import("./fake-updates.ts")).fakeUpdates(storage);
+  }
+  return (await import("./updates.ts")).tauriUpdates;
 }
 
 /** The clipboard; the `e2e` build, in a plain browser, uses the browser's. */

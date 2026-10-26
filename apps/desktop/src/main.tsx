@@ -22,6 +22,7 @@ import {
   syncClient,
   triggersClient,
   textClipboard,
+  updatesClient,
   vaultClient,
 } from "@/ipc/index.ts";
 import "@/app/styles.css";
@@ -69,12 +70,14 @@ const shell = new AppShell({
   // End-to-end tests read the screen from the DOM renderer; a benchmark
   // build may pin one to compare them.
   renderer: import.meta.env.MODE === "e2e" ? "dom" : rendererOverride(),
+  updates: await updatesClient(safeLocalStorage()),
 });
 shell.workspace.newTab();
 void shell.hosts.load();
 void shell.snippets?.load();
 void shell.sync?.listen().catch((error: unknown) => console.warn("sync listen failed", error));
 void shell.triggers?.load();
+void shell.updates?.startup();
 // Only a benchmark build has this flag; other builds drop the import.
 if (import.meta.env.VITE_TAUMINUS_BENCH === "1") {
   void import("@/bench/run.ts").then(({ runBenchmark }) => runBenchmark(shell));

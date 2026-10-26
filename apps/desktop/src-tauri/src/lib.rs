@@ -28,6 +28,7 @@ mod sync;
 mod telnet;
 mod tmux;
 mod triggers;
+mod update;
 mod vault;
 mod zmodem;
 
@@ -119,6 +120,8 @@ pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
         import::hosts_import_from::<tauri::Wry>,
         cloud::cloud_preview,
         cloud::cloud_import,
+        update::update_check::<tauri::Wry>,
+        update::update_install::<tauri::Wry>,
         ssh::host_connect::<tauri::Wry>,
         forwards::forward_start,
         forwards::forward_stop,
@@ -460,6 +463,8 @@ pub fn run() -> anyhow::Result<()> {
         // permissions.
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(update::Updates::default())
         .invoke_handler(builder.invoke_handler())
         .setup(|app| {
             let paths = Paths {

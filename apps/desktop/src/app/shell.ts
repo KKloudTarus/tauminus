@@ -22,6 +22,7 @@ import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore, messageOf } from "@/features/hosts/hosts-store.ts";
 import { VaultStore } from "@/features/vault/vault-store.ts";
 import { SyncStore } from "@/features/sync/sync-store.ts";
+import { UpdatesStore } from "@/features/updates/updates-store.ts";
 import { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { FilesStore } from "@/features/files/files-store.ts";
 import { SnippetsStore } from "@/features/snippets/snippets-store.ts";
@@ -52,6 +53,7 @@ import type {
   TmuxEvents,
   TopologyView,
   TriggersClient,
+  UpdatesClient,
   FiredView,
   TextClipboard,
   VaultClient,
@@ -120,6 +122,8 @@ export const ACTION_LABELS: Record<Action, string> = {
   "terminal.complete": "Complete the command being typed",
   "tmux.newWindow": "New tmux window",
   "tmux.detach": "Detach from tmux, leaving its windows running",
+  "updates.check": "Check for updates",
+  "updates.auto": "Check for updates at start: turn on or off",
 };
 
 export interface AssistantOpen {
@@ -192,6 +196,7 @@ export class AppShell {
   readonly triggers: TriggersStore | undefined;
   /** Lines capture rules kept. */
   readonly captures = new CapturesStore();
+  readonly updates: UpdatesStore | undefined;
   readonly #sends = new SendLimiter();
   readonly #notices = new SendLimiter(5000, Number.POSITIVE_INFINITY, false);
   /** As the backend limits system notifications, so most calls are not made. */
@@ -256,6 +261,8 @@ export class AppShell {
     tmux?: TmuxClient;
     zmodem?: ZmodemClient;
     renderer?: RendererPreference;
+    /** New versions; none never looks. */
+    updates?: UpdatesClient;
   }) {
     this.platform = detectPlatform(options.userAgent);
     this.#storage = options.storage;
@@ -297,6 +304,7 @@ export class AppShell {
       hostsSeen = view;
       this.#refreshHighlights();
     });
+    this.updates = options.updates ? new UpdatesStore(options.updates, options.storage) : undefined;
     this.workspaces = new SavedWorkspaces(options.storage);
     this.serial = options.serial;
     this.recordings = options.recordings;
@@ -1388,6 +1396,21 @@ export class AppShell {
       case "ai.settings":
         this.openAssistant("settings");
         return;
+      case "updates.check":
+        void this.updates?.check();
+        return;
+      case "updates.auto": {
+        const updates = this.updates;
+        if (!updates) return;
+        const auto = !updates.getSnapshot().auto;
+        updates.setAuto(auto);
+        this.hosts.notify(
+          auto
+            ? "Tauminus looks for a new version when it starts, once a day."
+            : "Tauminus no longer looks for a new version when it starts.",
+        );
+        return;
+      }
       case "terminal.complete":
         void this.#activeController()?.complete();
         return;

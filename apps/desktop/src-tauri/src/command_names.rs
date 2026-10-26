@@ -72,6 +72,8 @@ const COMMANDS: &[&str] = &[
     "hosts_import_from",
     "cloud_preview",
     "cloud_import",
+    "update_check",
+    "update_install",
     "host_connect",
     "forward_start",
     "forward_stop",

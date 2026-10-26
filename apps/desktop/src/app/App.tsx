@@ -22,6 +22,7 @@ import { VaultDialog } from "@/features/vault/VaultDialog.tsx";
 import { SyncDialog } from "@/features/sync/SyncDialog.tsx";
 import { PaneTree } from "@/features/workspace/PaneTree.tsx";
 import { TabBar } from "@/features/workspace/TabBar.tsx";
+import { UpdateBanner } from "@/features/updates/UpdateBanner.tsx";
 
 import { CommandPalette } from "./CommandPalette.tsx";
 import { Icon } from "./icons.tsx";
@@ -232,6 +233,7 @@ export function App({ shell }: { shell: AppShell }) {
             </>
           }
         />
+        {shell.updates && <UpdateBanner store={shell.updates} />}
       </div>
       <div className="relative flex min-h-0 flex-1">
         {sidebarOpen && !narrow && (
