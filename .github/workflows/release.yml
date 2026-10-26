@@ -4,7 +4,9 @@
 # Builds the desktop app for Linux, macOS and Windows. A pushed `v*` tag
 # makes a draft release with every bundle attached; a manual run only builds
 # and keeps the bundles as workflow artifacts, to try a change before a tag.
-# Builds are not signed yet; README.md says how to open them.
+# macOS bundles are signed with a Developer ID and notarized when the
+# APPLE_* secrets exist, and built unsigned otherwise; README.md says how
+# to open an unsigned build.
 
 name: Release
 
@@ -40,6 +42,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write # creates the draft release and uploads the bundles to it
+    env:
+      # Whether to sign: tauri reads an APPLE_* variable that is set but
+      # empty as one to use, so the signing step runs only with them all.
+      SIGN_MACOS: ${{ matrix.name == 'macos' && secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_API_KEY_P8 != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,7 +92,47 @@ jobs:
         working-directory: apps/desktop
         run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+      # Notarization reads the App Store Connect key from a file; the
+      # runner is thrown away after the job.
+      - name: Write the App Store Connect key
+        if: env.SIGN_MACOS == 'true'
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          umask 077
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/apple-api-key.p8"
+
+      - name: Build, signed and notarized
+        if: env.SIGN_MACOS == 'true'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/apple-api-key.p8
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+          # Empty on a manual run, which then only builds.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: Tauminus __VERSION__
+          releaseBody: |
+            Windows and Linux builds are unsigned, and so is the macOS one
+            until the project signs it. See "Installing an unsigned build"
+            in the README before opening an unsigned one.
+          releaseDraft: true
+          prerelease: true
+          uploadWorkflowArtifacts: true
+          retryAttempts: 1
+
+      - name: Build, unsigned
+        if: env.SIGN_MACOS != 'true'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -97,8 +143,9 @@ jobs:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: Tauminus __VERSION__
           releaseBody: |
-            Unsigned builds. See "Installing an unsigned build" in the README
-            before opening them on macOS or Windows.
+            Windows and Linux builds are unsigned, and so is the macOS one
+            until the project signs it. See "Installing an unsigned build"
+            in the README before opening an unsigned one.
           releaseDraft: true
           prerelease: true
           uploadWorkflowArtifacts: true
