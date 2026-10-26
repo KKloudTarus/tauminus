@@ -284,37 +284,27 @@ describe("AppShell sync", () => {
 const WINDOWS =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
 
-/** The cursor row of a local pane after 30 lines of output and Clear scrollback. */
-async function cursorAfterClear(userAgent: string) {
+/**
+ * How Clear scrollback reaches a local pane's xterm.js: the erase it writes,
+ * and whether it cleared the screen. What each does to the cursor is the
+ * controller's to test, with a pane of a known size.
+ */
+function clearOf(userAgent: string) {
   const app = shell(fakeHosts(), userAgent);
   app.workspace.newTab();
-  await show(app);
-  const pane = app.workspace.terminal(app.workspace.activeTab!.focused)!;
-  await vi.waitFor(() => expect(pane.getStatus().kind).toBe("running"));
-  // Without the app's styles the pane has no height of its own.
-  pane.terminal.resize(80, 24);
-  await new Promise<void>((resolve) => {
-    pane.terminal.write(`${"output\r\n".repeat(30)}prompt>`, resolve);
-  });
-  const before = pane.terminal.buffer.active.cursorY;
+  const { terminal } = app.workspace.terminal(app.workspace.activeTab!.focused)!;
+  const write = vi.spyOn(terminal, "write");
+  const clear = vi.spyOn(terminal, "clear");
   app.run("terminal.clear");
-  await new Promise<void>((resolve) => {
-    pane.terminal.write("", resolve);
-  });
-  const buffer = pane.terminal.buffer.active;
-  return { before, after: buffer.cursorY, baseY: buffer.baseY };
+  return { written: write.mock.calls.map(([data]) => data), cleared: clear.mock.calls.length };
 }
 
 describe("AppShell clearing the scrollback", () => {
-  it("leaves a local pane's cursor row alone on Windows, where ConPTY places output", async () => {
-    const { before, after, baseY } = await cursorAfterClear(WINDOWS);
-    expect(before).toBeGreaterThan(0);
-    expect([after, baseY]).toEqual([before, 0]);
+  it("drops only the scrollback of a local pane on Windows, where ConPTY places output", () => {
+    expect(clearOf(WINDOWS)).toEqual({ written: ["\x1b[3J"], cleared: 0 });
   });
 
-  it("moves a local pane's prompt to the top elsewhere", async () => {
-    const { before, after, baseY } = await cursorAfterClear("test");
-    expect(before).toBeGreaterThan(0);
-    expect([after, baseY]).toEqual([0, 0]);
+  it("clears a local pane's screen elsewhere", () => {
+    expect(clearOf("test")).toEqual({ written: [], cleared: 1 });
   });
 });
