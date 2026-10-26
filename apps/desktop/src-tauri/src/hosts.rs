@@ -1016,7 +1016,7 @@ pub(crate) fn import_result(report: ImportReport, inventory: &Inventory) -> Impo
 
 /// Characters that reorder the text around them, so a name could show
 /// as another.
-fn is_bidi_control(c: char) -> bool {
+pub(crate) fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 

@@ -60,5 +60,14 @@
         }
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3OUNBNkM5QjRGNzRDOTQKUldTVVRQZTB5YWFjRjZEVmVZaWQ5NjloWHlLSXdoSER3dCtEMHBwcEJ1WWxyaVRGS0t4NWsrN3QK",
+      "endpoints": [
+        "https://github.com/KKloudTarus/tauminus/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
   }
 }

@@ -259,6 +259,22 @@ export const commands = {
 	cloudPreview: (ask: CloudAsk) => typedError<CloudPreview, CommandError>(__TAURI_INVOKE("cloud_preview", { ask })),
 	/**  Imports the listing preview `token` showed. */
 	cloudImport: (token: number) => typedError<CloudResult, CommandError>(__TAURI_INVOKE("cloud_import", { token })),
+	/**
+	 *  Asks the release for a newer version. `None` when this one is the
+	 *  newest.
+	 */
+	updateCheck: () => typedError<{
+	version: string,
+	current: string,
+	date: string | null,
+	notes: string,
+} | null, CommandError>(__TAURI_INVOKE("update_check")),
+	/**
+	 *  Downloads the update last found, checks its signature, installs it,
+	 *  and starts the new version. Windows' installer ends this process
+	 *  itself.
+	 */
+	updateInstall: (onProgress: Channel<number>) => typedError<null, CommandError>(__TAURI_INVOKE("update_install", { onProgress })),
 	/**  Connects to a saved host, with its settings and its groups' applied. */
 	hostConnect: (id: string, size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>, onPrompt: Channel<PromptRequest>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("host_connect", { id, size, onOutput, onExit, onPrompt })),
 	/**
@@ -1298,6 +1314,14 @@ export type TriggerSetView = {
 export type TriggerView = {
 	name: string,
 	action: ActionSpec,
+};
+
+/**  A newer version, as the user sees it. */
+export type UpdateView = {
+	version: string,
+	current: string,
+	date: string | null,
+	notes: string,
 };
 
 export type VariableView = {

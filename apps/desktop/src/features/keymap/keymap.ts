@@ -64,7 +64,9 @@ export type Action =
   | "ai.settings"
   | "terminal.complete"
   | "tmux.newWindow"
-  | "tmux.detach";
+  | "tmux.detach"
+  | "updates.check"
+  | "updates.auto";
 
 export const ACTIONS: readonly Action[] = [
   "palette.open",
@@ -116,6 +118,8 @@ export const ACTIONS: readonly Action[] = [
   "terminal.complete",
   "tmux.newWindow",
   "tmux.detach",
+  "updates.check",
+  "updates.auto",
 ];
 
 export type Platform = "mac" | "other";
@@ -174,6 +178,8 @@ const OTHER: Bindings = {
   "terminal.complete": ["ctrl+shift+space"],
   "tmux.newWindow": [],
   "tmux.detach": [],
+  "updates.check": [],
+  "updates.auto": [],
 };
 
 const MAC: Bindings = {
@@ -228,6 +234,8 @@ const MAC: Bindings = {
   "terminal.complete": ["ctrl+shift+space"],
   "tmux.newWindow": [],
   "tmux.detach": [],
+  "updates.check": [],
+  "updates.auto": [],
 };
 
 export function defaultBindings(platform: Platform): Bindings {

@@ -23,6 +23,8 @@ tauri-build.workspace = true
 anyhow.workspace = true
 open.workspace = true
 serde.workspace = true
+# tauri::generate_context! reads plugin configuration with it.
+serde_json.workspace = true
 # Already in the tree through tauminus-ssh; hashes a file being edited.
 sha2 = "0.11"
 specta.workspace = true
@@ -44,6 +46,7 @@ tauri = { workspace = true, features = ["specta"] }
 tauri-specta.workspace = true
 tauri-plugin-dialog.workspace = true
 tauri-plugin-notification.workspace = true
+tauri-plugin-updater.workspace = true
 tokio = { workspace = true, features = ["fs", "process", "rt-multi-thread", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -68,7 +71,6 @@ arboard = { workspace = true, features = ["wayland-data-control"] }
 arboard.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 # The mock runtime, to call commands with the state the app really manages.
 tauri = { workspace = true, features = ["specta", "test"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util", "time"] }
