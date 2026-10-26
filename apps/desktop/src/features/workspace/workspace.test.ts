@@ -136,6 +136,35 @@ describe("Workspace specs", () => {
   });
 });
 
+describe("Workspace fallback spec", () => {
+  it("opens and records the fallback for a pane asked for nothing", () => {
+    let fallback: string | undefined = "local:pwsh";
+    const opened: (string | undefined)[] = [];
+    const workspace = new Workspace<FakeTerminal, string>(
+      (_id, spec) => {
+        opened.push(spec);
+        return new FakeTerminal();
+      },
+      () => fallback,
+    );
+    workspace.newTab();
+    // A split opens what its pane opened, not what the fallback says now.
+    fallback = "local:bash";
+    workspace.split("row");
+    workspace.newTab("ssh:db");
+    fallback = undefined;
+    workspace.newTab();
+    expect(opened).toEqual(["local:pwsh", "local:pwsh", "ssh:db", undefined]);
+    expect(workspace.templates()[0]).toMatchObject({
+      kind: "split",
+      children: [
+        { kind: "pane", spec: "local:pwsh" },
+        { kind: "pane", spec: "local:pwsh" },
+      ],
+    });
+  });
+});
+
 describe("Workspace panes", () => {
   it("splits the focused pane and focuses the new one", () => {
     const { workspace } = setup();

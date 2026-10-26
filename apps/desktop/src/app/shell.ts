@@ -16,7 +16,7 @@ import type { ZmodemClient } from "@/ipc/zmodem.ts";
 import { formatEndpoint } from "@/features/ssh/destination.ts";
 import type { RendererPreference } from "@/features/terminal/renderer.ts";
 import { Broadcast, typedByUser } from "@/features/workspace/broadcast.ts";
-import { type SavedSpec, SavedWorkspaces } from "@/features/workspace/saved.ts";
+import { type SavedSpec, SavedWorkspaces, savedShell } from "@/features/workspace/saved.ts";
 import { type PaneId, type Template, paneIds } from "@/features/workspace/layout.ts";
 import { Workspace } from "@/features/workspace/workspace.ts";
 import { HostsStore, messageOf } from "@/features/hosts/hosts-store.ts";
@@ -40,6 +40,7 @@ import type {
   HostView,
   HostsClient,
   LinkOpener,
+  LocalShellView,
   SessionClient,
   SessionSpec,
   RecordingsClient,
@@ -71,6 +72,7 @@ const NOTICE_CHARS = 160;
 // oxlint-disable-next-line no-control-regex -- these keys are controls
 const ENDS_SECRET = /[\r\n\u0003\u0004]/u;
 const SIDEBAR_STORAGE_KEY = "tauminus.sidebar";
+const SHELL_STORAGE_KEY = "tauminus.defaultShell";
 
 export const ACTION_LABELS: Record<Action, string> = {
   "palette.open": "Show all commands",
@@ -162,6 +164,10 @@ interface ShellState {
   files: { host: HostView; store: FilesStore } | undefined;
   sidebarOpen: boolean;
   theme: ThemePreference;
+  /** The shells a local tab can open besides the platform default, as last listed. */
+  localShells: readonly LocalShellView[];
+  /** The shell new local tabs open; undefined is the platform default. */
+  defaultShell: LocalShellView | undefined;
 }
 
 /** The palette's import commands, and the source each reads. */
@@ -214,6 +220,9 @@ export class AppShell {
   /** Files hosts send with `sz`, for every pane. */
   readonly zmodem: ZmodemHub | undefined;
   readonly #tmuxClient: TmuxClient | undefined;
+  readonly #sessions: SessionClient;
+  /** The listing of local shells in flight, if any. */
+  #listingShells: Promise<readonly LocalShellView[]> | undefined;
   /** tmux sessions shown as tabs: each control client's host, and the pane showing each window. */
   readonly #tmux = new Map<
     number,
@@ -311,6 +320,7 @@ export class AppShell {
     this.ai = options.ai;
     this.zmodem = options.zmodem ? new ZmodemHub(options.zmodem) : undefined;
     this.#tmuxClient = options.tmux;
+    this.#sessions = options.sessions;
     this.#state = {
       paletteOpen: false,
       connectOpen: false,
@@ -329,6 +339,8 @@ export class AppShell {
       snippetHosts: undefined,
       files: undefined,
       sidebarOpen: readFlag(options.storage, SIDEBAR_STORAGE_KEY, true),
+      localShells: [],
+      defaultShell: readDefaultShell(options.storage),
       theme: loadTheme(options.storage),
     };
     applyTheme(options.root, this.#state.theme);
@@ -347,6 +359,11 @@ export class AppShell {
       this.#stopScheme = () => scheme.removeEventListener("change", onScheme);
     }
 
+    // A tab opened with nothing in mind is a local one, in the chosen shell.
+    const chosenShell = (): SessionSpec | undefined => {
+      const shell = this.#state.defaultShell;
+      return shell ? { kind: "local", shell } : undefined;
+    };
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
       // Set once the controller exists: triggers fire only after output.
@@ -397,7 +414,7 @@ export class AppShell {
       // would go to the device's login prompt.
       if (spec?.kind === "host" || spec?.kind === "mosh") this.#startupOn(controller, spec.hostId);
       return controller;
-    });
+    }, chosenShell);
     // Panes of the shown tab are watched; the others collect activity.
     // O(P) per change, P ≤ 64.
     this.workspace.subscribe(() => {
@@ -1187,6 +1204,9 @@ export class AppShell {
       const hostId = savedHostId(spec);
       if (hostId) return { kind: "host", hostId };
       if (spec?.kind === "serial") return { kind: "serial", port: spec.port };
+      if (spec?.kind === "local" && spec.shell) {
+        return { kind: "local", shell: { id: spec.shell.id, name: spec.shell.name } };
+      }
       if (spec?.kind === "ssh") {
         if (spec.target.route.kind === "direct") {
           return {
@@ -1230,9 +1250,21 @@ export class AppShell {
       return;
     }
     const hosts = this.hosts.getSnapshot().view.hosts;
+    // A saved shell opens only if it is still on this computer.
+    const shells = workspace.tabs.some((tab) => namesShell(tab))
+      ? await this.listLocalShells()
+      : [];
     const missing = new Set<string>();
+    const gone = new Set<string>();
     const open = (spec: SavedSpec): SessionSpec => {
       if (spec.kind === "serial") return { kind: "serial", port: spec.port };
+      if (spec.kind === "local" && spec.shell) {
+        const wanted = spec.shell.id;
+        const shell = shells.find((s) => s.id === wanted);
+        if (shell) return { kind: "local", shell };
+        gone.add(spec.shell.name);
+        return { kind: "local" };
+      }
       if (spec.kind === "ssh") {
         return {
           kind: "ssh",
@@ -1258,6 +1290,9 @@ export class AppShell {
     this.setWorkspacesOpen(false);
     const notes = [
       ...(missing.size > 0 ? [`${[...missing].join(", ")} opened as a local shell`] : []),
+      ...(gone.size > 0
+        ? [`${[...gone].join(", ")} is not on this computer and opened the default shell`]
+        : []),
       ...(opened < workspace.tabs.length
         ? [`${workspace.tabs.length - opened} tabs did not fit under the pane limit`]
         : []),
@@ -1320,6 +1355,47 @@ export class AppShell {
     if (this.#state.sidebarOpen === open) return;
     if (persist) writeFlag(this.#storage, SIDEBAR_STORAGE_KEY, open);
     this.#set({ ...this.#state, sidebarOpen: open });
+  }
+
+  /**
+   * Lists the shells a local tab can open again, so one installed since
+   * shows up. Resolves to the list; empty when this window has no backend
+   * for it or the listing failed.
+   */
+  listLocalShells(): Promise<readonly LocalShellView[]> {
+    if (this.#listingShells) return this.#listingShells;
+    const listing = this.#sessions.localShells?.();
+    if (!listing) return Promise.resolve([]);
+    this.#listingShells = listing
+      .catch((error: unknown) => {
+        console.warn("could not list local shells", error);
+        return this.#state.localShells;
+      })
+      .then((shells) => {
+        this.#listingShells = undefined;
+        this.#set({ ...this.#state, localShells: shells });
+        return shells;
+      });
+    return this.#listingShells;
+  }
+
+  /** Opens a local tab in `shell`, or in the default one. Returns false at the pane limit. */
+  newLocalTab(shell?: LocalShellView): boolean {
+    const opened = this.workspace.newTab(shell ? { kind: "local", shell } : undefined);
+    if (opened) this.#focusActivePane();
+    return opened;
+  }
+
+  /** Makes `shell` the one new local tabs open; undefined goes back to the platform's. */
+  setDefaultShell(shell: LocalShellView | undefined): void {
+    const chosen = shell ? { id: shell.id, name: shell.name } : undefined;
+    try {
+      if (chosen) this.#storage?.setItem(SHELL_STORAGE_KEY, JSON.stringify(chosen));
+      else this.#storage?.removeItem(SHELL_STORAGE_KEY);
+    } catch {
+      // Remembering it is a convenience; private mode may refuse it.
+    }
+    this.#set({ ...this.#state, defaultShell: chosen });
   }
 
   /** Opens an SSH session in a new tab. Returns false at the pane limit. */
@@ -1638,6 +1714,13 @@ function mapTemplate<A, B>(template: Template<A>, map: (spec: A) => B): Template
     : { ...template, children: template.children.map((child) => mapTemplate(child, map)) };
 }
 
+/** Whether a pane of `template` opens a chosen local shell. */
+function namesShell(template: Template<SavedSpec>): boolean {
+  return template.kind === "pane"
+    ? template.spec.kind === "local" && template.spec.shell !== undefined
+    : template.children.some(namesShell);
+}
+
 /** A promise and what settles it. */
 function deferred<T>(): { promise: Promise<T>; done: (value: T) => void } {
   let done: ((value: T) => void) | undefined;
@@ -1657,6 +1740,14 @@ function readOverrides(storage: Storage | undefined): unknown {
   } catch (error) {
     console.warn("ignoring unreadable key bindings", error);
     return {};
+  }
+}
+
+function readDefaultShell(storage: Storage | undefined): LocalShellView | undefined {
+  try {
+    return savedShell(JSON.parse(storage?.getItem(SHELL_STORAGE_KEY) ?? "null"));
+  } catch {
+    return undefined;
   }
 }
 

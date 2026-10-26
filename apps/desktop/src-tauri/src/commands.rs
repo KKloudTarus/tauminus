@@ -4,37 +4,100 @@
 //! IPC commands. Each one decodes its arguments, calls one use case, and maps
 //! the result. No session logic lives here.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use tauminus_app::{LocalShells, SessionManager};
 use tauminus_domain::{LocalShell, TerminalSize};
+use tauminus_pty::KnownShell;
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::ipc::{
-    ChannelSink, CommandError, ErrorCode, GridSize, OutputChunk, SessionExit, SessionHandle,
+    ChannelSink, CommandError, ErrorCode, GridSize, LocalShellView, OutputChunk, SessionExit,
+    SessionHandle,
 };
 
-/// Opens a local shell. Output arrives on `on_output`, and `on_exit` fires once
+/// The shells a local tab can open by id, as last found. The webview names a
+/// shell by id only: what runs comes from this list, never from the webview.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ShellCatalog(Arc<Mutex<Option<Vec<KnownShell>>>>);
+
+impl ShellCatalog {
+    /// Looks for the shells again. Blocks; see [`tauminus_pty::known_shells`].
+    fn refresh(&self) -> Vec<KnownShell> {
+        let found = tauminus_pty::known_shells();
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(found.clone());
+        found
+    }
+
+    /// The shell listed under `id`, looking once if nothing was listed yet.
+    fn find(&self, id: &str) -> Option<LocalShell> {
+        let listed = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        listed
+            .unwrap_or_else(|| self.refresh())
+            .into_iter()
+            .find(|known| known.id == id)
+            .map(|known| known.shell)
+    }
+}
+
+/// The shells this computer has besides the default, found again on each
+/// call so one installed since shows up. Empty off Windows.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn local_shells(
+    catalog: State<'_, ShellCatalog>,
+) -> Result<Vec<LocalShellView>, CommandError> {
+    let catalog = catalog.inner().clone();
+    let found = tauri::async_runtime::spawn_blocking(move || catalog.refresh())
+        .await
+        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
+    Ok(found
+        .into_iter()
+        .map(|known| LocalShellView {
+            id: known.id,
+            name: known.name,
+        })
+        .collect())
+}
+
+/// Opens a local shell: the platform default, or the one `local_shells`
+/// listed as `shell`. Output arrives on `on_output`, and `on_exit` fires once
 /// when the shell ends.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn session_open(
     shells: State<'_, LocalShells>,
+    catalog: State<'_, ShellCatalog>,
     size: GridSize,
+    shell: Option<String>,
     on_output: Channel<OutputChunk>,
     on_exit: Channel<SessionExit>,
 ) -> Result<SessionHandle, CommandError> {
     let size = TerminalSize::try_from(size)?;
     let shells = shells.inner().clone();
+    let catalog = catalog.inner().clone();
     let sink = ChannelSink {
         output: on_output,
         exit: on_exit,
     };
-    // Spawning a process blocks for a fork and exec; keep it off the async
-    // worker threads.
+    // Finding a shell and spawning it block: keep them off the async worker
+    // threads.
     let id = tauri::async_runtime::spawn_blocking(move || {
-        shells.open(&LocalShell::default(), size, sink)
+        let program = match shell {
+            None => LocalShell::default(),
+            Some(id) => catalog.find(&id).ok_or_else(|| {
+                CommandError::new(
+                    ErrorCode::NotFound,
+                    format!("{id} is not a shell on this computer"),
+                )
+            })?,
+        };
+        Ok::<_, CommandError>(shells.open(&program, size, sink)?)
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))??;

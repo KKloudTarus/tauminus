@@ -1293,6 +1293,8 @@ export class TerminalController {
         return formatEndpoint(this.spec.target.destination);
       case "serial":
         return describePort(this.spec.port);
+      case "local":
+        return this.spec.shell?.name ?? "Terminal";
       default:
         return "Terminal";
     }
