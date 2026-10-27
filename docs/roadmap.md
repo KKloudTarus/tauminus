@@ -201,7 +201,7 @@ Goal: Termius Pro sync without a Termius account.
 
 - [x] Two devices edit the same host offline, then sync without data loss: both fields kept, or for one field both values shown as a clash (tests: `two_devices_edit_one_host_offline_and_sync_without_losing_either`, `the_device_whose_value_lost_is_told_on_its_next_sync`)
 - [x] Sync target holds only ciphertext (tests: `the_target_holds_only_ciphertext` on a folder, and every object of a git remote through `git cat-file --batch-all-objects`)
-- [ ] Update signature check rejects a tampered package (test)
+- [x] Update signature check rejects a tampered package (test: `a_bundle_installs_only_as_it_was_signed_for_its_version`, through the plugin's check and download with the settings in `tauri.conf.json`: a changed byte, a bundle signed for another version, a signature naming no version, and another key are each refused)
 
 ## v0.6: Tauminus Hub
 
