@@ -112,8 +112,8 @@ POSIX `sh` (Windows OpenSSH) reports the failure.
 
 ## Consequences
 
-- One vault per machine. Team vaults (v0.5) will add a slot type that wraps
-  the data key for each member.
+- One vault per machine. Team vaults (v0.6, ADR 0034) seal their own
+  keys to each member's devices.
 - A user who forgets the master password and has no keychain slot loses the
   vault. The setup dialog says so.
 - The keychain slot is as strong as the user's OS login. The settings say so
