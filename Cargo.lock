@@ -5707,12 +5707,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauminus-cli"
+version = "0.0.0"
+dependencies = [
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "tauminus-cloud"
 version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
  "tauminus-app",
+ "tauminus-cli",
  "tauminus-domain",
  "tokio",
  "tracing",

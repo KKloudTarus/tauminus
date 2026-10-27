@@ -18,38 +18,7 @@ const MAX_TAGS: usize = 64;
 /// fillers, tag characters) out, so a name cannot pass for another; cut
 /// to a label's length, as ADR 0029 keeps names from files.
 pub(crate) fn clean(text: &str) -> String {
-    text.chars()
-        .filter(|&c| !c.is_control() && !unseen(c))
-        .take(MAX_NAME)
-        .collect::<String>()
-        .trim()
-        .to_owned()
-}
-
-/// Bidi controls, and characters that draw nothing or a blank: Unicode's
-/// format characters (Cf) and the fillers that render as space.
-fn unseen(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{115F}'..='\u{1160}'
-            | '\u{17B4}'..='\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{2028}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{2800}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF9}'..='\u{FFFB}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-    )
+    tauminus_cli::shown(text, MAX_NAME)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {

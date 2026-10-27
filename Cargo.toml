@@ -19,6 +19,7 @@ publish = false
 tauminus-ai = { path = "crates/tauminus-ai" }
 tauminus-app = { path = "crates/tauminus-app" }
 tauminus-charset = { path = "crates/tauminus-charset" }
+tauminus-cli = { path = "crates/tauminus-cli" }
 tauminus-cloud = { path = "crates/tauminus-cloud" }
 tauminus-fido = { path = "crates/tauminus-fido" }
 tauminus-import = { path = "crates/tauminus-import" }
