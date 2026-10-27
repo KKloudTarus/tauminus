@@ -503,7 +503,9 @@ impl From<SshOpenError> for CommandError {
                     ConnectError::HostKeyRejected { .. } | ConnectError::Cancelled => {
                         ErrorCode::Cancelled
                     }
-                    ConnectError::AuthFailed { .. } => ErrorCode::AuthFailed,
+                    ConnectError::AuthFailed { .. } | ConnectError::Secret(_) => {
+                        ErrorCode::AuthFailed
+                    }
                     ConnectError::Resolve { .. }
                     | ConnectError::Refused { .. }
                     | ConnectError::Timeout { .. }

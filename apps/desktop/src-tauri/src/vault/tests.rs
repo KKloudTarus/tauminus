@@ -61,6 +61,7 @@ fn an_edit_never_shows_its_secrets_in_debug() {
         passphrase: Some("swordfish".into()),
         generate: None,
         sync: None,
+        references: None,
     };
     let shown = format!("{edit:?}");
     assert!(

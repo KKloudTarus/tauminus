@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use tauminus_app::ports::{S3Target, Secret, SyncTarget};
 use tauminus_app::vault::{
     AiKey, HistoryKeys, Identity, KeychainState, OpenVault as OpenPort, PreviousHistoryKeys,
-    RecordingKeys, SyncSetup, VaultBackend, VaultError,
+    RecordingKeys, SecretRefs, SyncSetup, VaultBackend, VaultError,
 };
+use tauminus_domain::SecretRef;
 use zeroize::Zeroizing;
 
 use crate::history::HistoryKeyPair;
@@ -49,6 +50,103 @@ struct IdentityRecord {
     /// This device shares it through sync.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     sync: bool,
+    /// Secrets a password manager holds (ADR 0035).
+    #[serde(default, skip_serializing_if = "RefsRecord::is_empty")]
+    references: RefsRecord,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefsRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<RefRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    private_key: Option<RefRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    passphrase: Option<RefRecord>,
+}
+
+impl RefsRecord {
+    fn is_empty(&self) -> bool {
+        self.password.is_none() && self.private_key.is_none() && self.passphrase.is_none()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "manager", rename_all = "camelCase", deny_unknown_fields)]
+enum RefRecord {
+    OnePassword {
+        reference: String,
+    },
+    Bitwarden {
+        item: String,
+    },
+    Vault {
+        address: String,
+        mount: String,
+        path: String,
+        field: String,
+    },
+}
+
+impl From<&SecretRef> for RefRecord {
+    fn from(reference: &SecretRef) -> Self {
+        match reference.clone() {
+            SecretRef::OnePassword { reference } => Self::OnePassword { reference },
+            SecretRef::Bitwarden { item } => Self::Bitwarden { item },
+            SecretRef::Vault {
+                address,
+                mount,
+                path,
+                field,
+            } => Self::Vault {
+                address,
+                mount,
+                path,
+                field,
+            },
+        }
+    }
+}
+
+impl From<RefRecord> for SecretRef {
+    fn from(record: RefRecord) -> Self {
+        match record {
+            RefRecord::OnePassword { reference } => Self::OnePassword { reference },
+            RefRecord::Bitwarden { item } => Self::Bitwarden { item },
+            RefRecord::Vault {
+                address,
+                mount,
+                path,
+                field,
+            } => Self::Vault {
+                address,
+                mount,
+                path,
+                field,
+            },
+        }
+    }
+}
+
+impl From<&SecretRefs> for RefsRecord {
+    fn from(refs: &SecretRefs) -> Self {
+        Self {
+            password: refs.password.as_ref().map(RefRecord::from),
+            private_key: refs.private_key.as_ref().map(RefRecord::from),
+            passphrase: refs.passphrase.as_ref().map(RefRecord::from),
+        }
+    }
+}
+
+impl From<RefsRecord> for SecretRefs {
+    fn from(record: RefsRecord) -> Self {
+        Self {
+            password: record.password.map(SecretRef::from),
+            private_key: record.private_key.map(SecretRef::from),
+            passphrase: record.passphrase.map(SecretRef::from),
+        }
+    }
 }
 
 /// The vault file at its path, with `keys` for the keychain slot.
@@ -229,6 +327,7 @@ impl Opened {
             passphrase: record.passphrase,
             public_key: record.public_key,
             sync: record.sync,
+            references: record.references.into(),
         })
     }
 }
@@ -265,6 +364,7 @@ impl OpenPort for Opened {
             passphrase: identity.passphrase.clone(),
             public_key: identity.public_key.clone(),
             sync: identity.sync,
+            references: RefsRecord::from(&identity.references),
         };
         let bytes = serde_json::to_vec(&record).map_err(|e| VaultError::Io(e.to_string()))?;
         self.vault

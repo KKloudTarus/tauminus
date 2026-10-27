@@ -40,6 +40,7 @@ impl From<FillError> for CommandError {
             FillError::NoPassword | FillError::Telnet | FillError::Changed => {
                 Self::new(ErrorCode::InvalidArgument, error.to_string())
             }
+            FillError::Secret(_) => Self::new(ErrorCode::AuthFailed, error.to_string()),
         }
     }
 }

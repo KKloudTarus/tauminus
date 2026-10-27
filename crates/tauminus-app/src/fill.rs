@@ -22,12 +22,14 @@
 
 use std::sync::Arc;
 
-use tauminus_domain::{PasswordPrompt, SavedHost, SessionId, SessionKind, password_prompt};
+use tauminus_domain::{
+    PasswordPrompt, SavedHost, SecretSlot, SessionId, SessionKind, password_prompt,
+};
 use thiserror::Error;
 
 use crate::hosts::HostBook;
 use crate::session::{SessionError, SessionManager};
-use crate::vault::{Vault, VaultError};
+use crate::vault::{SecretError, Vault, VaultError};
 
 #[derive(Debug, Error)]
 pub enum FillError {
@@ -51,6 +53,8 @@ pub enum FillError {
     Stale,
     #[error(transparent)]
     Trust(#[from] crate::trust::TrustError),
+    #[error(transparent)]
+    Secret(#[from] SecretError),
 }
 
 /// What a pane may offer to type: the identity's name, or `None` for the
@@ -175,12 +179,10 @@ impl Fill {
         if received > seen {
             return Err(FillError::Stale);
         }
-        let password = self
-            .vault
-            .credentials(&identity)
-            .await?
-            .password
-            .ok_or(FillError::NoPassword)?;
+        let credentials = self.vault.credentials(&identity).await?;
+        if !credentials.holds(SecretSlot::Password) {
+            return Err(FillError::NoPassword);
+        }
         // Read, then checked: a password another device changed waits.
         if let Some((trust, snippets)) = &self.trust {
             trust
@@ -197,7 +199,12 @@ impl Fill {
                 )
                 .await?;
         }
-        // Checked again past the vault's await: output may have come.
+        // A password manager is asked only now, once the fill is allowed.
+        let password = credentials
+            .fetch(SecretSlot::Password)
+            .await?
+            .ok_or(FillError::NoPassword)?;
+        // Checked again past the awaits: output may have come.
         if self.prompt(id, &saved)? != received || !self.sessions.mark_filled(id, received)? {
             return Err(FillError::Stale);
         }

@@ -888,6 +888,11 @@ export type IdentityEdit = {
 	generate?: KeyKindSpec | null,
 	/**  Whether this device shares it through sync; left out keeps it. */
 	sync?: boolean | null,
+	/**
+	 *  Where a password manager holds a secret; left out keeps them. A new
+	 *  one is read only once the user allows it in a system dialog.
+	 */
+	references?: SecretRefsSpec | null,
 };
 
 /**  An identity as the view sees it: no secret, only whether one is stored. */
@@ -900,6 +905,8 @@ export type IdentityView = {
 	publicKey: string | null,
 	/**  This device shares it through sync. */
 	sync: boolean,
+	/**  Where a password manager holds a secret: names only. */
+	references: SecretRefsSpec,
 };
 
 /**  Where the hosts come from. */
@@ -1064,6 +1071,22 @@ export type S3Input = {
 	prefix?: string,
 	keyId: string,
 	secret: string,
+};
+
+/**  Where a password manager holds one secret. */
+export type SecretRefSpec = 
+/**  `op://vault/item/[section/]field`. */
+{ manager: "onePassword"; reference: string } | 
+/**  A Bitwarden item's id. */
+{ manager: "bitwarden"; item: string } | 
+/**  A field in HashiCorp Vault's KV engine. */
+{ manager: "vault"; address: string; mount: string; path: string; field: string };
+
+/**  An identity's references, by slot. */
+export type SecretRefsSpec = {
+	password?: SecretRefSpec | null,
+	privateKey?: SecretRefSpec | null,
+	passphrase?: SecretRefSpec | null,
 };
 
 /**  A host as the user saw it. */

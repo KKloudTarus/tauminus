@@ -5742,6 +5742,7 @@ dependencies = [
  "specta-typescript",
  "tauminus-ai",
  "tauminus-app",
+ "tauminus-cli",
  "tauminus-cloud",
  "tauminus-domain",
  "tauminus-fido",
@@ -5749,6 +5750,7 @@ dependencies = [
  "tauminus-mosh",
  "tauminus-presence",
  "tauminus-pty",
+ "tauminus-secrets",
  "tauminus-serial",
  "tauminus-ssh",
  "tauminus-store",
@@ -5835,6 +5837,18 @@ dependencies = [
  "tauminus-domain",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "tauminus-secrets"
+version = "0.0.0"
+dependencies = [
+ "tauminus-app",
+ "tauminus-cli",
+ "tauminus-domain",
+ "tokio",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

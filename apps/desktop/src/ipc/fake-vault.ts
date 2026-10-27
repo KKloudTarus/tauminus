@@ -115,6 +115,7 @@ export function fakeVault(): FakeVault {
         hasPassword: false,
         hasKey: false,
         sync: edit.sync ?? old?.sync ?? false,
+        references: edit.references ?? old?.references ?? {},
         publicKey: generated
           ? `ssh-${edit.generate} AAAAgenerated tauminus-${edit.name.trim()}`
           : edit.privateKey
@@ -122,8 +123,33 @@ export function fakeVault(): FakeVault {
             : (old?.publicKey ?? null),
       };
       if (!stored.name) fail("invalid_argument", "a name must be 1 to 128 characters");
-      stored.hasPassword = stored.password !== undefined;
-      stored.hasKey = stored.privateKey !== undefined;
+      // As the vault: a slot holds a secret or a reference, and a reference
+      // keeps the identity off sync.
+      const refs = { ...stored.references };
+      const typedPassword = Boolean(edit.password);
+      const typedKey = Boolean(edit.privateKey) || Boolean(edit.generate);
+      if (edit.references) {
+        if ((typedPassword && refs.password) || (typedKey && refs.privateKey)) {
+          fail(
+            "invalid_argument",
+            "a secret is kept in the vault or in a password manager, not both",
+          );
+        }
+      } else {
+        if (typedPassword) refs.password = null;
+        if (typedKey) refs.privateKey = null;
+      }
+      if (refs.password) stored.password = undefined;
+      if (refs.privateKey) stored.privateKey = undefined;
+      stored.references = refs;
+      if (stored.sync && (refs.password || refs.privateKey || refs.passphrase)) {
+        fail(
+          "invalid_argument",
+          "an identity that reads a password manager is not shared through sync",
+        );
+      }
+      stored.hasPassword = stored.password !== undefined || Boolean(stored.references.password);
+      stored.hasKey = stored.privateKey !== undefined || Boolean(stored.references.privateKey);
       identities = [...identities.filter((i) => i.id !== stored.id), stored];
       return stored.id;
     },

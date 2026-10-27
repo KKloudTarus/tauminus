@@ -83,7 +83,47 @@ fn identity(id: &str) -> Identity {
         passphrase: None,
         public_key: Some("ssh-ed25519 AAAA deploy@host".into()),
         sync: false,
+        references: SecretRefs::default(),
     }
+}
+
+#[test]
+fn references_survive_the_file_beside_the_secrets_left() {
+    use tauminus_domain::SecretRef;
+    let (_dir, backend) = backend(Arc::default());
+    let mut open = backend.create(&secret("correct horse")).unwrap();
+    let references = SecretRefs {
+        password: Some(SecretRef::OnePassword {
+            reference: "op://Ops/db/password".into(),
+        }),
+        private_key: Some(SecretRef::Vault {
+            address: "https://v.example.com:8200".into(),
+            mount: "secret".into(),
+            path: "ops/db".into(),
+            field: "key".into(),
+        }),
+        passphrase: Some(SecretRef::Bitwarden {
+            item: "3f2504e0-4f89-11d3-9a0c-0305e82c3301".into(),
+        }),
+    };
+    let stored = Identity {
+        password: None,
+        private_key: None,
+        references: references.clone(),
+        ..identity("r1")
+    };
+    open.put_identity(&stored).unwrap();
+    open.save().unwrap();
+    let text = std::fs::read_to_string(backend.file.path()).unwrap();
+    assert!(
+        !text.contains("op://"),
+        "the reference is sealed with the rest"
+    );
+    drop(open);
+    let open = backend.unlock(&secret("correct horse")).unwrap();
+    let read = open.identity("r1").unwrap().unwrap();
+    assert_eq!(read.references, references);
+    assert_eq!(read, stored);
 }
 
 #[test]

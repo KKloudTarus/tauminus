@@ -840,3 +840,280 @@ async fn a_wrong_code_after_the_stored_password_does_not_mark_it() {
         .await
         .unwrap();
 }
+
+/// Plays a password manager: gives `secrets` by slot, or `locked`, and
+/// records each ask.
+struct Manager {
+    secrets: Vec<(tauminus_domain::SecretSlot, String)>,
+    locked: bool,
+    asked: std::sync::Mutex<Vec<tauminus_domain::SecretSlot>>,
+}
+
+impl Manager {
+    fn giving(secrets: &[(tauminus_domain::SecretSlot, &str)]) -> Arc<Self> {
+        Arc::new(Self {
+            secrets: secrets.iter().map(|(s, v)| (*s, (*v).to_owned())).collect(),
+            locked: false,
+            asked: std::sync::Mutex::default(),
+        })
+    }
+
+    fn asked(&self) -> Vec<tauminus_domain::SecretSlot> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl tauminus_app::vault::SecretSource for Manager {
+    fn fetch<'a>(
+        &'a self,
+        reference: &'a tauminus_domain::SecretRef,
+        slot: tauminus_domain::SecretSlot,
+    ) -> tauminus_app::ports::BoxFuture<
+        'a,
+        Result<tauminus_app::ports::Secret, tauminus_app::vault::SecretError>,
+    > {
+        self.asked.lock().unwrap().push(slot);
+        let given = if self.locked {
+            Err(tauminus_app::vault::SecretError {
+                manager: reference.manager(),
+                message: "account is not signed in".into(),
+                sign_in: reference.sign_in(),
+            })
+        } else {
+            Ok(secret(
+                &self
+                    .secrets
+                    .iter()
+                    .find(|(s, _)| *s == slot)
+                    .map(|(_, v)| v.clone())
+                    .unwrap_or_default(),
+            ))
+        };
+        Box::pin(async move { given })
+    }
+}
+
+/// Credentials whose every slot named here is a password manager's.
+fn referenced(
+    manager: &Arc<Manager>,
+    slots: &[tauminus_domain::SecretSlot],
+) -> Arc<tauminus_app::ports::Credentials> {
+    use tauminus_domain::{SecretRef, SecretSlot};
+    let reference = SecretRef::OnePassword {
+        reference: "op://Ops/db/secret".into(),
+    };
+    let mut references = tauminus_app::vault::SecretRefs::default();
+    for slot in slots {
+        match slot {
+            SecretSlot::Password => references.password = Some(reference.clone()),
+            SecretSlot::PrivateKey => references.private_key = Some(reference.clone()),
+            SecretSlot::Passphrase => references.passphrase = Some(reference.clone()),
+        }
+    }
+    Arc::new(tauminus_app::ports::Credentials {
+        references,
+        source: Some(Arc::clone(manager) as Arc<dyn tauminus_app::vault::SecretSource>),
+        ..tauminus_app::ports::Credentials::default()
+    })
+}
+
+#[tokio::test]
+async fn a_password_manager_is_asked_only_once_the_host_key_is_trusted() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-hostkey");
+    let port = start(&scratch).await;
+    let manager = Manager::giving(&[(SecretSlot::Password, PASSWORD)]);
+    let prompter = ScriptedPrompter::new(vec![Answer::Cancel]);
+    let error = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, ConnectError::HostKeyRejected { .. }),
+        "{error}"
+    );
+    assert_eq!(manager.asked(), []);
+
+    // Trusted, it is asked once and its password signs in.
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manager.asked(), [SecretSlot::Password]);
+    assert_eq!(prompter.asked().len(), 1, "only the host key was asked");
+}
+
+#[tokio::test]
+async fn a_password_manager_is_not_asked_for_what_no_method_spends() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-unspent");
+    let port = start(&scratch).await;
+    let manager = Manager::giving(&[(SecretSlot::Password, PASSWORD)]);
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    // Keys only: the password is never read.
+    let error = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::PublicKey]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ConnectError::AuthFailed { .. }), "{error}");
+    assert_eq!(manager.asked(), []);
+}
+
+#[tokio::test]
+async fn a_referenced_key_asks_for_its_passphrase_only_when_it_has_one() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-key");
+    let port = start(&scratch).await;
+    keygen(
+        &scratch.0,
+        &["-q", "-t", "ed25519", "-N", "", "-f", "plain"],
+    );
+    keygen(
+        &scratch.0,
+        &["-q", "-t", "ed25519", "-N", "sesame", "-f", "locked"],
+    );
+    let read = |name: &str| std::fs::read_to_string(scratch.path(name)).unwrap();
+    for (key, asked) in [
+        (read("plain"), vec![SecretSlot::PrivateKey]),
+        (
+            read("locked"),
+            vec![SecretSlot::PrivateKey, SecretSlot::Passphrase],
+        ),
+    ] {
+        let manager = Manager::giving(&[
+            (SecretSlot::PrivateKey, key.as_str()),
+            (SecretSlot::Passphrase, "sesame"),
+        ]);
+        let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+        // The test server turns every key down; what matters is what was read.
+        let error = connector(&scratch)
+            .connect_with(
+                &target(port, vec![AuthMethod::PublicKey]),
+                size(),
+                dyn_prompter(&prompter),
+                referenced(&manager, &[SecretSlot::PrivateKey, SecretSlot::Passphrase]),
+            )
+            .await
+            .unwrap_err();
+        match error {
+            ConnectError::AuthFailed { tried, .. } => {
+                assert_eq!(tried, ["public key"], "the key decoded and was offered");
+            }
+            other => panic!("{other}"),
+        }
+        assert_eq!(manager.asked(), asked);
+    }
+}
+
+#[tokio::test]
+async fn a_locked_password_manager_is_named_when_nothing_else_gets_in() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-locked");
+    let port = start(&scratch).await;
+    let manager = Arc::new(Manager {
+        secrets: Vec::new(),
+        locked: true,
+        asked: std::sync::Mutex::default(),
+    });
+    // The user, asked in its place, cancels.
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Cancel,
+    ]);
+    let error = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "1Password did not give the secret: account is not signed in; if it is locked, \
+         unlock the 1Password app with its CLI integration on, or run op signin"
+    );
+
+    // Typed by the user instead, the password still gets in.
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Secret(secret(PASSWORD)),
+    ]);
+    connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_locked_password_manager_is_named_over_wrong_typed_passwords() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-locked-typed");
+    let port = start(&scratch).await;
+    let manager = Arc::new(Manager {
+        secrets: Vec::new(),
+        locked: true,
+        asked: std::sync::Mutex::default(),
+    });
+    let prompter = ScriptedPrompter::new(vec![
+        Answer::TrustHostKey { remember: false },
+        Answer::Secret(secret("wrong-1")),
+        Answer::Secret(secret("wrong-2")),
+        Answer::Secret(secret("wrong-3")),
+    ]);
+    let error = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::Password]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::Password]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ConnectError::Secret(_)), "{error}");
+}
+
+#[tokio::test]
+async fn a_referenced_key_that_does_not_decode_asks_for_no_passphrase() {
+    use tauminus_domain::SecretSlot;
+    let scratch = Scratch::new("ref-bad-key");
+    let port = start(&scratch).await;
+    let manager = Manager::giving(&[
+        (SecretSlot::PrivateKey, "not a key"),
+        (SecretSlot::Passphrase, "sesame"),
+    ]);
+    let prompter = ScriptedPrompter::new(vec![Answer::TrustHostKey { remember: false }]);
+    let error = connector(&scratch)
+        .connect_with(
+            &target(port, vec![AuthMethod::PublicKey]),
+            size(),
+            dyn_prompter(&prompter),
+            referenced(&manager, &[SecretSlot::PrivateKey, SecretSlot::Passphrase]),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ConnectError::AuthFailed { .. }), "{error}");
+    assert_eq!(manager.asked(), [SecretSlot::PrivateKey]);
+}
