@@ -27,7 +27,7 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
 # through tauri.
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62.2", features = ["Foundation", "Security_Credentials_UI", "Win32_Foundation", "Win32_System_WinRT"] }
-windows-future = "0.3.2"
+windows-future = "0.100.0"
 
 # polkit over the system bus; zbus is already in the tree through the
 # Secret Service store, with its own executor.
