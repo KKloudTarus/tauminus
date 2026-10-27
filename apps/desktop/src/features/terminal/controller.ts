@@ -225,6 +225,8 @@ function jittered(ms: number): number {
   return Math.round(ms * (0.75 + Math.random() * 0.5));
 }
 const LOCAL: SessionSpec = { kind: "local" };
+/** ED 3: erases the saved lines; the screen and the cursor stay. */
+const ERASE_SAVED_LINES = new TextEncoder().encode("\x1b[3J");
 
 type Listener = () => void;
 
@@ -1230,11 +1232,16 @@ export class TerminalController {
    * shell's output by absolute row, so a screen cleared here alone would get
    * the next output where the cursor was before. That pane keeps its screen
    * and loses only the lines above it, which ConPTY does not hold.
+   *
+   * The erase goes through the output lane, after the output already pushed:
+   * written at once, it could land between two chunks of one read, inside an
+   * escape sequence, and the rest of that sequence would print as text. In
+   * the alternate screen (vim, less) there are no saved lines, so on Windows
+   * it erases nothing there, and the normal screen keeps its scrollback.
    */
   clearScrollback(): void {
     if (this.#conpty && this.spec.kind === "local") {
-      // ED 3: erase the saved lines; the screen and the cursor stay.
-      this.terminal.write("\x1b[3J");
+      this.#output.pushLocal(ERASE_SAVED_LINES);
       return;
     }
     this.terminal.clear();

@@ -1573,6 +1573,42 @@ describe("TerminalController clearing the scrollback", () => {
     expect(row(controller, cursorY)).toBe("prompt>");
   });
 
+  it("erases between reads on Windows, never inside an escape sequence", async () => {
+    // Eight-byte chunks, two with xterm.js at once, turns run by the test.
+    const tasks: (() => void)[] = [];
+    const output = new OutputScheduler({
+      slice: 8,
+      direct: 1,
+      turnMs: 60_000,
+      stallMs: 60_000,
+      post: (task) => tasks.push(task),
+    });
+    const { sessions, controller } = setup({ conpty: true, output });
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    // The second chunk ends inside an SGR: "4mBLUE\x1b[".
+    sessions.events.onOutput(new TextEncoder().encode("ab\x1b[01;34mBLUE\x1b[0m!"));
+    tasks.shift()?.();
+    controller.clearScrollback();
+    await vi.waitFor(async () => {
+      for (const task of tasks.splice(0)) task();
+      await written(controller, "");
+      expect(row(controller, 0)).toBe("abBLUE!");
+    });
+  });
+
+  it("erases nothing in the alternate screen on Windows", async () => {
+    const controller = await scrolled({ conpty: true });
+    const normal = controller.terminal.buffer.normal;
+    const saved = normal.baseY;
+    await written(controller, "\x1b[?1049h");
+    controller.clearScrollback();
+    await written(controller, "\x1b[?1049l");
+    expect(saved).toBeGreaterThan(0);
+    expect(normal.baseY).toBe(saved);
+  });
+
   it("moves the prompt to the top of an empty screen elsewhere", async () => {
     const controller = await scrolled({});
     controller.clearScrollback();

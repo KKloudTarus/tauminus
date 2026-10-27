@@ -83,6 +83,30 @@ describe("OutputScheduler", () => {
     expect(a.parsedBytes).toEqual([2]);
   });
 
+  it("writes the app's own bytes after a whole push, and does not count them", () => {
+    const { scheduler, runTasks } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b[1;3"));
+    a.lane.push(bytes("4mok"));
+    // Pushed while the first chunk is out: it waits for the second push.
+    runTasks();
+    a.lane.pushLocal(bytes("!"));
+    a.parseAll();
+    expect(log).toEqual(["a:\x1b[1;", "a:3", "a:4mok", "a:!"]);
+    expect(a.parsedBytes).toEqual([4, 1, 4]);
+  });
+
+  it("writes the app's own bytes to a quiet lane at once, uncounted", () => {
+    const { scheduler } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.pushLocal(bytes("local bytes"));
+    expect(log).toEqual(["a:local bytes"]);
+    a.parseAll();
+    expect(a.parsedBytes).toEqual([]);
+  });
+
   it("keeps two chunks with the terminal and sends the next from each callback", () => {
     const { scheduler, runTasks } = setup();
     const log: string[] = [];

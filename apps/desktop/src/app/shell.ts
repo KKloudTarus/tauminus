@@ -8,6 +8,7 @@ import {
   buildKeymap,
   defaultBindings,
   detectPlatform,
+  detectWindows,
 } from "@/features/keymap/keymap.ts";
 import { TerminalController } from "@/features/terminal/controller.ts";
 import type { RecordedCommand } from "@/features/terminal/recorder.ts";
@@ -347,8 +348,7 @@ export class AppShell {
       this.#stopScheme = () => scheme.removeEventListener("change", onScheme);
     }
 
-    // On Windows the backend runs local shells through ConPTY.
-    const conpty = /\bWindows\b/u.test(options.userAgent);
+    const conpty = detectWindows(options.userAgent);
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
       // Set once the controller exists: triggers fire only after output.
