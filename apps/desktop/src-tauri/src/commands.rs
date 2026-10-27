@@ -4,66 +4,20 @@
 //! IPC commands. Each one decodes its arguments, calls one use case, and maps
 //! the result. No session logic lives here.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use tauminus_app::{LocalShells, SessionManager};
 use tauminus_domain::{LocalShell, TerminalSize};
-use tauminus_pty::KnownShell;
 use tauri::State;
 use tauri::ipc::Channel;
 
 use crate::ipc::{
-    ChannelSink, CommandError, ErrorCode, GridSize, LocalShellView, OutputChunk, SessionExit,
-    SessionHandle,
+    ChannelSink, CommandError, ErrorCode, GridSize, OutputChunk, SessionExit, SessionHandle,
 };
+use crate::shells::ShellCatalog;
 
-/// The shells a local tab can open by id, as last found. The webview names a
-/// shell by id only: what runs comes from this list, never from the webview.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ShellCatalog(Arc<Mutex<Option<Vec<KnownShell>>>>);
-
-impl ShellCatalog {
-    /// Looks for the shells again. Blocks; see [`tauminus_pty::known_shells`].
-    fn refresh(&self) -> Vec<KnownShell> {
-        let found = tauminus_pty::known_shells();
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(found.clone());
-        found
-    }
-
-    /// The shell listed under `id`, looking once if nothing was listed yet.
-    fn find(&self, id: &str) -> Option<LocalShell> {
-        let listed = self
-            .0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        listed
-            .unwrap_or_else(|| self.refresh())
-            .into_iter()
-            .find(|known| known.id == id)
-            .map(|known| known.shell)
-    }
-}
-
-/// The shells this computer has besides the default, found again on each
-/// call so one installed since shows up. Empty off Windows.
-#[tauri::command]
-#[specta::specta]
-pub(crate) async fn local_shells(
-    catalog: State<'_, ShellCatalog>,
-) -> Result<Vec<LocalShellView>, CommandError> {
-    let catalog = catalog.inner().clone();
-    let found = tauri::async_runtime::spawn_blocking(move || catalog.refresh())
-        .await
-        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?;
-    Ok(found
-        .into_iter()
-        .map(|known| LocalShellView {
-            id: known.id,
-            name: known.name,
-        })
-        .collect())
-}
+/// Characters of an unknown shell id an error repeats.
+const SHOWN_ID_CHARS: usize = 64;
 
 /// Opens a local shell: the platform default, or the one `local_shells`
 /// listed as `shell`. Output arrives on `on_output`, and `on_exit` fires once
@@ -91,9 +45,10 @@ pub(crate) async fn session_open(
         let program = match shell {
             None => LocalShell::default(),
             Some(id) => catalog.find(&id).ok_or_else(|| {
+                let shown: String = id.chars().take(SHOWN_ID_CHARS).collect();
                 CommandError::new(
                     ErrorCode::NotFound,
-                    format!("{id} is not a shell on this computer"),
+                    format!("{shown:?} is not a shell on this computer"),
                 )
             })?,
         };

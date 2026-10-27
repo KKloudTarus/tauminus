@@ -18,7 +18,7 @@ export const commands = {
 	 *  The shells this computer has besides the default, found again on each
 	 *  call so one installed since shows up. Empty off Windows.
 	 */
-	localShells: () => typedError<LocalShellView[], CommandError>(__TAURI_INVOKE("local_shells")),
+	localShells: () => typedError<LocalShellsView, CommandError>(__TAURI_INVOKE("local_shells")),
 	/**  Sends text input: keystrokes, paste, or terminal replies. */
 	sessionWrite: (id: SessionHandle, data: string) => typedError<null, CommandError>(__TAURI_INVOKE("session_write", { id, data })),
 	/**
@@ -953,6 +953,16 @@ export type Listing = {
 export type LocalShellView = {
 	id: string,
 	name: string,
+};
+
+/**  The shells a local tab can open besides the default. */
+export type LocalShellsView = {
+	shells: LocalShellView[],
+	/**
+	 *  False when WSL did not answer in time: its distributions may be
+	 *  missing, not gone.
+	 */
+	complete: boolean,
 };
 
 export type ParitySpec = "none" | "odd" | "even";

@@ -23,23 +23,34 @@ pub struct KnownShell {
     pub shell: LocalShell,
 }
 
+/// The shells found, and whether WSL answered. When it did not, its
+/// distributions are missing from `shells`, not gone from the computer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellListing {
+    pub shells: Vec<KnownShell>,
+    pub wsl_answered: bool,
+}
+
 /// The shells found now, in the order to offer them; none off Windows.
 ///
 /// Blocks on file checks and on `wsl.exe --list`, for at most three
 /// seconds, so async callers should run it on a blocking thread.
-pub fn known_shells() -> Vec<KnownShell> {
+pub fn known_shells() -> ShellListing {
     #[cfg(windows)]
-    let shells = windows_shells(&Lookup {
+    let listing = windows_shells(&Lookup {
         var: &|name| std::env::var(name).ok(),
         exists: &|path| std::path::Path::new(path).is_file(),
         wsl: &query_wsl,
     });
     #[cfg(not(windows))]
-    let shells = Vec::new();
-    shells
+    let listing = ShellListing {
+        shells: Vec::new(),
+        wsl_answered: true,
+    };
+    listing
 }
 
-/// How long `wsl.exe --list` may take before WSL's shells are left out.
+/// How long `wsl.exe --list` may take before it is stopped.
 #[cfg(windows)]
 const WSL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -50,13 +61,16 @@ struct Lookup<'a> {
     var: &'a dyn Fn(&str) -> Option<String>,
     /// Whether a file exists at this Windows path.
     exists: &'a dyn Fn(&str) -> bool,
-    /// The distributions the `wsl.exe` at this path lists.
-    wsl: &'a dyn Fn(&str) -> Vec<String>,
+    /// The distributions the `wsl.exe` at this path lists, or `None` when
+    /// it did not answer in time.
+    wsl: &'a dyn Fn(&str) -> Option<Vec<String>>,
 }
 
 #[cfg(any(windows, test))]
-fn windows_shells(lookup: &Lookup<'_>) -> Vec<KnownShell> {
-    let var = |name: &str| (lookup.var)(name).filter(|value| !value.is_empty());
+fn windows_shells(lookup: &Lookup<'_>) -> ShellListing {
+    // Every variable read here names a folder or a program: a relative one
+    // would resolve against wherever the app was started.
+    let var = |name: &str| (lookup.var)(name).filter(|value| is_absolute(value));
     let found = |path: String| (lookup.exists)(&path).then_some(path);
     let root = var("SystemRoot").unwrap_or_else(|| r"C:\Windows".to_owned());
     let system = format!(r"{}\System32", root.trim_end_matches('\\'));
@@ -93,8 +107,11 @@ fn windows_shells(lookup: &Lookup<'_>) -> Vec<KnownShell> {
     if let Some(path) = git_bash {
         shells.push(known("git-bash", "Git Bash", path, &["--login", "-i"]));
     }
+    let mut wsl_answered = true;
     if let Some(wsl) = found(format!(r"{system}\wsl.exe")) {
-        for distribution in (lookup.wsl)(&wsl) {
+        let distributions = (lookup.wsl)(&wsl);
+        wsl_answered = distributions.is_some();
+        for distribution in distributions.into_iter().flatten() {
             shells.push(KnownShell {
                 id: format!("wsl:{distribution}"),
                 name: format!("{distribution} (WSL)"),
@@ -106,7 +123,10 @@ fn windows_shells(lookup: &Lookup<'_>) -> Vec<KnownShell> {
             });
         }
     }
-    shells
+    ShellListing {
+        shells,
+        wsl_answered,
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -147,7 +167,8 @@ fn is_absolute(dir: &str) -> bool {
 
 /// Distribution names from `wsl.exe --list --quiet`. It writes UTF-16LE,
 /// or UTF-8 when `WSL_UTF8` is set, which only newer releases honour.
-/// Docker Desktop's own distributions are not shells to open.
+/// Docker Desktop's own distributions are not shells to open, and a name
+/// starting with `-` would read as an option after `-d`.
 #[cfg(any(windows, test))]
 fn wsl_names(stdout: &[u8]) -> Vec<String> {
     let text = if stdout.contains(&0) {
@@ -164,20 +185,26 @@ fn wsl_names(stdout: &[u8]) -> Vec<String> {
     text.lines()
         .map(|line| line.trim_matches(|c: char| c == '\u{feff}' || c == '\0' || c.is_whitespace()))
         .filter(|name| !name.is_empty() && !name.starts_with("docker-desktop"))
-        .filter(|name| !name.chars().any(char::is_control))
+        .filter(|name| !name.starts_with('-') && !name.chars().any(char::is_control))
         .map(str::to_owned)
         .collect()
 }
 
+/// The distributions `wsl.exe` lists, or `None` when it does not answer in
+/// time: a cold `LxssManager` can take longer. It is then stopped, so no
+/// listing leaves a process behind. A `wsl.exe` that cannot start, or that
+/// fails, as the one Windows ships before WSL is installed does, answers
+/// that there are none.
 #[cfg(windows)]
-fn query_wsl(wsl: &str) -> Vec<String> {
+fn query_wsl(wsl: &str) -> Option<Vec<String>> {
+    use std::io::Read;
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
 
     /// Keeps a console window from flashing up for `wsl.exe`.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let Ok(child) = Command::new(wsl)
+    let Ok(mut child) = Command::new(wsl)
         .args(["--list", "--quiet"])
         .env("WSL_UTF8", "1")
         .stdin(Stdio::null())
@@ -186,27 +213,38 @@ fn query_wsl(wsl: &str) -> Vec<String> {
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
     else {
-        return Vec::new();
+        return Some(Vec::new());
     };
-    let (send, answer) = std::sync::mpsc::sync_channel(1);
-    // A WSL that never answers keeps this thread until it exits; the list
-    // goes on without it.
-    let waiting = std::thread::Builder::new()
+    let Some(mut stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Some(Vec::new());
+    };
+    let (send, read) = std::sync::mpsc::sync_channel(1);
+    // Ends when wsl.exe closes its output: when it exits, or is killed below.
+    let reading = std::thread::Builder::new()
         .name("wsl-list".into())
         .spawn(move || {
-            let _ = send.try_send(child.wait_with_output());
+            let mut out = Vec::new();
+            let _ = stdout.read_to_end(&mut out);
+            let _ = send.send(out);
         });
-    if waiting.is_err() {
-        return Vec::new();
-    }
-    match answer.recv_timeout(WSL_TIMEOUT) {
-        Ok(Ok(output)) if output.status.success() => wsl_names(&output.stdout),
-        Ok(_) => Vec::new(),
-        Err(_) => {
-            tracing::warn!("wsl.exe --list did not answer in time; WSL shells left out");
-            Vec::new()
-        }
-    }
+    let answer = match reading {
+        Ok(_) => read.recv_timeout(WSL_TIMEOUT).ok(),
+        Err(_) => None,
+    };
+    let Some(out) = answer else {
+        tracing::warn!("wsl.exe --list did not answer in time; stopped it");
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let succeeded = child.wait().is_ok_and(|status| status.success());
+    Some(if succeeded {
+        wsl_names(&out)
+    } else {
+        Vec::new()
+    })
 }
 
 #[cfg(test)]

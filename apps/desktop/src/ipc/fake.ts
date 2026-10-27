@@ -451,7 +451,10 @@ export const fakeSessions: SessionClient = {
       spec.target.destination.host === "vault.test";
     return shell;
   },
-  localShells: async () => FAKE_SHELLS.map(({ id, name }) => ({ id, name })),
+  localShells: async () => ({
+    shells: FAKE_SHELLS.map(({ id, name }) => ({ id, name })),
+    complete: true,
+  }),
 };
 
 /** The shells the fake computer has besides the default; a local tab in one prints its name. */
