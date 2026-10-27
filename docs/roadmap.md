@@ -242,6 +242,8 @@ Goal: Termius Team and Business parity, self-hosted.
 - [ ] Kerberos/GSSAPI, PKCS#11 smart cards, short-lived certificates from Vault or step-ca
 - [ ] Kubernetes exec and Docker exec as connection types
 - [ ] Credentials from 1Password, Bitwarden, HashiCorp Vault
+  - [x] An identity's password, key or passphrase named in the manager and read through its own CLI (`op`, `bw`, `vault`) only once the server's key is accepted and a method spends it; no manager token kept; a new reference only after the user's yes in a system dialog (ADR 0035; checked live against Vault 1.20.4, KV 1 and 2)
+  - [ ] Setting references from the identity editor
 - [ ] X11 forwarding
 - [ ] RDP and VNC
 - [ ] Windows code signing; Homebrew, winget, Flathub, AUR
