@@ -32,7 +32,7 @@ tokio = { workspace = true, features = ["rt"] }
 # The command history: SQLite with FTS5, encrypted page by page with
 # SQLCipher, built from source with a vendored OpenSSL so every platform
 # runs the same cipher code.
-rusqlite = { version = "0.37", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"] }
 # Entries recorded while the vault is locked are sealed to an X25519 key
 # (ECIES: ephemeral key, HKDF-SHA256, XChaCha20-Poly1305). curve25519-dalek,
 # hkdf, and sha2 are already in the tree through russh.
