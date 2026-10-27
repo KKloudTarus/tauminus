@@ -211,7 +211,11 @@ Goal: Termius Team and Business parity, self-hosted.
 
 - [ ] Hub server in Rust, single binary plus Postgres, Docker image
 - [ ] Team vaults with roles (view, edit, admin), share hosts with or without credentials
+  - [x] The protocol, `tauminus-team`: an admin-signed membership log each device verifies from its first entry, epoch keys sealed to each device, a separate secrets key for members granted credentials, and items signed by their writer and refused from a member who could only view (ADR 0034)
+  - [ ] Served by the Hub and used from the desktop
 - [ ] Revoke access with vault key rotation
+  - [x] Removing a member or a device starts an epoch whose keys none of their devices holds (ADR 0034)
+  - [ ] Through the Hub, with the credentials to change listed in the app
 - [ ] Require 2FA for members
 - [ ] OIDC login on the client; SAML on the Hub
 - [ ] SCIM provisioning
@@ -224,7 +228,11 @@ Goal: Termius Team and Business parity, self-hosted.
 ### Exit criteria
 
 - [ ] Revoked member cannot decrypt data written after the revoke (test)
+  - [x] On the protocol: `a_revoked_member_cannot_open_what_is_written_after_the_revoke`, the member holding every key it had and everything the Hub stores
+  - [ ] Again through the Hub
 - [ ] Hub operator cannot read vault contents (threat model doc plus test)
+  - [x] On the protocol: ADR 0034, and `the_hub_holds_only_ciphertext`, which looks for each canary and key in every stored byte
+  - [ ] Again through the Hub, in its database and logs
 - [ ] Security review of the Hub and the sharing relay
 
 ## v1.0 and later
