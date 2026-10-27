@@ -6,16 +6,14 @@
 //! kept here. Each command has a fixed argument list, no shell, no
 //! input, a deadline and a cap on what it may print.
 
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use tauminus_app::cloud::{CloudInventory, CloudRequest, Listing, Provider};
 use tauminus_app::ports::BoxFuture;
-use tokio::io::AsyncReadExt;
-use tokio::process::Command;
+use tauminus_cli::Finder;
 use tokio::sync::Semaphore;
 
 mod parse;
@@ -23,7 +21,7 @@ mod parse;
 /// How long one command may take: `az` alone starts in seconds.
 const DEADLINE: Duration = Duration::from_secs(120);
 /// Most bytes of output read from one command.
-const MAX_OUTPUT: u64 = 64 << 20;
+const MAX_OUTPUT: usize = 64 << 20;
 /// Regions asked at once: each `aws` is about a second of CPU, so more
 /// than a laptop's cores gains nothing.
 const PARALLEL: usize = 8;
@@ -31,63 +29,18 @@ const PARALLEL: usize = 8;
 const MAX_REGIONS: usize = 64;
 /// Most instances one listing holds.
 const MAX_INSTANCES: usize = 10_000;
-/// Bytes of a command's error shown.
-const MAX_ERROR: usize = 256;
-
-/// Where the CLIs are often installed, past the app's `PATH`, which a
-/// desktop app started from a dock may lack. Only on Unix: on Windows a
-/// path like these is relative to the current drive, whose root any user
-/// may make folders in.
-#[cfg(unix)]
-fn known_dirs() -> Vec<PathBuf> {
-    [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/opt/local/bin",
-        "/snap/bin",
-        "/run/current-system/sw/bin",
-        "/usr/bin",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect()
-}
-
-/// The installers' own folders, under the system's program folders and
-/// the user's local app data.
-#[cfg(windows)]
-fn known_dirs() -> Vec<PathBuf> {
-    let under =
-        |var: &str, rest: &str| std::env::var_os(var).map(|root| PathBuf::from(root).join(rest));
-    [
-        under("ProgramFiles", r"Amazon\AWSCLIV2"),
-        under("ProgramFiles", r"Microsoft SDKs\Azure\CLI2\wbin"),
-        under("ProgramFiles(x86)", r"Microsoft SDKs\Azure\CLI2\wbin"),
-        under("ProgramFiles", r"Google\Cloud SDK\google-cloud-sdk\bin"),
-        under(
-            "ProgramFiles(x86)",
-            r"Google\Cloud SDK\google-cloud-sdk\bin",
-        ),
-        under("LOCALAPPDATA", r"Google\Cloud SDK\google-cloud-sdk\bin"),
-        under("LOCALAPPDATA", r"Programs\doctl"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
-}
 
 /// The providers' CLIs.
 #[derive(Debug, Clone)]
 pub struct Clis {
-    /// Where to look in place of `PATH`, for tests.
-    dirs: Option<Vec<PathBuf>>,
+    finder: Finder,
     deadline: Duration,
 }
 
 impl Default for Clis {
     fn default() -> Self {
         Self {
-            dirs: None,
+            finder: Finder::new(),
             deadline: DEADLINE,
         }
     }
@@ -137,7 +90,7 @@ impl Clis {
     #[must_use]
     pub fn in_dirs(dirs: Vec<PathBuf>, deadline: Duration) -> Self {
         Self {
-            dirs: Some(dirs),
+            finder: Finder::in_dirs(dirs),
             deadline,
         }
     }
@@ -157,88 +110,24 @@ impl Clis {
     }
 
     fn find(&self, cli: &Cli) -> Result<PathBuf, String> {
-        let dirs: Vec<PathBuf> = if let Some(dirs) = &self.dirs {
-            dirs.clone()
-        } else {
-            let path = std::env::var_os("PATH").unwrap_or_default();
-            std::env::split_paths(&path)
-                .chain(known_dirs())
-                .filter(|dir| dir.is_absolute())
-                .collect()
-        };
-        // `az` and `gcloud` are batch files on Windows.
-        let names: &[String] = &if cfg!(windows) {
-            vec![format!("{}.exe", cli.name), format!("{}.cmd", cli.name)]
-        } else {
-            vec![cli.name.to_owned()]
-        };
-        dirs.iter()
-            .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
-            .find(|candidate| is_program(candidate))
-            .ok_or_else(|| {
-                format!(
-                    "{} is not installed on this computer: {}",
-                    cli.name, cli.install
-                )
-            })
+        self.finder.find(cli.name, cli.install)
     }
 
     /// Runs `cli` with `args` and reads its JSON.
     async fn run(&self, cli: &Cli, args: &[&str]) -> Result<Value, String> {
         let program = self.find(cli)?;
-        let mut command = Command::new(&program);
-        command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            // AWS's pager and prompts would wait for a terminal.
-            .env("AWS_PAGER", "")
-            .env("AWS_CLI_AUTO_PROMPT", "off");
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("{} could not start: {e}", cli.name))?;
-        let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take())
-        else {
-            return Err(format!("{} could not start", cli.name));
-        };
-        let work = async {
-            let mut out = Vec::new();
-            let mut err = Vec::new();
-            let mut out_reader = (&mut stdout).take(MAX_OUTPUT + 1);
-            let mut err_reader = (&mut stderr).take(64 << 10);
-            let (read, _) = tokio::join!(
-                out_reader.read_to_end(&mut out),
-                err_reader.read_to_end(&mut err),
-            );
-            read.map_err(|e| e.to_string())?;
-            if out.len() as u64 > MAX_OUTPUT {
-                return Err(format!("{} printed more than an import reads", cli.name));
-            }
-            let status = child.wait().await.map_err(|e| e.to_string())?;
-            Ok::<_, String>((status, out, err))
-        };
-        let (status, out, err) =
-            tokio::time::timeout(self.deadline, work)
-                .await
-                .map_err(|_| {
-                    format!(
-                        "{} took longer than {} s",
-                        cli.name,
-                        self.deadline.as_secs()
-                    )
-                })??;
-        if !status.success() {
-            let first = String::from_utf8_lossy(&err)
-                .lines()
-                .map(str::trim)
-                .find(|l| !l.is_empty())
-                .map(|l| parse::clean(l).chars().take(MAX_ERROR).collect::<String>())
-                .unwrap_or_default();
-            return Err(format!("{} failed ({status}): {first}", cli.name));
+        // AWS's pager and prompts would wait for a terminal.
+        let env = [("AWS_PAGER", ""), ("AWS_CLI_AUTO_PROMPT", "off")];
+        let run =
+            tauminus_cli::run(cli.name, &program, args, &env, self.deadline, MAX_OUTPUT, 0).await?;
+        if !run.status.success() {
+            return Err(format!(
+                "{} failed ({}): {}",
+                cli.name, run.status, run.error
+            ));
         }
-        serde_json::from_slice(&out).map_err(|_| format!("{} printed what is not JSON", cli.name))
+        serde_json::from_slice(&run.stdout)
+            .map_err(|_| format!("{} printed what is not JSON", cli.name))
     }
 
     async fn list(&self, request: &CloudRequest) -> Result<Listing, String> {
@@ -515,30 +404,11 @@ impl CloudInventory for Clis {
     }
 }
 
-fn is_program(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        path.is_file()
-    }
-}
-
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod search {
-    #[test]
-    fn every_place_searched_past_path_is_absolute_on_this_system() {
-        for dir in super::known_dirs() {
-            assert!(dir.is_absolute(), "{}", dir.display());
-        }
-    }
-
     #[test]
     fn a_region_is_lowercase_letters_digits_and_dashes() {
         assert!(super::valid_region("eu-west-1"));
