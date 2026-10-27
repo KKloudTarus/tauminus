@@ -31,13 +31,14 @@ fn a_download_comes_from_the_project_s_releases() {
 mod signed {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::time::Instant;
 
     use serde_json::{Value, json};
     use tauri::Manager;
     use tauri::ipc::Channel;
     use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
 
-    use super::super::{CommandError, Updates, download, update_check};
+    use super::super::{CommandError, Updates, WATCH, download, update_check};
 
     /// A bundle and its signatures, made with the test key in
     /// `xtask/tests/fixtures`, which signs nothing anyone installs.
@@ -149,12 +150,15 @@ mod signed {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_bundle_installs_only_as_it_was_signed_for_its_version() {
         let bundle = fixture("bundle");
+        let started = Instant::now();
         assert_eq!(
             fetch(bundle.clone(), "bundle-99.0.0.sig", false)
                 .await
                 .unwrap(),
             bundle
         );
+        // The bytes are handed on when they arrive, not at the next stall check.
+        assert!(started.elapsed() < WATCH, "{:?}", started.elapsed());
 
         let mut tampered = bundle.clone();
         tampered[0] ^= 1;

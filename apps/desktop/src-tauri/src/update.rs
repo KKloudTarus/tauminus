@@ -177,10 +177,13 @@ async fn download(
             .await;
         bytes.map(|bytes| (update, bytes))
     });
+    let mut task = task;
     loop {
-        tokio::time::sleep(WATCH).await;
-        if task.inner().is_finished() {
-            break;
+        // Back as soon as the download ends; between, a look for a stall.
+        if let Ok(joined) = tokio::time::timeout(WATCH, &mut task).await {
+            return joined
+                .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
+                .map_err(|e| failed(&e));
         }
         let quiet = elapsed(started).saturating_sub(last.load(Ordering::Relaxed));
         if quiet > u64::try_from(STALL.as_millis()).unwrap_or(u64::MAX) {
@@ -191,9 +194,6 @@ async fn download(
             ));
         }
     }
-    task.await
-        .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))?
-        .map_err(|e| failed(&e))
 }
 
 #[cfg(test)]
