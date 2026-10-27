@@ -284,6 +284,9 @@ describe("AppShell sync", () => {
 const WINDOWS =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
 
+const text = (data: string | Uint8Array) =>
+  typeof data === "string" ? data : new TextDecoder().decode(data);
+
 /**
  * How Clear scrollback reaches a local pane's xterm.js: the erase it writes,
  * and whether it cleared the screen. What each does to the cursor is the
@@ -296,7 +299,10 @@ function clearOf(userAgent: string) {
   const write = vi.spyOn(terminal, "write");
   const clear = vi.spyOn(terminal, "clear");
   app.run("terminal.clear");
-  return { written: write.mock.calls.map(([data]) => data), cleared: clear.mock.calls.length };
+  return {
+    written: write.mock.calls.map(([data]) => text(data)),
+    cleared: clear.mock.calls.length,
+  };
 }
 
 describe("AppShell clearing the scrollback", () => {

@@ -161,6 +161,8 @@ export class Lane {
   readonly #onParsed: (bytes: number) => void;
   /** Chunks of at most `slice` bytes, oldest first, from `#head` on. */
   #chunks: Uint8Array[] = [];
+  /** The queued chunks the app wrote itself, which are parsed but not counted. */
+  readonly #local = new WeakSet<Uint8Array>();
   #head = 0;
   /** Chunks handed to xterm.js in a turn and not parsed yet, at most IN_FLIGHT. */
   #inFlight = 0;
@@ -209,6 +211,23 @@ export class Lane {
     if (this.ready) this.#scheduler.enqueue(this);
   }
 
+  /**
+   * Writes `data`, which the app made, after everything pushed so far: at
+   * the end of a whole push, never between the chunks a push was cut into,
+   * which can fall inside an escape sequence. Its bytes reach no `onParsed`,
+   * because the session did not send them.
+   */
+  pushLocal(data: Uint8Array): void {
+    if (this.#closed || data.byteLength === 0) return;
+    if (!this.hasQueued && this.#scheduler.isIdle(this)) {
+      this.#write(data, () => {});
+      return;
+    }
+    this.#local.add(data);
+    this.#chunks.push(data);
+    if (this.ready) this.#scheduler.enqueue(this);
+  }
+
   /** Starts a turn; called by the scheduler. */
   run(): void {
     if (!this.ready) {
@@ -239,8 +258,9 @@ export class Lane {
     this.#head += 1;
     this.#compact();
     this.#inFlight += 1;
+    const counted = this.#local.has(chunk) ? 0 : chunk.byteLength;
     try {
-      this.#write(chunk, () => this.#parsed(chunk.byteLength));
+      this.#write(chunk, () => this.#parsed(counted));
     } catch (error) {
       // xterm.js throws only past its 50 MB discard limit, which flow
       // control keeps out of reach. The pane cannot go on either way.
@@ -254,7 +274,7 @@ export class Lane {
     if (this.#closed) return;
     this.#inFlight -= 1;
     try {
-      this.#onParsed(bytes);
+      if (bytes > 0) this.#onParsed(bytes);
     } finally {
       this.#continue();
     }

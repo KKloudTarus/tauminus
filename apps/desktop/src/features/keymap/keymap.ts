@@ -246,6 +246,11 @@ export function detectPlatform(userAgent: string): Platform {
   return /\bMac OS X\b|\bMacintosh\b/.test(userAgent) ? "mac" : "other";
 }
 
+/** Whether the webview runs on Windows, where local shells run behind ConPTY. */
+export function detectWindows(userAgent: string): boolean {
+  return /\bWindows\b/u.test(userAgent);
+}
+
 const MODIFIERS = ["ctrl", "alt", "shift", "meta"] as const;
 type Modifier = (typeof MODIFIERS)[number];
 
