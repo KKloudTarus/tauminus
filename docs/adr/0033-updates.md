@@ -85,3 +85,8 @@ runs in that job.
   0.0.2 for a bundle signed as 0.0.1 was refused, a signature with no
   version was refused, and a correct one installed in place of the app
   file and restarted into it.
+- `a_bundle_installs_only_as_it_was_signed_for_its_version` repeats
+  those refusals on every CI run: `update_check` and the download
+  `update_install` uses, with the settings in `tauri.conf.json`, against
+  a local server and bundles signed by a test key. The stall abort
+  has no test: it needs `STALL` and `WATCH` injected to run in time.

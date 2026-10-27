@@ -52,9 +52,14 @@ SPDX-FileCopyrightText = [
 ]
 SPDX-License-Identifier = "OFL-1.1"
 
-# A signing key made for the updater tests; it signs nothing anyone installs.
+# A signing key made for the updater tests, and a bundle it signed; it
+# signs nothing anyone installs.
 [[annotations]]
-path = ["xtask/tests/fixtures/updater-test.key", "xtask/tests/fixtures/updater-test.key.pub"]
+path = [
+  "xtask/tests/fixtures/updater-test.key",
+  "xtask/tests/fixtures/updater-test.key.pub",
+  "apps/desktop/src-tauri/tests/fixtures/update/**",
+]
 precedence = "override"
 SPDX-FileCopyrightText = "2026 Tauminus contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
