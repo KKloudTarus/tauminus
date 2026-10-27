@@ -31,7 +31,8 @@ use russh::keys::{
 use tauminus_app::ports::{
     Answer, ChallengeField, ConnectError, Credentials, Prompt, Prompter, Secret,
 };
-use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, IdentityAgent};
+use tauminus_app::vault::SecretError;
+use tauminus_domain::{AuthMethod, AuthOptions, Endpoint, IdentityAgent, SecretSlot};
 use tauminus_fido::SecurityKey;
 use tracing::debug;
 use zeroize::Zeroizing;
@@ -74,15 +75,16 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) agent: &'a AgentSource,
     /// Signs for FIDO2 key files; none leaves them to an agent.
     pub(crate) security_key: Option<&'a Arc<dyn SecurityKey>>,
-    /// From a vault identity: tried before key files and prompts.
+    /// From a vault identity: tried before key files and prompts. A secret
+    /// a password manager holds is read only when the server takes the
+    /// method that spends it.
     pub(crate) credentials: &'a Credentials,
+    /// What this sign-in read of the identity's secrets.
+    pub(crate) read: Read,
     /// Stored passwords a server turned down; not sent again.
     pub(crate) rejected: &'a RejectedPasswords,
     /// Set when the server closed the connection itself.
     pub(crate) goodbye: &'a std::sync::OnceLock<String>,
-    /// This sign-in's turn to spend the stored password; dropped once the
-    /// server has judged it.
-    pub(crate) turn: Option<tokio::sync::OwnedMutexGuard<()>>,
     /// The stored password was the last answer the server got, so a
     /// failure now is about it, not a later factor.
     pub(crate) stored_last: bool,
@@ -90,6 +92,20 @@ pub(crate) struct Authenticator<'a> {
     pub(crate) skipped_fido: bool,
     /// Why the security key last did not sign, named among what was tried.
     pub(crate) fido_failed: Vec<&'static str>,
+}
+
+/// The identity's password once read for one sign-in, and why a password
+/// manager gave nothing: the sign-in goes on with the other methods, and
+/// that is the error if none gets in.
+#[derive(Default)]
+pub(crate) struct Read {
+    /// Whether the password was taken up yet.
+    taken: bool,
+    password: Option<Secret>,
+    /// This sign-in's turn to spend the stored password; dropped once the
+    /// server has judged it.
+    turn: Option<tokio::sync::OwnedMutexGuard<()>>,
+    failed: Option<SecretError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +163,16 @@ impl Authenticator<'_> {
     /// Bounded: at most `MAX_PASSES` passes over the configured methods, each
     /// method with its own bound on prompts and requests.
     pub(crate) async fn run(mut self) -> Result<(), ConnectError> {
+        let result = self.sign_in().await;
+        match (result, self.read.failed.take()) {
+            // Asked in a password manager's place and cancelled: why it
+            // was asked is the answer.
+            (Err(ConnectError::Cancelled), Some(error)) => Err(error.into()),
+            (result, _) => result,
+        }
+    }
+
+    async fn sign_in(&mut self) -> Result<(), ConnectError> {
         let user = self.endpoint.user.as_str().to_owned();
         let mut server = Server {
             allowed: None,
@@ -175,19 +201,25 @@ impl Authenticator<'_> {
         // instead of every reconnect spending one of the account's tries.
         // Another sign-in spending the same password goes first; its verdict
         // decides whether this one sends it.
+        // A password the vault keeps is taken up now; one a password
+        // manager holds, at the first method that would send it, after a
+        // partial success as much as before one.
         let mut stored = None;
-        if let Some(password) = &self.credentials.password {
-            let turn = self.rejected.turn(&user, password).await;
-            if !self.rejected.contains(&user, password) {
-                stored = Some(password.clone());
-                self.turn = Some(turn);
-            }
+        if self.credentials.password.is_some() {
+            self.take_password(&user, &mut stored).await;
         }
         for _ in 0..MAX_PASSES {
             server.partial = false;
             for method in self.options.methods.clone() {
                 if !server.permits(kind(method)) {
                     continue;
+                }
+                if matches!(
+                    method,
+                    AuthMethod::Password | AuthMethod::KeyboardInteractive
+                ) && !self.read.taken
+                {
+                    self.take_password(&user, &mut stored).await;
                 }
                 let outcome = match method {
                     AuthMethod::Agent => self.agent(&user, &mut server).await?,
@@ -223,6 +255,9 @@ impl Authenticator<'_> {
         }
         for reason in &self.fido_failed {
             tried.push((*reason).to_owned());
+        }
+        if let Some(error) = self.read.failed.take() {
+            return Err(error.into());
         }
         Err(ConnectError::AuthFailed {
             endpoint: self.endpoint.to_string(),
@@ -387,12 +422,12 @@ impl Authenticator<'_> {
         if spent
             && self.stored_last
             && refused
-            && let Some(password) = &self.credentials.password
+            && let Some(password) = &self.read.password
         {
             self.rejected.insert(user, password);
         }
         if spent {
-            self.turn = None;
+            self.read.turn = None;
         }
         let outcome = result?;
         self.link_alive()?;
@@ -486,15 +521,46 @@ impl Authenticator<'_> {
         Ok(Outcome::Tried)
     }
 
+    /// The identity's password, read once for this sign-in, as `stored`
+    /// unless a server already turned it down.
+    async fn take_password(&mut self, user: &str, stored: &mut Option<Secret>) {
+        self.read.taken = true;
+        if !self.credentials.holds(SecretSlot::Password) {
+            return;
+        }
+        self.read.password = self.secret(SecretSlot::Password).await;
+        if let Some(password) = &self.read.password {
+            let turn = self.rejected.turn(user, password).await;
+            if !self.rejected.contains(user, password) {
+                *stored = Some(password.clone());
+                self.read.turn = Some(turn);
+            }
+        }
+    }
+
+    /// The identity's secret for `slot`, read from a password manager if
+    /// it holds it. A manager that gives nothing leaves the slot empty,
+    /// and its error waits in case no other method gets in.
+    async fn secret(&mut self, slot: SecretSlot) -> Option<Secret> {
+        match self.credentials.fetch(slot).await {
+            Ok(secret) => secret,
+            Err(error) => {
+                debug!(manager = error.manager, "a password manager gave no secret");
+                self.read.failed.get_or_insert(error);
+                None
+            }
+        }
+    }
+
     /// The vault identity's key, decoded with its stored passphrase.
     async fn identity_key(
         &mut self,
         user: &str,
         server: &mut Server,
     ) -> Result<Outcome, ConnectError> {
-        let Some(pem) = &self.credentials.private_key else {
+        if !self.credentials.holds(SecretSlot::PrivateKey) {
             return Ok(Outcome::Skipped);
-        };
+        }
         // Keys follow the host's method list, as key files and the agent do.
         let keys_allowed = self
             .options
@@ -504,7 +570,21 @@ impl Authenticator<'_> {
         if !keys_allowed || !server.permits(MethodKind::PublicKey) || server.partial {
             return Ok(Outcome::Skipped);
         }
-        let key = match decode_off_thread(pem, self.credentials.passphrase.clone()).await {
+        let Some(pem) = self.secret(SecretSlot::PrivateKey).await else {
+            return Ok(Outcome::Skipped);
+        };
+        // A passphrase a password manager holds is read only for a key that
+        // asks for one.
+        let stored = self.credentials.passphrase.clone();
+        let mut decoded = decode_off_thread(&pem, stored.clone()).await;
+        if matches!(decoded, Err(russh::keys::Error::KeyIsEncrypted))
+            && stored.is_none()
+            && self.credentials.holds(SecretSlot::Passphrase)
+            && let Some(passphrase) = self.secret(SecretSlot::Passphrase).await
+        {
+            decoded = decode_off_thread(&pem, Some(passphrase)).await;
+        }
+        let key = match decoded {
             Ok(key) => Arc::new(key),
             Err(error) => {
                 debug!(%error, "the identity's key does not decode");
@@ -582,7 +662,7 @@ impl Authenticator<'_> {
             if server.settle(result) {
                 // Typed and taken, and the same as the vault's: it was the
                 // link, or another host, that turned it down before.
-                if !from_store && self.credentials.password.as_ref() == Some(&password) {
+                if !from_store && self.read.password.as_ref() == Some(&password) {
                     self.rejected.remove(user, &password);
                 }
                 return Ok(Outcome::Done);
@@ -593,7 +673,7 @@ impl Authenticator<'_> {
                 self.rejected.insert(user, &password);
             }
             if from_store {
-                self.turn = None;
+                self.read.turn = None;
             }
             self.link_alive()?;
         }

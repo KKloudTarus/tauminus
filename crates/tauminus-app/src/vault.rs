@@ -18,7 +18,9 @@ use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
-use crate::ports::{Secret, SyncTarget};
+use tauminus_domain::{SecretRef, SecretSlot};
+
+use crate::ports::{BoxFuture, Secret, SyncTarget};
 
 /// Idle time before the vault locks itself, unless changed.
 pub const DEFAULT_IDLE: Duration = Duration::from_mins(15);
@@ -150,6 +152,44 @@ pub enum KeychainState {
     },
 }
 
+/// An identity's secrets that a password manager holds, by slot: each
+/// read when it is spent, never kept (ADR 0035). A slot holds a secret
+/// or a reference, never both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretRefs {
+    pub password: Option<SecretRef>,
+    pub private_key: Option<SecretRef>,
+    pub passphrase: Option<SecretRef>,
+}
+
+impl SecretRefs {
+    pub fn get(&self, slot: SecretSlot) -> Option<&SecretRef> {
+        match slot {
+            SecretSlot::Password => self.password.as_ref(),
+            SecretSlot::PrivateKey => self.private_key.as_ref(),
+            SecretSlot::Passphrase => self.passphrase.as_ref(),
+        }
+    }
+
+    fn get_mut(&mut self, slot: SecretSlot) -> &mut Option<SecretRef> {
+        match slot {
+            SecretSlot::Password => &mut self.password,
+            SecretSlot::PrivateKey => &mut self.private_key,
+            SecretSlot::Passphrase => &mut self.passphrase,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        SLOTS.iter().all(|slot| self.get(*slot).is_none())
+    }
+}
+
+const SLOTS: [SecretSlot; 3] = [
+    SecretSlot::Password,
+    SecretSlot::PrivateKey,
+    SecretSlot::Passphrase,
+];
+
 /// A reusable login: user, password, and key, any of which may be absent.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Identity {
@@ -167,6 +207,8 @@ pub struct Identity {
     /// This device shares it through sync. Its own choice: nothing from
     /// the target turns it on for an identity this device holds.
     pub sync: bool,
+    /// The secrets a password manager holds in place of the vault.
+    pub references: SecretRefs,
 }
 
 impl std::fmt::Debug for Identity {
@@ -178,6 +220,7 @@ impl std::fmt::Debug for Identity {
             .field("password", &self.password.as_ref().map(|_| ".."))
             .field("private_key", &self.private_key.as_ref().map(|_| ".."))
             .field("sync", &self.sync)
+            .field("references", &self.references)
             .finish_non_exhaustive()
     }
 }
@@ -192,18 +235,22 @@ pub struct IdentitySummary {
     pub has_key: bool,
     pub public_key: Option<String>,
     pub sync: bool,
+    /// Where a password manager holds a secret: names, never the secret.
+    pub references: SecretRefs,
 }
 
 impl From<&Identity> for IdentitySummary {
     fn from(identity: &Identity) -> Self {
+        let refs = &identity.references;
         Self {
             id: identity.id.clone(),
             name: identity.name.clone(),
             user: identity.user.clone(),
-            has_password: identity.password.is_some(),
-            has_key: identity.private_key.is_some(),
+            has_password: identity.password.is_some() || refs.password.is_some(),
+            has_key: identity.private_key.is_some() || refs.private_key.is_some(),
             public_key: identity.public_key.clone(),
             sync: identity.sync,
+            references: refs.clone(),
         }
     }
 }
@@ -223,6 +270,12 @@ pub struct IdentityInput {
     /// Whether this device shares it through sync; `None` keeps the
     /// choice, off for a new one.
     pub sync: Option<bool>,
+    /// The password manager's references; `None` keeps them. A secret
+    /// given here for a slot takes it from a reference kept from before.
+    pub references: Option<SecretRefs>,
+    /// The references the user was asked against; the save is refused if
+    /// they changed since, so no reference comes back unasked.
+    pub references_seen: Option<SecretRefs>,
 }
 
 /// What a connect may use from an identity.
@@ -232,14 +285,70 @@ pub struct Credentials {
     pub password: Option<Secret>,
     pub private_key: Option<Secret>,
     pub passphrase: Option<Secret>,
+    /// Secrets a password manager holds, read when spent.
+    pub references: SecretRefs,
+    /// What reads them.
+    pub source: Option<Arc<dyn SecretSource>>,
+}
+
+impl Credentials {
+    fn stored(&self, slot: SecretSlot) -> Option<&Secret> {
+        match slot {
+            SecretSlot::Password => self.password.as_ref(),
+            SecretSlot::PrivateKey => self.private_key.as_ref(),
+            SecretSlot::Passphrase => self.passphrase.as_ref(),
+        }
+    }
+
+    /// Whether there is a secret for `slot`, kept or referenced.
+    pub fn holds(&self, slot: SecretSlot) -> bool {
+        self.stored(slot).is_some() || self.references.get(slot).is_some()
+    }
+
+    /// The secret for `slot`: the vault's, or read from the password
+    /// manager now. Call it only when the secret is about to be spent.
+    pub async fn fetch(&self, slot: SecretSlot) -> Result<Option<Secret>, SecretError> {
+        if let Some(secret) = self.stored(slot) {
+            return Ok(Some(secret.clone()));
+        }
+        let Some(reference) = self.references.get(slot) else {
+            return Ok(None);
+        };
+        let source = self.source.as_ref().ok_or_else(|| SecretError {
+            manager: reference.manager(),
+            message: "no password manager is set up in this build".into(),
+            sign_in: reference.sign_in(),
+        })?;
+        source.fetch(reference, slot).await.map(Some)
+    }
 }
 
 impl std::fmt::Debug for Credentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Credentials")
             .field("user", &self.user)
+            .field("references", &self.references)
             .finish_non_exhaustive()
     }
+}
+
+/// A password manager did not give a secret.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{manager} did not give the secret: {message}; if it is locked, {sign_in}")]
+pub struct SecretError {
+    pub manager: &'static str,
+    pub message: String,
+    pub sign_in: &'static str,
+}
+
+/// Reads a secret a password manager holds. The desktop runs the
+/// manager's own CLI.
+pub trait SecretSource: Send + Sync + 'static {
+    fn fetch<'a>(
+        &'a self,
+        reference: &'a SecretRef,
+        slot: SecretSlot,
+    ) -> BoxFuture<'a, Result<Secret, SecretError>>;
 }
 
 /// The vault file and the keychain, behind the adapter. Every method may
@@ -424,6 +533,7 @@ pub struct Vault {
     /// One Argon2id run at a time: each takes the file's memory cost (64 MiB
     /// by default), so parallel unlocks must not add up.
     kdf: Mutex<()>,
+    secrets: std::sync::OnceLock<Arc<dyn SecretSource>>,
 }
 
 impl std::fmt::Debug for Vault {
@@ -457,6 +567,7 @@ impl Vault {
                 sessions: 0,
             }),
             kdf: Mutex::new(()),
+            secrets: std::sync::OnceLock::new(),
         });
         tokio::spawn(auto_lock(Arc::downgrade(&vault)));
         vault
@@ -673,9 +784,21 @@ impl Vault {
                 password: identity.password,
                 private_key: identity.private_key,
                 passphrase: identity.passphrase,
+                references: identity.references,
+                source: None,
             })
         })
         .await
+        .map(|mut credentials| {
+            credentials.source = self.secrets.get().cloned();
+            credentials
+        })
+    }
+
+    /// What reads the secrets a password manager holds; set once, when
+    /// the app starts.
+    pub fn set_secret_source(&self, source: Arc<dyn SecretSource>) {
+        let _ = self.secrets.set(source);
     }
 
     /// The AI assistant's API key. Needs the vault unlocked, and counts as
@@ -999,6 +1122,55 @@ fn check_password(password: &Secret) -> Result<(), VaultError> {
     Ok(())
 }
 
+/// The references an edit leaves: the ones it sets, or those kept from
+/// before less any slot it types a secret into. Refused when the
+/// references the user was asked against changed meanwhile.
+fn references_after(input: &IdentityInput, old: &SecretRefs) -> Result<SecretRefs, VaultError> {
+    if input
+        .references_seen
+        .as_ref()
+        .is_some_and(|seen| seen != old)
+    {
+        return Err(VaultError::Invalid(
+            "the identity changed while it was being saved: look at it again".into(),
+        ));
+    }
+    let Some(set) = &input.references else {
+        let mut kept = old.clone();
+        for (slot, given) in
+            SLOTS
+                .into_iter()
+                .zip([&input.password, &input.private_key, &input.passphrase])
+        {
+            if given.as_ref().is_some_and(|s| !s.is_empty()) {
+                *kept.get_mut(slot) = None;
+            }
+        }
+        return Ok(kept);
+    };
+    Ok(set.clone())
+}
+
+/// A reference leaves no secret beside it, and keeps the identity off
+/// sync.
+fn settle_references(identity: &mut Identity) -> Result<(), VaultError> {
+    for slot in SLOTS {
+        if identity.references.get(slot).is_some() {
+            *match slot {
+                SecretSlot::Password => &mut identity.password,
+                SecretSlot::PrivateKey => &mut identity.private_key,
+                SecretSlot::Passphrase => &mut identity.passphrase,
+            } = None;
+        }
+    }
+    if identity.sync && !identity.references.is_empty() {
+        return Err(VaultError::Invalid(
+            "an identity that reads a password manager is not shared through sync".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Adds or edits identity `input` in `vault` and saves it. Returns its id.
 fn save_into(
     vault: &mut dyn OpenVault,
@@ -1022,7 +1194,12 @@ fn save_into(
         None => old,
     };
     let old = current.clone();
-    let key_changed = input.private_key.is_some();
+    let old_refs = old
+        .as_ref()
+        .map(|o| o.references.clone())
+        .unwrap_or_default();
+    let references = references_after(input, &old_refs)?;
+    let key_changed = input.private_key.is_some() || references.private_key != old_refs.private_key;
     let sync = input
         .sync
         .unwrap_or_else(|| old.as_ref().is_some_and(|o| o.sync));
@@ -1053,7 +1230,10 @@ fn save_into(
             old.and_then(|o| o.public_key)
         },
         sync,
+        references,
     };
+    let mut identity = identity;
+    settle_references(&mut identity)?;
     let id = identity.id.clone();
     vault.put_identity(&identity)?;
     match vault.save() {
@@ -1100,6 +1280,23 @@ fn check_identity(input: &IdentityInput) -> Result<(), VaultError> {
         && let Err(e) = tauminus_domain::UserName::parse(user)
     {
         return Err(VaultError::Invalid(e.to_string()));
+    }
+    if let Some(references) = &input.references {
+        for (slot, given) in
+            SLOTS
+                .into_iter()
+                .zip([&input.password, &input.private_key, &input.passphrase])
+        {
+            let Some(reference) = references.get(slot) else {
+                continue;
+            };
+            reference
+                .check(slot)
+                .map_err(|e| VaultError::Invalid(e.to_string()))?;
+            if given.as_ref().is_some_and(|s| !s.is_empty()) {
+                return invalid("a secret is kept in the vault or in a password manager, not both");
+            }
+        }
     }
     for secret in [&input.password, &input.private_key, &input.passphrase]
         .into_iter()

@@ -5,6 +5,8 @@
 //! sets up. A command that asks for state the app does not manage fails
 //! here, not in the user's hands.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{INVOKE_KEY, get_ipc_response, mock_builder, mock_context, noop_assets};
@@ -31,6 +33,10 @@ fn app(name: &str) -> (App<tauri::test::MockRuntime>, Scratch) {
         .invoke_handler(specta_builder().invoke_handler())
         .build(mock_context(noop_assets()))
         .unwrap();
+    // In place of the system's dialog, which the mock runtime has not.
+    let consent = Arc::new(TestConsent::default());
+    tauri::Manager::manage(&app, Arc::clone(&consent));
+    tauri::Manager::manage::<crate::secrets::Consent>(&app, consent);
     install(
         &app,
         Paths {
@@ -40,6 +46,26 @@ fn app(name: &str) -> (App<tauri::test::MockRuntime>, Scratch) {
         },
     );
     (app, Scratch(dir))
+}
+
+/// Answers the password-manager dialog with `allow`, and keeps what it
+/// was asked.
+#[derive(Default)]
+struct TestConsent {
+    allow: std::sync::atomic::AtomicBool,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl crate::secrets::ReferenceConsent for TestConsent {
+    fn approve(&self, question: String) -> tauminus_app::ports::BoxFuture<'_, bool> {
+        self.asked.lock().unwrap().push(question);
+        let allow = self.allow.load(std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move { allow })
+    }
+}
+
+fn consent(app: &App<tauri::test::MockRuntime>) -> Arc<TestConsent> {
+    Arc::clone(&*tauri::Manager::state::<Arc<TestConsent>>(app))
 }
 
 fn call(app: &App<tauri::test::MockRuntime>, cmd: &str, args: Value) -> Result<Value, Value> {
@@ -243,9 +269,9 @@ fn triggers_fire_on_lines_and_notify_only_from_the_backend_s_own_text() {
 
     // No system notification while the window has focus; then one, made of
     // the rule's name only, and not again within 30 s.
-    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+    let shown = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
     let notices = tauri::Manager::state::<crate::notices::Notices>(&app);
-    let seen = std::sync::Arc::clone(&shown);
+    let seen = Arc::clone(&shown);
     notices.set_show(Box::new(move |title, body| {
         seen.lock().unwrap().push((title, body));
         Ok(())
@@ -631,4 +657,77 @@ fn a_shared_identity_syncs_and_its_change_waits_for_review() {
         call(&b, "sync_reviews", json!({})).unwrap_err()["code"],
         "vault_locked"
     );
+}
+
+#[test]
+fn a_password_manager_reference_needs_the_user_s_own_yes() {
+    let (app, _dir) = app("refs");
+    call(
+        &app,
+        "vault_create",
+        json!({"password": "vault password 1"}),
+    )
+    .unwrap();
+    let reference =
+        json!({"password": {"manager": "onePassword", "reference": "op://Ops/db/password"}});
+    let save = |identity: Value| call(&app, "identity_save", json!({ "identity": identity }));
+
+    // Refused in the dialog: nothing is saved.
+    let refused = save(json!({"name": "db", "references": reference})).unwrap_err();
+    assert_eq!(refused["code"], "cancelled", "{refused}");
+    assert_eq!(call(&app, "identities_list", json!({})).unwrap(), json!([]));
+    let asked = consent(&app).asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert!(
+        asked[0].contains("password: 1Password op://Ops/db/password"),
+        "{}",
+        asked[0]
+    );
+
+    // Allowed: saved, and shown by name only.
+    consent(&app)
+        .allow
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let id = save(json!({"name": "db", "references": reference})).unwrap();
+    let listed = call(&app, "identities_list", json!({})).unwrap();
+    assert_eq!(listed[0]["hasPassword"], true);
+    assert_eq!(
+        listed[0]["references"]["password"]["reference"],
+        "op://Ops/db/password"
+    );
+
+    // The same reference kept is not asked about again.
+    save(json!({"id": id, "name": "db prod", "references": reference})).unwrap();
+    assert_eq!(consent(&app).asked.lock().unwrap().len(), 2);
+
+    // A reference that breaks its grammar is refused before any dialog,
+    // and one is never shared through sync.
+    let odd = save(json!({"name": "x", "references": {"password": {"manager": "onePassword", "reference": "--out-file=/tmp/x"}}}))
+        .unwrap_err();
+    assert_eq!(odd["code"], "invalid_argument", "{odd}");
+    assert_eq!(consent(&app).asked.lock().unwrap().len(), 2);
+    let shared = save(json!({"id": id, "name": "db", "sync": true})).unwrap_err();
+    assert_eq!(shared["code"], "invalid_argument", "{shared}");
+    // A name that would draw a line of its own in the dialog, or turn the
+    // text around, never reaches it.
+    for name in ["db\u{2028}\u{2022} password: op://x/y/z", "db\u{202e}gol"] {
+        let spoof = save(json!({"name": name, "references": reference})).unwrap_err();
+        assert_eq!(spoof["code"], "invalid_argument", "{spoof}");
+    }
+    // Nor does an identity shared already, its sharing kept.
+    let shared_id = save(json!({"name": "s", "password": "pw", "sync": true})).unwrap();
+    let kept = save(json!({"id": shared_id, "name": "s", "password": "", "references": reference}))
+        .unwrap_err();
+    assert_eq!(kept["code"], "invalid_argument", "{kept}");
+    assert_eq!(consent(&app).asked.lock().unwrap().len(), 2);
+    // What the save would refuse never reaches the dialog either.
+    for edit in [
+        json!({"name": "x", "password": "hunter2", "references": reference}),
+        json!({"name": "x", "sync": true, "references": reference}),
+        json!({"name": "x", "generate": "ed25519", "references": {"privateKey": {"manager": "onePassword", "reference": "op://Ops/k/private key"}}}),
+    ] {
+        let refused = save(edit).unwrap_err();
+        assert_eq!(refused["code"], "invalid_argument", "{refused}");
+    }
+    assert_eq!(consent(&app).asked.lock().unwrap().len(), 2);
 }

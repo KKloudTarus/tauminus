@@ -372,3 +372,88 @@ async fn a_host_another_device_changed_gets_no_password_until_reviewed() {
     settle().await;
     assert!(typed.lock().unwrap().is_empty());
 }
+
+/// A password manager that counts its asks.
+struct Manager(std::sync::Mutex<usize>);
+
+impl crate::vault::SecretSource for Manager {
+    fn fetch<'a>(
+        &'a self,
+        _reference: &'a tauminus_domain::SecretRef,
+        _slot: SecretSlot,
+    ) -> BoxFuture<'a, Result<crate::ports::Secret, SecretError>> {
+        *self.0.lock().unwrap() += 1;
+        Box::pin(async { Ok(secret("from-the-manager")) })
+    }
+}
+
+/// `world`, with the identity's password in a password manager.
+async fn referenced_world() -> (World, Arc<Manager>) {
+    let world = world(None).await;
+    let manager = Arc::new(Manager(std::sync::Mutex::new(0)));
+    world
+        .vault
+        .set_secret_source(Arc::clone(&manager) as Arc<dyn crate::vault::SecretSource>);
+    world
+        .vault
+        .save_identity(IdentityInput {
+            id: Some(world.identity.as_str().to_owned()),
+            name: "deploy".into(),
+            user: Some("deploy".into()),
+            references: Some(crate::vault::SecretRefs {
+                password: Some(tauminus_domain::SecretRef::OnePassword {
+                    reference: "op://Ops/db/password".into(),
+                }),
+                ..crate::vault::SecretRefs::default()
+            }),
+            ..IdentityInput::default()
+        })
+        .await
+        .unwrap();
+    (world, manager)
+}
+
+#[tokio::test]
+async fn a_password_manager_is_asked_only_once_a_fill_is_allowed() {
+    let (world, manager) = referenced_world().await;
+    let (id, events, typed) = session(&world.sessions, world.saved(SessionKind::Ssh));
+    let seen = show(&world, id, &events, "[sudo] password for deploy: ").await;
+    // Offered by name; offering asks nothing of the manager.
+    assert_eq!(
+        world.fill.offer(id).await.unwrap().identity.as_deref(),
+        Some("deploy")
+    );
+    assert_eq!(*manager.0.lock().unwrap(), 0);
+    world.fill.type_password(id, seen).await.unwrap();
+    settle().await;
+    assert_eq!(typed.lock().unwrap().as_slice(), ["from-the-manager"]);
+    assert_eq!(*manager.0.lock().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn a_host_held_for_review_never_asks_the_password_manager() {
+    let (world, manager) = referenced_world().await;
+    let notes = Arc::new(crate::fakes::FakeTrustStore::default());
+    let mut held = crate::trust::Approvals::new();
+    held.insert(crate::trust::Subject::Host(world.host.clone()), None);
+    let (_, read) = crate::ports::TrustStore::load(&*notes).await.unwrap();
+    crate::ports::TrustStore::save(&*notes, &held, read)
+        .await
+        .unwrap();
+    let trust = Arc::new(crate::trust::Trust::open(notes).await.unwrap());
+    let fill = Fill::new(
+        Arc::clone(&world.sessions),
+        Arc::clone(&world.hosts),
+        Arc::clone(&world.vault),
+    )
+    .with_trust(trust, None);
+    let (id, events, typed) = session(&world.sessions, world.saved(SessionKind::Ssh));
+    let seen = show(&world, id, &events, "[sudo] password for deploy: ").await;
+    assert!(matches!(
+        fill.type_password(id, seen).await,
+        Err(FillError::Trust(crate::trust::TrustError::NeedsReview(_)))
+    ));
+    assert_eq!(*manager.0.lock().unwrap(), 0);
+    settle().await;
+    assert!(typed.lock().unwrap().is_empty());
+}

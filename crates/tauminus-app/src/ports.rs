@@ -255,6 +255,10 @@ pub enum ConnectError {
     Protocol(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// A password manager held a secret this sign-in needed, and did
+    /// not give it.
+    #[error(transparent)]
+    Secret(#[from] crate::vault::SecretError),
 }
 
 /// How a script run with [`SshConnector::run_script`] ended.

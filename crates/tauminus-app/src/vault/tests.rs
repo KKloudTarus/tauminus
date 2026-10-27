@@ -294,6 +294,7 @@ async fn secrets_are_write_only_and_kept_unless_replaced() {
             has_key: true,
             public_key: Some("ssh-ed25519 AAAA deploy".into()),
             sync: false,
+            references: SecretRefs::default(),
         }
     );
     // An edit that leaves secrets out keeps them.
@@ -854,4 +855,292 @@ async fn the_sync_setup_is_kept_and_reading_it_is_no_use() {
     tokio::time::advance(DEFAULT_IDLE / 2).await;
     // Idle as long as it was: a background sync keeps nothing open.
     assert_eq!(vault.identities().await, Err(VaultError::Locked));
+}
+
+/// Plays a password manager: hands back `secret`, and counts the asks.
+struct Manager {
+    asked: StdMutex<Vec<(SecretRef, SecretSlot)>>,
+    gives: Result<&'static str, &'static str>,
+}
+
+impl SecretSource for Manager {
+    fn fetch<'a>(
+        &'a self,
+        reference: &'a SecretRef,
+        slot: SecretSlot,
+    ) -> BoxFuture<'a, Result<Secret, SecretError>> {
+        self.asked.lock().unwrap().push((reference.clone(), slot));
+        let given = self.gives.map(secret).map_err(|message| SecretError {
+            manager: reference.manager(),
+            message: message.into(),
+            sign_in: reference.sign_in(),
+        });
+        Box::pin(async move { given })
+    }
+}
+
+fn op(reference: &str) -> SecretRef {
+    SecretRef::OnePassword {
+        reference: reference.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_reference_takes_its_slot_from_the_vault_and_back() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let id = vault
+        .save_identity(IdentityInput {
+            password: Some(secret("hunter2")),
+            passphrase: Some(secret("open sesame")),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    // A reference set for the password leaves no stored password beside it.
+    let refs = SecretRefs {
+        password: Some(op("op://Ops/db/password")),
+        ..SecretRefs::default()
+    };
+    vault
+        .save_identity(IdentityInput {
+            id: Some(id.clone()),
+            references: Some(refs.clone()),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let summary = vault.peek(&id).await.unwrap().unwrap();
+    assert!(summary.has_password);
+    assert_eq!(summary.references, refs);
+    let held = vault.credentials(&id).await.unwrap();
+    assert!(held.password.is_none());
+    assert_eq!(
+        held.passphrase.as_deref().map(String::as_str),
+        Some("open sesame")
+    );
+
+    // A password typed in later takes the slot back; the edit keeps the
+    // other references as they were.
+    vault
+        .save_identity(IdentityInput {
+            id: Some(id.clone()),
+            password: Some(secret("new password")),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let held = vault.credentials(&id).await.unwrap();
+    assert_eq!(
+        held.password.as_deref().map(String::as_str),
+        Some("new password")
+    );
+    assert_eq!(held.references, SecretRefs::default());
+}
+
+#[tokio::test]
+async fn a_reference_is_checked_and_never_shared() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let refused = |input: IdentityInput| {
+        let vault = Arc::clone(&vault);
+        async move {
+            match vault.save_identity(input).await {
+                Err(VaultError::Invalid(message)) => message,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    let both = refused(IdentityInput {
+        password: Some(secret("hunter2")),
+        references: Some(SecretRefs {
+            password: Some(op("op://Ops/db/password")),
+            ..SecretRefs::default()
+        }),
+        ..input("Deploy")
+    })
+    .await;
+    assert_eq!(
+        both,
+        "a secret is kept in the vault or in a password manager, not both"
+    );
+    let odd = refused(IdentityInput {
+        references: Some(SecretRefs {
+            password: Some(op("op://Ops/db/password?attribute=otp")),
+            ..SecretRefs::default()
+        }),
+        ..input("Deploy")
+    })
+    .await;
+    assert!(odd.starts_with("a 1Password reference reads"), "{odd}");
+    let key = refused(IdentityInput {
+        references: Some(SecretRefs {
+            private_key: Some(SecretRef::Bitwarden {
+                item: "3f2504e0-4f89-11d3-9a0c-0305e82c3301".into(),
+            }),
+            ..SecretRefs::default()
+        }),
+        ..input("Deploy")
+    })
+    .await;
+    assert!(key.starts_with("Bitwarden gives a password"), "{key}");
+    let shared = refused(IdentityInput {
+        sync: Some(true),
+        references: Some(SecretRefs {
+            password: Some(op("op://Ops/db/password")),
+            ..SecretRefs::default()
+        }),
+        ..input("Deploy")
+    })
+    .await;
+    assert_eq!(
+        shared,
+        "an identity that reads a password manager is not shared through sync"
+    );
+    assert_eq!(vault.identities().await.unwrap(), []);
+}
+
+#[tokio::test]
+async fn a_referenced_secret_is_read_only_when_fetched_and_each_time() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let manager = Arc::new(Manager {
+        asked: StdMutex::new(Vec::new()),
+        gives: Ok("from-the-manager"),
+    });
+    vault.set_secret_source(Arc::clone(&manager) as Arc<dyn SecretSource>);
+    let id = vault
+        .save_identity(IdentityInput {
+            passphrase: Some(secret("stored")),
+            references: Some(SecretRefs {
+                password: Some(op("op://Ops/db/password")),
+                ..SecretRefs::default()
+            }),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let held = vault.credentials(&id).await.unwrap();
+    assert!(manager.asked.lock().unwrap().is_empty(), "nothing read yet");
+    assert!(held.holds(SecretSlot::Password));
+    assert!(!held.holds(SecretSlot::PrivateKey));
+    // The vault's own secret never asks the manager.
+    let stored = held.fetch(SecretSlot::Passphrase).await.unwrap().unwrap();
+    assert_eq!(stored.as_str(), "stored");
+    assert_eq!(held.fetch(SecretSlot::PrivateKey).await.unwrap(), None);
+    assert!(manager.asked.lock().unwrap().is_empty());
+    for _ in 0..2 {
+        let read = held.fetch(SecretSlot::Password).await.unwrap().unwrap();
+        assert_eq!(read.as_str(), "from-the-manager");
+    }
+    assert_eq!(
+        *manager.asked.lock().unwrap(),
+        [
+            (op("op://Ops/db/password"), SecretSlot::Password),
+            (op("op://Ops/db/password"), SecretSlot::Password)
+        ]
+    );
+    // Debug never prints a secret.
+    assert!(!format!("{held:?}").contains("stored"));
+}
+
+#[tokio::test]
+async fn a_locked_manager_or_none_says_why() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let id = vault
+        .save_identity(IdentityInput {
+            references: Some(SecretRefs {
+                password: Some(op("op://Ops/db/password")),
+                ..SecretRefs::default()
+            }),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let held = vault.credentials(&id).await.unwrap();
+    let error = held.fetch(SecretSlot::Password).await.unwrap_err();
+    assert_eq!(error.message, "no password manager is set up in this build");
+    vault.set_secret_source(Arc::new(Manager {
+        asked: StdMutex::new(Vec::new()),
+        gives: Err("account is not signed in"),
+    }));
+    let held = vault.credentials(&id).await.unwrap();
+    let error = held.fetch(SecretSlot::Password).await.unwrap_err();
+    assert_eq!(error.manager, "1Password");
+    assert_eq!(error.message, "account is not signed in");
+}
+
+#[tokio::test]
+async fn a_save_holds_to_the_references_the_user_was_asked_against() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let kept = SecretRefs {
+        password: Some(op("op://Ops/db/password")),
+        ..SecretRefs::default()
+    };
+    let id = vault
+        .save_identity(IdentityInput {
+            references: Some(kept.clone()),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    // Asked while it held `kept`; removed meanwhile; the save is refused
+    // rather than bring the reference back unasked.
+    vault
+        .save_identity(IdentityInput {
+            id: Some(id.clone()),
+            references: Some(SecretRefs::default()),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let late = vault
+        .save_identity(IdentityInput {
+            id: Some(id.clone()),
+            references: Some(kept.clone()),
+            references_seen: Some(kept),
+            ..input("Deploy")
+        })
+        .await;
+    assert!(
+        matches!(&late, Err(VaultError::Invalid(m)) if m.starts_with("the identity changed")),
+        "{late:?}"
+    );
+    assert_eq!(
+        vault.peek(&id).await.unwrap().unwrap().references,
+        SecretRefs::default()
+    );
+}
+
+#[tokio::test]
+async fn a_key_moved_to_a_password_manager_drops_the_old_public_half() {
+    let (_, vault) = vault();
+    vault.create(secret("correct horse")).await.unwrap();
+    let id = vault
+        .save_identity(IdentityInput {
+            private_key: Some(secret("-----BEGIN OPENSSH PRIVATE KEY-----")),
+            public_key: Some("ssh-ed25519 AAAA old".into()),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    vault
+        .save_identity(IdentityInput {
+            id: Some(id.clone()),
+            references: Some(SecretRefs {
+                private_key: Some(op("op://Ops/web/private key")),
+                ..SecretRefs::default()
+            }),
+            ..input("Deploy")
+        })
+        .await
+        .unwrap();
+    let summary = vault.peek(&id).await.unwrap().unwrap();
+    assert!(summary.has_key);
+    assert_eq!(
+        summary.public_key, None,
+        "the old key's public half is gone"
+    );
 }

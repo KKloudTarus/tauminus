@@ -18,6 +18,7 @@ mod mosh;
 mod output;
 mod password_prompt;
 mod recording;
+mod secret_ref;
 mod serial;
 mod session;
 mod sftp;
@@ -59,6 +60,7 @@ pub use recording::{
     Bookmark, MAX_BOOKMARK_TEXT, MAX_BOOKMARKS, RecordingMeta, Utf8Carry, cast_header, cast_output,
     cast_resize,
 };
+pub use secret_ref::{SecretCommand, SecretRef, SecretRefError, SecretSlot};
 pub use serial::{
     BAUD_RATES, Parity, SerialError, SerialFlow, SerialPortInfo, SerialSettings, StopBits,
 };

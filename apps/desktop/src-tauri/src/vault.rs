@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauminus_app::ports::Secret;
 use tauminus_app::vault::{
-    IdentityInput, IdentitySummary, KeychainState, MAX_SECRET, PresenceError, Vault, VaultError,
-    VaultStatus,
+    IdentityInput, IdentitySummary, KeychainState, MAX_SECRET, PresenceError, SecretRefs, Vault,
+    VaultError, VaultStatus,
 };
+use tauminus_domain::SecretSlot;
 use tauri::State;
 
 use crate::ipc::{CommandError, ErrorCode};
@@ -105,6 +106,8 @@ pub(crate) struct IdentityView {
     pub(crate) public_key: Option<String>,
     /// This device shares it through sync.
     pub(crate) sync: bool,
+    /// Where a password manager holds a secret: names only.
+    pub(crate) references: crate::secrets::SecretRefsSpec,
 }
 
 impl From<IdentitySummary> for IdentityView {
@@ -117,6 +120,7 @@ impl From<IdentitySummary> for IdentityView {
             has_key: summary.has_key,
             public_key: summary.public_key,
             sync: summary.sync,
+            references: summary.references.into(),
         }
     }
 }
@@ -167,6 +171,10 @@ pub(crate) struct IdentityEdit {
     /// Whether this device shares it through sync; left out keeps it.
     #[serde(default)]
     pub(crate) sync: Option<bool>,
+    /// Where a password manager holds a secret; left out keeps them. A new
+    /// one is read only once the user allows it in a system dialog.
+    #[serde(default)]
+    pub(crate) references: Option<crate::secrets::SecretRefsSpec>,
 }
 
 impl std::fmt::Debug for IdentityEdit {
@@ -180,6 +188,69 @@ impl std::fmt::Debug for IdentityEdit {
 
 fn secret(text: String) -> Secret {
     Secret::new(text)
+}
+
+/// The user's yes to each reference `next` adds to identity `id`, asked
+/// in the system's own dialog. Checked first, so nothing unusable is
+/// put to the user. Returns the references the yes was against, for the
+/// save to hold to.
+async fn allowed(
+    vault: &Vault,
+    consent: &dyn crate::secrets::ReferenceConsent,
+    id: Option<&str>,
+    name: &str,
+    next: &SecretRefs,
+    sync: Option<bool>,
+) -> Result<SecretRefs, CommandError> {
+    let invalid = |e: &str| CommandError::new(ErrorCode::InvalidArgument, e);
+    // The name goes into the dialog: nothing in it may draw a line of its
+    // own or change how the rest reads.
+    let name = name.trim();
+    if name.is_empty()
+        || name.chars().count() > 128
+        || tauminus_cli::shown(name, 128) != name
+        || name.contains(['\u{2028}', '\u{2029}'])
+    {
+        return Err(invalid(
+            "a name that reads a password manager holds no control, format or line-breaking characters",
+        ));
+    }
+    for slot in [
+        SecretSlot::Password,
+        SecretSlot::PrivateKey,
+        SecretSlot::Passphrase,
+    ] {
+        if let Some(reference) = next.get(slot) {
+            reference.check(slot).map_err(|e| invalid(&e.to_string()))?;
+        }
+    }
+    let (before, shared) = match id {
+        Some(id) => vault
+            .peek(id)
+            .await?
+            .map(|summary| (summary.references, summary.sync))
+            .unwrap_or_default(),
+        None => (SecretRefs::default(), false),
+    };
+    // Shared as it stands, unless this edit turns sharing off.
+    if sync.unwrap_or(shared) && !next.is_empty() {
+        return Err(invalid(
+            "an identity that reads a password manager is not shared through sync",
+        ));
+    }
+    let added = crate::secrets::added(&before, next);
+    if added.is_empty()
+        || consent
+            .approve(crate::secrets::question(name, &added))
+            .await
+    {
+        Ok(before)
+    } else {
+        Err(CommandError::new(
+            ErrorCode::Cancelled,
+            "reading the password manager was not allowed",
+        ))
+    }
 }
 
 type VaultState<'a> = State<'a, Arc<Vault>>;
@@ -298,6 +369,7 @@ pub(crate) async fn identity_save(
     vault: VaultState<'_>,
     gate: State<'_, crate::sync::Gate>,
     hosts: State<'_, crate::hosts::Hosts>,
+    consent: State<'_, crate::secrets::Consent>,
     identity: IdentityEdit,
 ) -> Result<String, CommandError> {
     // Into wiped buffers first, so every return below wipes them.
@@ -310,7 +382,35 @@ pub(crate) async fn identity_save(
         passphrase,
         generate,
         sync,
+        references,
     } = identity;
+    let references: Option<SecretRefs> = references.map(Into::into);
+    // What the save would refuse is refused before the user is asked.
+    if let Some(next) = &references {
+        let typed = |given: &Option<String>| given.as_ref().is_some_and(|s| !s.is_empty());
+        let both = (typed(&password) && next.password.is_some())
+            || ((typed(&private_key) || generate.is_some()) && next.private_key.is_some())
+            || (typed(&passphrase) && next.passphrase.is_some());
+        if both {
+            return Err(CommandError::new(
+                ErrorCode::InvalidArgument,
+                "a secret is kept in the vault or in a password manager, not both",
+            ));
+        }
+        if sync == Some(true) && !next.is_empty() {
+            return Err(CommandError::new(
+                ErrorCode::InvalidArgument,
+                "an identity that reads a password manager is not shared through sync",
+            ));
+        }
+    }
+    let references_seen = match &references {
+        Some(next) => {
+            let consent = consent.inner().as_ref();
+            Some(allowed(&vault, consent, id.as_deref(), &name, next, sync).await?)
+        }
+        None => None,
+    };
     let password = password.map(secret);
     let mut private_key = private_key.map(secret);
     let mut passphrase = passphrase.map(secret);
@@ -370,6 +470,8 @@ pub(crate) async fn identity_save(
         passphrase,
         public_key,
         sync,
+        references,
+        references_seen,
     };
     let (id, before, after) = vault.save_identity_printed(input).await?;
     gate.identities_edited(&hosts, &before, &after).await;

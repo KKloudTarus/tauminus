@@ -23,6 +23,7 @@ tauminus-cli = { path = "crates/tauminus-cli" }
 tauminus-cloud = { path = "crates/tauminus-cloud" }
 tauminus-fido = { path = "crates/tauminus-fido" }
 tauminus-import = { path = "crates/tauminus-import" }
+tauminus-secrets = { path = "crates/tauminus-secrets" }
 tauminus-sync = { path = "crates/tauminus-sync" }
 tauminus-domain = { path = "crates/tauminus-domain" }
 tauminus-presence = { path = "crates/tauminus-presence" }

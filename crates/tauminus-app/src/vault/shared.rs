@@ -13,8 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use super::{
-    Failed, Identity, IdentityInput, MAX_IDENTITIES, OpenVault, Vault, VaultError, check_identity,
-    save_into,
+    Failed, Identity, IdentityInput, MAX_IDENTITIES, OpenVault, SecretRefs, Vault, VaultError,
+    check_identity, save_into,
 };
 use crate::ports::{KeyDeriver, Secret, SyncedIdentity};
 use crate::trust::{IdentityPrint, Prints, keyed_digest};
@@ -38,29 +38,39 @@ fn shared(vault: &dyn OpenVault) -> Result<Vec<SyncedIdentity>, VaultError> {
     Ok(out)
 }
 
-/// The digest of what `identity` holds, keyed by `key`. O(n).
-fn digest(key: &[u8; 32], identity: &SyncedIdentity) -> [u8; 32] {
+/// The digest of what `identity` holds and where a password manager
+/// holds the rest, keyed by `key`. O(n). An identity with no references
+/// keeps the digest it had before they existed.
+fn digest(key: &[u8; 32], identity: &SyncedIdentity, refs: &SecretRefs) -> [u8; 32] {
     fn text(value: Option<&str>) -> &[u8] {
         // Distinct from any text: absent is not empty.
         value.map_or(b"\xff", str::as_bytes)
     }
-    keyed_digest(
-        key,
-        &[
-            b"tauminus identity 1",
-            identity.name.as_bytes(),
-            text(identity.user.as_deref()),
-            text(identity.password.as_deref().map(String::as_str)),
-            text(identity.private_key.as_deref().map(String::as_str)),
-            text(identity.passphrase.as_deref().map(String::as_str)),
-        ],
-    )
+    let named = (!refs.is_empty()).then(|| format!("{refs:?}"));
+    let mut parts: Vec<&[u8]> = vec![
+        b"tauminus identity 1",
+        identity.name.as_bytes(),
+        text(identity.user.as_deref()),
+        text(identity.password.as_deref().map(String::as_str)),
+        text(identity.private_key.as_deref().map(String::as_str)),
+        text(identity.passphrase.as_deref().map(String::as_str)),
+    ];
+    if let Some(named) = &named {
+        parts.push(named.as_bytes());
+    }
+    keyed_digest(key, &parts)
 }
 
 /// What the review shows of `identity`, with `public_key` as this device
 /// derived it.
-fn lines(identity: &SyncedIdentity, public_key: Option<&str>) -> Vec<(&'static str, String)> {
-    let login = match (identity.password.is_some(), identity.private_key.is_some()) {
+fn lines(
+    identity: &SyncedIdentity,
+    public_key: Option<&str>,
+    refs: &SecretRefs,
+) -> Vec<(&'static str, String)> {
+    let password = identity.password.is_some() || refs.password.is_some();
+    let key = identity.private_key.is_some() || refs.private_key.is_some();
+    let login = match (password, key) {
         (true, true) => "a password and a key",
         (true, false) => "a password",
         (false, true) => "a key",
@@ -80,17 +90,30 @@ fn lines(identity: &SyncedIdentity, public_key: Option<&str>) -> Vec<(&'static s
     if let Some(key) = public_key {
         out.push(("identity key", key.to_owned()));
     }
+    let managers: Vec<&str> = [&refs.password, &refs.private_key, &refs.passphrase]
+        .into_iter()
+        .flatten()
+        .map(tauminus_domain::SecretRef::manager)
+        .collect();
+    if !managers.is_empty() {
+        out.push(("identity secrets from", managers.join(", ")));
+    }
     out
 }
 
-fn print(key: &[u8; 32], identity: &SyncedIdentity, public_key: Option<&str>) -> IdentityPrint {
+fn print(
+    key: &[u8; 32],
+    identity: &SyncedIdentity,
+    public_key: Option<&str>,
+    refs: &SecretRefs,
+) -> IdentityPrint {
     IdentityPrint {
-        digest: digest(key, identity),
-        lines: lines(identity, public_key),
+        digest: digest(key, identity, refs),
+        lines: lines(identity, public_key, refs),
     }
 }
 
-fn synced(identity: Identity) -> (SyncedIdentity, Option<String>, bool) {
+fn synced(identity: Identity) -> (SyncedIdentity, Option<String>, bool, SecretRefs) {
     (
         SyncedIdentity {
             id: identity.id,
@@ -102,6 +125,7 @@ fn synced(identity: Identity) -> (SyncedIdentity, Option<String>, bool) {
         },
         identity.public_key,
         identity.sync,
+        identity.references,
     )
 }
 
@@ -135,8 +159,8 @@ fn prints_of(vault: &mut dyn OpenVault, ids: Option<&[String]>) -> Result<Prints
     Ok(identities
         .into_iter()
         .map(|identity| {
-            let (identity, public_key, _) = synced(identity);
-            let print = print(&key, &identity, public_key.as_deref());
+            let (identity, public_key, _, refs) = synced(identity);
+            let print = print(&key, &identity, public_key.as_deref(), &refs);
             (identity.id, print)
         })
         .collect())
@@ -154,19 +178,24 @@ fn merged_prints(
         merged.iter().map(|i| (i.id.as_str(), i)).collect();
     let (mut before, mut after) = (Prints::new(), Prints::new());
     for identity in vault.identities()? {
-        let (identity, public_key, sync) = synced(identity);
-        let now = print(&key, &identity, public_key.as_deref());
+        let (identity, public_key, sync, refs) = synced(identity);
+        let now = print(&key, &identity, public_key.as_deref(), &refs);
         // One kept to itself is never taken; one this device shares
         // and the merge leaves out stays here as it is.
         let next = match offered.remove(identity.id.as_str()) {
-            Some(theirs) if sync && *theirs != identity => print(&key, theirs, None),
+            Some(theirs) if sync && *theirs != identity => {
+                print(&key, theirs, None, &SecretRefs::default())
+            }
             _ => now.clone(),
         };
         before.insert(identity.id.clone(), now);
         after.insert(identity.id, next);
     }
     for (id, theirs) in offered {
-        after.insert(id.to_owned(), print(&key, theirs, None));
+        after.insert(
+            id.to_owned(),
+            print(&key, theirs, None, &SecretRefs::default()),
+        );
     }
     Ok((before, after))
 }
@@ -182,6 +211,8 @@ fn as_input(identity: &SyncedIdentity) -> IdentityInput {
         passphrase: identity.passphrase.clone(),
         public_key: None,
         sync: Some(true),
+        references: None,
+        references_seen: None,
     }
 }
 
@@ -443,6 +474,7 @@ fn take(
         passphrase: identity.passphrase.clone(),
         public_key,
         sync: true,
+        references: SecretRefs::default(),
     }))
 }
 

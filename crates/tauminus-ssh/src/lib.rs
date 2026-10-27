@@ -211,7 +211,7 @@ impl RusshConnector {
                 credentials: if last { &credentials } else { &none },
                 rejected: &self.rejected,
                 goodbye: &goodbye,
-                turn: None,
+                read: auth::Read::default(),
                 stored_last: false,
                 skipped_fido: false,
                 fido_failed: Vec::new(),

@@ -21,6 +21,7 @@ mod links;
 mod mosh;
 mod notices;
 mod recordings;
+mod secrets;
 mod serial;
 mod snippets;
 mod ssh;
@@ -270,26 +271,7 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
         }
     });
     manage_libraries(app, &config_dir);
-    let backend = FileVaultBackend::new(
-        VaultFile::new(config_dir.join("vault.json")),
-        Arc::new(OsKeychain::new()),
-    );
-    let presence = Arc::new(tauminus_presence::OsPresence::new());
-    // Windows Hello's prompt opens over the app's window.
-    #[cfg(windows)]
-    if let Some(hwnd) = app
-        .get_webview_window("main")
-        .and_then(|window| window.hwnd().ok())
-    {
-        presence.set_window(hwnd.0 as isize);
-    }
-    let vault = tauri::async_runtime::block_on(async {
-        Vault::with_presence(
-            Arc::new(backend),
-            tauminus_app::vault::DEFAULT_IDLE,
-            presence,
-        )
-    });
+    let vault = open_vault(app, &config_dir);
     manage_history(app, &vault, &config_dir);
     app.manage(Arc::new(tauminus_app::recording::Recordings::new(
         Arc::new(tauminus_store::FileRecordingStore::new(
@@ -322,6 +304,37 @@ pub(crate) fn install<R: tauri::Runtime>(app: &tauri::App<R>, paths: Paths) {
 }
 
 /// The command history, sealed to the vault.
+/// The vault, with the OS's presence check and the password managers'
+/// CLIs.
+fn open_vault<R: tauri::Runtime>(app: &tauri::App<R>, config_dir: &std::path::Path) -> Arc<Vault> {
+    let backend = FileVaultBackend::new(
+        VaultFile::new(config_dir.join("vault.json")),
+        Arc::new(OsKeychain::new()),
+    );
+    let presence = Arc::new(tauminus_presence::OsPresence::new());
+    // Windows Hello's prompt opens over the app's window.
+    #[cfg(windows)]
+    if let Some(hwnd) = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+    {
+        presence.set_window(hwnd.0 as isize);
+    }
+    let vault = tauri::async_runtime::block_on(async {
+        Vault::with_presence(
+            Arc::new(backend),
+            tauminus_app::vault::DEFAULT_IDLE,
+            presence,
+        )
+    });
+    // Secrets from password managers (ADR 0035): read through their own
+    // CLIs, and a new reference only once the user allows it. A consent
+    // managed already (by tests) stands.
+    vault.set_secret_source(Arc::new(tauminus_secrets::ManagerClis::new()));
+    app.manage::<secrets::Consent>(Arc::new(secrets::DialogConsent(app.handle().clone())));
+    vault
+}
+
 fn manage_history<R: tauri::Runtime>(
     app: &tauri::App<R>,
     vault: &Arc<Vault>,
