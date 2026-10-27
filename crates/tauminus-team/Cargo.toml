@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Tauminus contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "tauminus-team"
+description = "The team vault protocol: membership log, keys in epochs, signed items (ADR 0034)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# All already in the tree. X25519 seals each epoch key to a device, as
+# the history seals entries (ECIES: ephemeral key, HKDF-SHA256,
+# XChaCha20-Poly1305); Ed25519 signs log entries and items; SHA-256
+# chains the log.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+curve25519-dalek = { version = "5.0.0", default-features = false, features = ["zeroize"] }
+ed25519-dalek = "3"
+hkdf = "0.13.0"
+rand = "0.10"
+sha2 = { version = "0.11.1", default-features = false }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

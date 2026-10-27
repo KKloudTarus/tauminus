@@ -5928,6 +5928,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauminus-team"
+version = "0.0.0"
+dependencies = [
+ "chacha20poly1305",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hkdf",
+ "rand 0.10.3",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
 name = "tauminus-telnet"
 version = "0.0.0"
 dependencies = [
