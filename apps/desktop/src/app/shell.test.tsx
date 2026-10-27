@@ -11,6 +11,7 @@ import { fakeHosts } from "@/ipc/fake-hosts.ts";
 import { fakeSnippets } from "@/ipc/fake-snippets.ts";
 import { fakeSync } from "@/ipc/fake-sync.ts";
 import { fakeVault } from "@/ipc/fake-vault.ts";
+import type { LocalShellView, SessionClient } from "@/ipc/index.ts";
 
 import { AppShell } from "./shell.ts";
 
@@ -19,9 +20,9 @@ afterEach(() => {
   for (const made of shells.splice(0)) made.dispose();
 });
 
-function shell(hosts = fakeHosts()): AppShell {
+function shell(hosts = fakeHosts(), sessions: SessionClient = fakeSessions): AppShell {
   const made = new AppShell({
-    sessions: fakeSessions,
+    sessions,
     hosts,
     vault: fakeVault(),
     snippets: fakeSnippets(() => []),
@@ -32,6 +33,14 @@ function shell(hosts = fakeHosts()): AppShell {
   });
   shells.push(made);
   return made;
+}
+
+/** A window whose backend lists `listed`, whole or with WSL too slow to answer. */
+function listing(listed: LocalShellView[], complete: boolean): AppShell {
+  return shell(fakeHosts(), {
+    ...fakeSessions,
+    localShells: async () => ({ shells: listed, complete }),
+  });
 }
 
 /** Shows the active tab, so its panes open their sessions. */
@@ -255,10 +264,14 @@ describe("AppShell choosing the local shell", () => {
     localStorage.removeItem("tauminus.workspaces");
   });
 
-  it("lists the shells the backend finds", async () => {
+  it("lists the shells the backend finds, and leaves an unchanged list alone", async () => {
     const app = shell();
     expect(await app.listLocalShells()).toEqual(FAKE_SHELLS);
-    expect(app.getState().localShells).toEqual(FAKE_SHELLS);
+    const listed = app.getState();
+    expect(listed.localShells).toEqual(FAKE_SHELLS);
+    // The palette lists again on each open: the same list changes no state.
+    await app.listLocalShells();
+    expect(app.getState()).toBe(listed);
   });
 
   it("opens new tabs and their splits in the default shell, which it remembers", () => {
@@ -282,11 +295,47 @@ describe("AppShell choosing the local shell", () => {
     expect(next.getState().defaultShell).toEqual(ubuntu);
     next.setDefaultShell(undefined);
     next.workspace.newTab();
-    expect(next.workspace.focusedSpec()).toBeUndefined();
-    expect(next.workspace.terminal(next.workspace.activeTab!.focused)!.spec).toEqual({
-      kind: "local",
-    });
+    expect(next.workspace.focusedSpec()).toEqual({ kind: "local" });
     expect(shell().getState().defaultShell).toBeUndefined();
+  });
+
+  it("splits a system-default pane into the system default, once another is chosen", () => {
+    const app = shell();
+    app.workspace.newTab();
+    app.setDefaultShell(pwsh);
+    app.run("pane.splitRight");
+    const panes = paneIds(app.workspace.activeTab!.root);
+    expect(panes.map((id) => app.workspace.terminal(id)!.spec)).toEqual([
+      { kind: "local" },
+      { kind: "local" },
+    ]);
+    // A new tab takes the new default.
+    app.workspace.newTab();
+    expect(app.workspace.focusedSpec()).toEqual({ kind: "local", shell: pwsh });
+  });
+
+  it("drops a remembered default the computer no longer has, and says so", async () => {
+    shell().setDefaultShell({ id: "wsl:Gone", name: "Gone (WSL)" });
+    const app = listing([pwsh!], true);
+    await app.prepareLocalShells();
+    expect(app.getState().defaultShell).toBeUndefined();
+    expect(app.hosts.getSnapshot().notice).toMatch(
+      /Gone \(WSL\) is not on this computer; new tabs open the system default shell/u,
+    );
+    app.workspace.newTab();
+    expect(app.workspace.focusedSpec()).toEqual({ kind: "local" });
+    expect(shell().getState().defaultShell).toBeUndefined();
+  });
+
+  it("keeps a WSL default that WSL was too slow to list", async () => {
+    shell().setDefaultShell(ubuntu);
+    const app = listing([pwsh!], false);
+    await app.prepareLocalShells();
+    expect(app.getState().defaultShell).toEqual(ubuntu);
+    // One that is not WSL's is gone whatever WSL did.
+    app.setDefaultShell({ id: "git-bash", name: "Git Bash" });
+    await app.listLocalShells();
+    expect(app.getState().defaultShell).toBeUndefined();
   });
 
   it("opens one tab in another shell, which the backend starts", async () => {
@@ -316,7 +365,7 @@ describe("AppShell choosing the local shell", () => {
       { kind: "local" },
     ]);
     expect(fresh.hosts.getSnapshot().notice).toMatch(
-      /win: Old shell is not on this computer and opened the default shell/u,
+      /win: Old shell is not on this computer and opened the system default shell/u,
     );
   });
 });

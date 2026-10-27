@@ -10,6 +10,7 @@ import {
   type ErrorCode,
   type GridSize,
   type LocalShellView,
+  type LocalShellsView,
   type PromptKind,
   type PromptRequest,
   type RouteSpec,
@@ -27,6 +28,7 @@ export type {
   ErrorCode,
   GridSize,
   LocalShellView,
+  LocalShellsView,
   PromptKind,
   RouteSpec,
   SshTargetSpec,
@@ -164,7 +166,7 @@ export interface TerminalSession {
 export interface SessionClient {
   open(spec: SessionSpec, size: GridSize, events: SessionEvents): Promise<TerminalSession>;
   /** The shells a local tab can open besides the default; none off Windows. */
-  localShells?(): Promise<LocalShellView[]>;
+  localShells?(): Promise<LocalShellsView>;
 }
 
 type CommandResult<T> = Promise<

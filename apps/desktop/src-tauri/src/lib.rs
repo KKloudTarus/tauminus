@@ -23,6 +23,7 @@ mod notices;
 mod recordings;
 mod secrets;
 mod serial;
+mod shells;
 mod snippets;
 mod ssh;
 mod sync;
@@ -57,7 +58,7 @@ use tracing_subscriber::EnvFilter;
 pub fn specta_builder<R: tauri::Runtime>() -> tauri_specta::Builder<R> {
     tauri_specta::Builder::<R>::new().commands(tauri_specta::collect_commands![
         commands::session_open,
-        commands::local_shells,
+        shells::local_shells,
         commands::session_write,
         fill::session_fill_offer,
         fill::session_fill_password,
@@ -401,7 +402,7 @@ fn manage_local_shells<R: tauri::Runtime>(app: &tauri::App<R>, sessions: &Arc<Se
         Arc::new(NativePtyLauncher),
         Arc::clone(sessions),
     ));
-    app.manage(commands::ShellCatalog::default());
+    app.manage(shells::ShellCatalog::default());
 }
 
 /// The session kinds that reach other machines: serial ports, Telnet,

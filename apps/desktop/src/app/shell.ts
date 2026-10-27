@@ -360,9 +360,11 @@ export class AppShell {
     }
 
     // A tab opened with nothing in mind is a local one, in the chosen shell.
-    const chosenShell = (): SessionSpec | undefined => {
+    // The system default is recorded as such, so a split of that pane opens
+    // it again even once another default is chosen.
+    const chosenShell = (): SessionSpec => {
       const shell = this.#state.defaultShell;
-      return shell ? { kind: "local", shell } : undefined;
+      return shell ? { kind: "local", shell } : { kind: "local" };
     };
     this.workspace = new Workspace<TerminalController, SessionSpec>((paneId, spec) => {
       const links = options.links;
@@ -1291,7 +1293,7 @@ export class AppShell {
     const notes = [
       ...(missing.size > 0 ? [`${[...missing].join(", ")} opened as a local shell`] : []),
       ...(gone.size > 0
-        ? [`${[...gone].join(", ")} is not on this computer and opened the default shell`]
+        ? [`${[...gone].join(", ")} is not on this computer and opened the system default shell`]
         : []),
       ...(opened < workspace.tabs.length
         ? [`${workspace.tabs.length - opened} tabs did not fit under the pane limit`]
@@ -1360,7 +1362,9 @@ export class AppShell {
   /**
    * Lists the shells a local tab can open again, so one installed since
    * shows up. Resolves to the list; empty when this window has no backend
-   * for it or the listing failed.
+   * for it or the listing failed. A default shell the list no longer has
+   * is dropped, and the user told, so new tabs do not fail on it; when WSL
+   * was too slow to answer, a distribution is not taken for gone.
    */
   listLocalShells(): Promise<readonly LocalShellView[]> {
     if (this.#listingShells) return this.#listingShells;
@@ -1369,14 +1373,40 @@ export class AppShell {
     this.#listingShells = listing
       .catch((error: unknown) => {
         console.warn("could not list local shells", error);
-        return this.#state.localShells;
+        return { shells: [...this.#state.localShells], complete: false };
       })
-      .then((shells) => {
+      .then(({ shells, complete }) => {
         this.#listingShells = undefined;
-        this.#set({ ...this.#state, localShells: shells });
+        // An unchanged list leaves the state alone: the palette lists again
+        // each time it opens, and new items there move its selection.
+        if (!sameShells(shells, this.#state.localShells)) {
+          this.#set({ ...this.#state, localShells: shells });
+        }
+        const chosen = this.#state.defaultShell;
+        const gone =
+          chosen &&
+          !shells.some((s) => s.id === chosen.id) &&
+          (complete || !chosen.id.startsWith("wsl:"));
+        if (gone) {
+          this.setDefaultShell(undefined);
+          this.hosts.notify(
+            `${chosen.name} is not on this computer; new tabs open the system default shell`,
+          );
+        }
         return shells;
       });
     return this.#listingShells;
+  }
+
+  /**
+   * Lists the shells at start, so the palette has them before it opens.
+   * With a default remembered it resolves once the list has checked it, so
+   * the first tab does not fail on a shell uninstalled since; otherwise at
+   * once.
+   */
+  async prepareLocalShells(): Promise<void> {
+    const listing = this.listLocalShells();
+    if (this.#state.defaultShell) await listing;
   }
 
   /** Opens a local tab in `shell`, or in the default one. Returns false at the pane limit. */
@@ -1712,6 +1742,11 @@ function mapTemplate<A, B>(template: Template<A>, map: (spec: A) => B): Template
   return template.kind === "pane"
     ? { kind: "pane", spec: map(template.spec) }
     : { ...template, children: template.children.map((child) => mapTemplate(child, map)) };
+}
+
+/** Whether two listings name the same shells, in the same order. */
+function sameShells(a: readonly LocalShellView[], b: readonly LocalShellView[]): boolean {
+  return a.length === b.length && a.every((s, i) => s.id === b[i]?.id && s.name === b[i]?.name);
 }
 
 /** Whether a pane of `template` opens a chosen local shell. */

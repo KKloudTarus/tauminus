@@ -11,6 +11,12 @@ async function palette(page: Page, command: string) {
   await page.keyboard.press("Control+Shift+P");
   const input = page.getByPlaceholder("Type a command");
   await input.fill(command);
+  // The shells' items come from the backend: until this one is the selected
+  // item, Enter would run another, such as plain "New tab".
+  const escaped = command.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+  await expect(page.getByRole("option", { selected: true })).toHaveAccessibleName(
+    new RegExp(`^${escaped}( |$)`, "u"),
+  );
   await input.press("Enter");
 }
 
