@@ -8,6 +8,7 @@
 /// Every IPC command the app exposes.
 const COMMANDS: &[&str] = &[
     "session_open",
+    "local_shells",
     "session_write",
     "session_fill_offer",
     "session_fill_password",

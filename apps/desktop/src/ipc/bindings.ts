@@ -9,10 +9,16 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 /** Commands */
 export const commands = {
 	/**
-	 *  Opens a local shell. Output arrives on `on_output`, and `on_exit` fires once
+	 *  Opens a local shell: the platform default, or the one `local_shells`
+	 *  listed as `shell`. Output arrives on `on_output`, and `on_exit` fires once
 	 *  when the shell ends.
 	 */
-	sessionOpen: (size: GridSize, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("session_open", { size, onOutput, onExit })),
+	sessionOpen: (size: GridSize, shell: string | null, onOutput: Channel<ArrayBuffer>, onExit: Channel<SessionExit>) => typedError<SessionHandle, CommandError>(__TAURI_INVOKE("session_open", { size, shell, onOutput, onExit })),
+	/**
+	 *  The shells this computer has besides the default, found again on each
+	 *  call so one installed since shows up. Empty off Windows.
+	 */
+	localShells: () => typedError<LocalShellsView, CommandError>(__TAURI_INVOKE("local_shells")),
 	/**  Sends text input: keystrokes, paste, or terminal replies. */
 	sessionWrite: (id: SessionHandle, data: string) => typedError<null, CommandError>(__TAURI_INVOKE("session_write", { id, data })),
 	/**
@@ -948,6 +954,22 @@ export type Listing = {
 	path: string,
 	parent: string | null,
 	entries: EntryView[],
+};
+
+/**  A shell a local tab can open besides the default, by `id`. */
+export type LocalShellView = {
+	id: string,
+	name: string,
+};
+
+/**  The shells a local tab can open besides the default. */
+export type LocalShellsView = {
+	shells: LocalShellView[],
+	/**
+	 *  False when WSL did not answer in time: its distributions may be
+	 *  missing, not gone.
+	 */
+	complete: boolean,
 };
 
 export type ParitySpec = "none" | "odd" | "even";

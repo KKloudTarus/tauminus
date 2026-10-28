@@ -8,6 +8,7 @@ import type { CommandError, ZmodemView } from "./bindings.ts";
 import type { ZmodemClient } from "./zmodem.ts";
 import {
   type GridSize,
+  type LocalShellView,
   type SessionClient,
   SessionCommandError,
   type SessionEvents,
@@ -425,11 +426,16 @@ export const fakeSessions: SessionClient = {
       const tmux = events.tmux;
       tmuxTopologies.set(tmuxControls + 1, (event) => tmux.topology(event));
     }
+    if (spec.kind === "local" && spec.shell && !FAKE_SHELLS.some((s) => s.id === spec.shell?.id)) {
+      throw fail("not_found", `${spec.shell.id} is not a shell on this computer`);
+    }
     const banner =
       spec.kind === "tmux"
         ? await fakeTmuxBanner(spec, events)
         : spec.kind === "local"
-          ? ""
+          ? spec.shell
+            ? `${spec.shell.name}\r\n`
+            : ""
           : spec.kind === "telnet"
             ? `Connected to ${spec.label} over Telnet\r\n`
             : spec.kind === "mosh"
@@ -445,4 +451,14 @@ export const fakeSessions: SessionClient = {
       spec.target.destination.host === "vault.test";
     return shell;
   },
+  localShells: async () => ({
+    shells: FAKE_SHELLS.map(({ id, name }) => ({ id, name })),
+    complete: true,
+  }),
 };
+
+/** The shells the fake computer has besides the default; a local tab in one prints its name. */
+export const FAKE_SHELLS: readonly LocalShellView[] = [
+  { id: "pwsh", name: "PowerShell 7" },
+  { id: "wsl:Ubuntu", name: "Ubuntu (WSL)" },
+];

@@ -65,6 +65,8 @@ export const MAX_PANES = 64;
  */
 export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
   readonly #create: (paneId: PaneId, spec: S | undefined) => T;
+  /** What a pane opened with nothing in mind opens, read when it opens. */
+  readonly #fallback: () => S | undefined;
   readonly #terminals = new Map<
     PaneId,
     { terminal: T; spec: S | undefined; unsubscribe: () => void }
@@ -74,8 +76,12 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
   #nextId = 1;
   #disposed = false;
 
-  constructor(create: (paneId: PaneId, spec: S | undefined) => T) {
+  constructor(
+    create: (paneId: PaneId, spec: S | undefined) => T,
+    fallback: () => S | undefined = () => undefined,
+  ) {
     this.#create = create;
+    this.#fallback = fallback;
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -284,8 +290,10 @@ export class Workspace<T extends PaneTerminal = PaneTerminal, S = undefined> {
     this.#listeners.clear();
   }
 
-  #newPane(spec: S | undefined): PaneId {
+  #newPane(asked: S | undefined): PaneId {
     const paneId = this.#id("pane");
+    // Recorded as opened, so a split or a saved layout opens the same again.
+    const spec = asked ?? this.#fallback();
     const terminal = this.#create(paneId, spec);
     const unsubscribe = terminal.subscribe(() => {
       const status = terminal.getStatus();

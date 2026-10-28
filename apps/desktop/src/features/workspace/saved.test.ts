@@ -21,6 +21,12 @@ function memory(initial?: string): Storage {
 }
 
 const local: Template<SavedSpec> = { kind: "pane", spec: { kind: "local" } };
+
+/** Storage holding one workspace whose local pane names `shell`. */
+const holding = (shell: unknown) =>
+  JSON.stringify([
+    { id: "x", name: "x", tabs: [{ kind: "pane", spec: { kind: "local", shell } }] },
+  ]);
 const grid: Template<SavedSpec> = {
   kind: "split",
   direction: "row",
@@ -80,6 +86,25 @@ describe("SavedWorkspaces", () => {
       },
     ]);
     expect(new SavedWorkspaces(memory(broken)).getSnapshot()).toEqual([]);
+  });
+
+  it("keeps a local pane's shell, and opens the default for one it cannot read", () => {
+    const storage = memory();
+    const pwsh: Template<SavedSpec> = {
+      kind: "pane",
+      spec: { kind: "local", shell: { id: "pwsh", name: "PowerShell 7" } },
+    };
+    new SavedWorkspaces(storage).save("win", [pwsh, local]);
+    expect(new SavedWorkspaces(storage).getSnapshot()[0]?.tabs).toEqual([pwsh, local]);
+    for (const shell of [
+      "pwsh",
+      { id: "pwsh" },
+      { id: "", name: "PowerShell 7" },
+      { id: 7, name: "PowerShell 7" },
+      { id: "x".repeat(200), name: "PowerShell 7" },
+    ]) {
+      expect(new SavedWorkspaces(memory(holding(shell))).getSnapshot()[0]?.tabs).toEqual([local]);
+    }
   });
 
   it("stops at its limit", () => {

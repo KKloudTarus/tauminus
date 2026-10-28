@@ -6,6 +6,7 @@
   "platforms": ["linux", "macOS", "windows"],
   "permissions": [
     "allow-session-open",
+    "allow-local-shells",
     "allow-session-write",
     "allow-session-fill-offer",
     "allow-session-fill-password",

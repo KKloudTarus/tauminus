@@ -72,6 +72,8 @@ const shell = new AppShell({
   renderer: import.meta.env.MODE === "e2e" ? "dom" : rendererOverride(),
   updates: await updatesClient(safeLocalStorage()),
 });
+// A remembered default shell uninstalled since would fail the first tab.
+await shell.prepareLocalShells();
 shell.workspace.newTab();
 void shell.hosts.load();
 void shell.snippets?.load();
