@@ -55,6 +55,40 @@ describe("VaultStore", () => {
     expect(held).not.toContain("PRIVATE");
   });
 
+  it("shows an edit that changes only sharing or a reference", async () => {
+    const store = new VaultStore(fakeVault());
+    await store.create("correct horse");
+    const id = await store.saveIdentity({ name: "Deploy", password: "hunter2", sync: true });
+    const seen = vi.fn<() => void>();
+    store.subscribe(seen);
+    const reference = {
+      manager: "bitwarden",
+      item: "2f2a3b4c-0000-4000-8000-000000000001",
+    } as const;
+    // The password stays: only where it comes from changes.
+    await store.saveIdentity({
+      id,
+      name: "Deploy",
+      references: { password: reference },
+      sync: false,
+    });
+    expect(store.getSnapshot().identities[0]).toMatchObject({
+      hasPassword: true,
+      sync: false,
+      references: { password: reference },
+    });
+    expect(seen).toHaveBeenCalledTimes(1);
+    await store.saveIdentity({
+      id,
+      name: "Deploy",
+      references: { password: { ...reference, item: "2f2a3b4c-0000-4000-8000-000000000002" } },
+    });
+    expect(store.getSnapshot().identities[0]?.references.password).toMatchObject({
+      item: "2f2a3b4c-0000-4000-8000-000000000002",
+    });
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
   it("touches the backend at most once per interval", async () => {
     const client = fakeVault();
     const touch = vi.spyOn(client, "touch");

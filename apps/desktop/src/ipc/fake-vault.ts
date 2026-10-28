@@ -129,7 +129,12 @@ export function fakeVault(): FakeVault {
       const typedPassword = Boolean(edit.password);
       const typedKey = Boolean(edit.privateKey) || Boolean(edit.generate);
       if (edit.references) {
-        if ((typedPassword && refs.password) || (typedKey && refs.privateKey)) {
+        const typedPassphrase = Boolean(edit.passphrase);
+        if (
+          (typedPassword && refs.password) ||
+          (typedKey && refs.privateKey) ||
+          (typedPassphrase && refs.passphrase)
+        ) {
           fail(
             "invalid_argument",
             "a secret is kept in the vault or in a password manager, not both",

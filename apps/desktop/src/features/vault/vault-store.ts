@@ -10,6 +10,8 @@ import {
   type VaultStatusSpec,
 } from "@/ipc/index.ts";
 
+import { sameReferences } from "./references.ts";
+
 export interface VaultState {
   /** `undefined` until the first status arrives. */
   readonly status: VaultStatusSpec | undefined;
@@ -206,6 +208,8 @@ function sameIdentity(a: IdentityView, b: IdentityView | undefined): boolean {
     a.user === b.user &&
     a.hasPassword === b.hasPassword &&
     a.hasKey === b.hasKey &&
-    a.publicKey === b.publicKey
+    a.publicKey === b.publicKey &&
+    a.sync === b.sync &&
+    sameReferences(a.references, b.references)
   );
 }

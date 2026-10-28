@@ -6,12 +6,22 @@ import {
   type IdentityView,
   type KeychainSpec,
   type KeyKindSpec,
+  type SecretRefSpec,
+  type SecretRefsSpec,
   type VaultStatusSpec,
   commands,
 } from "./bindings.ts";
 import { type PromptHandler, SessionCommandError, promptChannel } from "./sessions.ts";
 
-export type { IdentityEdit, IdentityView, KeychainSpec, KeyKindSpec, VaultStatusSpec };
+export type {
+  IdentityEdit,
+  IdentityView,
+  KeychainSpec,
+  KeyKindSpec,
+  SecretRefSpec,
+  SecretRefsSpec,
+  VaultStatusSpec,
+};
 
 /** The vault. Secrets go in; only whether one is stored comes back. */
 export interface VaultClient {
