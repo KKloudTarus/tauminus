@@ -225,6 +225,8 @@ function jittered(ms: number): number {
   return Math.round(ms * (0.75 + Math.random() * 0.5));
 }
 const LOCAL: SessionSpec = { kind: "local" };
+/** ED 3: erases the saved lines; the screen and the cursor stay. */
+const ERASE_SAVED_LINES = new TextEncoder().encode("\x1b[3J");
 
 type Listener = () => void;
 
@@ -257,6 +259,8 @@ export class TerminalController {
   /** The last bytes of output, where a query may have started. */
   #queryTail = new Uint8Array(0);
   readonly #mac: boolean;
+  /** Local shells run behind Windows' ConPTY, which keeps a screen of its own. */
+  readonly #conpty: boolean;
   #onInput: ((data: string) => void) | undefined;
   /** Whether the pane is on screen; what happens then is seen. */
   #watched = true;
@@ -363,6 +367,8 @@ export class TerminalController {
       /** Opens a link the user Ctrl+clicked (Cmd+clicked on macOS). */
       openLink?: (url: string) => void;
       mac?: boolean;
+      /** Local shells run behind Windows' ConPTY. */
+      conpty?: boolean;
       /** Shares parsing time with other panes; one per window by default. */
       output?: OutputScheduler;
       /** The prod guard for the saved host behind this terminal. */
@@ -386,6 +392,7 @@ export class TerminalController {
     this.#tmux = options.tmux;
     this.#openLink = options.openLink;
     this.#mac = options.mac ?? false;
+    this.#conpty = options.conpty ?? false;
     this.#webglRetired =
       chooseRenderer(options.renderer ?? "auto", globalThis.navigator?.userAgent ?? "") === "dom";
     this.terminal = new Terminal({
@@ -1217,6 +1224,27 @@ export class TerminalController {
     return (
       snapshot(this.terminal, this.#serialize, 0) ?? this.#serialize.serialize({ scrollback: 0 })
     );
+  }
+
+  /**
+   * Clears the scrollback. The prompt's row moves to the top, except in a
+   * local pane on Windows: ConPTY keeps its own screen there and places the
+   * shell's output by absolute row, so a screen cleared here alone would get
+   * the next output where the cursor was before. That pane keeps its screen
+   * and loses only the lines above it, which ConPTY does not hold.
+   *
+   * The erase goes through the output lane, after the output already pushed:
+   * written at once, it could land between two chunks of one read, inside an
+   * escape sequence, and the rest of that sequence would print as text. In
+   * the alternate screen (vim, less) there are no saved lines, so on Windows
+   * it erases nothing there, and the normal screen keeps its scrollback.
+   */
+  clearScrollback(): void {
+    if (this.#conpty && this.spec.kind === "local") {
+      this.#output.pushLocal(ERASE_SAVED_LINES);
+      return;
+    }
+    this.terminal.clear();
   }
 
   get search(): SearchAddon {
