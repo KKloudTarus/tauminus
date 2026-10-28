@@ -179,7 +179,8 @@ fn connect_code(error: &tauminus_app::ports::ConnectError) -> ErrorCode {
         ConnectError::HostKeyChanged { .. } => ErrorCode::HostKeyChanged,
         ConnectError::HostKeyRevoked { .. } => ErrorCode::HostKeyRevoked,
         ConnectError::HostKeyRejected { .. } | ConnectError::Cancelled => ErrorCode::Cancelled,
-        ConnectError::AuthFailed { .. } | ConnectError::Secret(_) => ErrorCode::AuthFailed,
+        ConnectError::AuthFailed { .. } => ErrorCode::AuthFailed,
+        ConnectError::Secret(_) => ErrorCode::SecretUnavailable,
         ConnectError::Protocol(_) => ErrorCode::ProtocolError,
         _ => ErrorCode::ConnectFailed,
     }

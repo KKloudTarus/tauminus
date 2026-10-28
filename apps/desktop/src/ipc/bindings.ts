@@ -626,6 +626,11 @@ export type ErrorCode = "invalid_argument" | "not_found" | "limit_reached" | "la
 "connect_failed" | 
 /**  The host key differs from the one on record. Never offered for trust. */
 "host_key_changed" | "host_key_revoked" | "auth_failed" | 
+/**
+ *  A password manager did not give an identity's secret: it is locked,
+ *  signed out, or its CLI is missing.
+ */
+"secret_unavailable" | 
 /**  The user declined a prompt or closed it. */
 "cancelled" | "protocol_error" | 
 /**  The saved hosts could not be read or written. */

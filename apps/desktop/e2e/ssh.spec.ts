@@ -84,6 +84,18 @@ test("reports an unreachable host with next steps", async ({ page }) => {
   await expect(alert).toContainText("Check the host name and port");
 });
 
+test("says when a password manager gave no secret, and how to sign in to it", async ({ page }) => {
+  await connect(page, "locked-manager.test");
+  const alert = page.getByRole("alert");
+  await expect(alert.getByRole("heading")).toHaveText(
+    "Could not read the secret to sign in to locked-manager.test",
+  );
+  await expect(alert).toContainText("reads it from a password manager");
+  await expect(alert).toContainText("run vault login");
+  await expect(alert).not.toContainText("ssh-agent");
+  await expect(alert.getByRole("button", { name: "Try again" })).toBeVisible();
+});
+
 test("validates the destination before connecting", async ({ page }) => {
   await page.keyboard.press("Control+Shift+O");
   const dialog = page.getByRole("dialog", { name: "Connect to SSH host" });
