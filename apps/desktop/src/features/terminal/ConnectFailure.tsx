@@ -67,6 +67,8 @@ function heading(code: ErrorCode | undefined, target: string): string {
       return `The host key for ${target} is revoked`;
     case "auth_failed":
       return `Could not sign in to ${target}`;
+    case "secret_unavailable":
+      return `Could not read the secret to sign in to ${target}`;
     case "cancelled":
       return `Connection to ${target} cancelled`;
     case "connect_failed":
@@ -92,6 +94,8 @@ function advice(code: ErrorCode | undefined): string {
       return "The key this host presented is marked @revoked in known_hosts. Tauminus will not connect.";
     case "auth_failed":
       return "Check the user name, and that your key is loaded in ssh-agent or listed for this host.";
+    case "secret_unavailable":
+      return "The identity reads it from a password manager, which did not give it, so that secret was not sent. Sign in to the manager as below, then try again.";
     case "cancelled":
       return "Nothing was sent to the server.";
     case "connect_failed":

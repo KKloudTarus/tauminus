@@ -60,4 +60,14 @@ fn file_errors_map_to_stable_codes() {
         )),
         ErrorCode::AuthFailed
     ));
+    assert!(matches!(
+        code(FilesError::Connect(
+            tauminus_app::ports::ConnectError::Secret(tauminus_app::vault::SecretError {
+                manager: "1Password",
+                message: "not signed in".into(),
+                sign_in: "run op signin",
+            })
+        )),
+        ErrorCode::SecretUnavailable
+    ));
 }

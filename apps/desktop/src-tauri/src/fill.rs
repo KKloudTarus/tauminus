@@ -40,7 +40,7 @@ impl From<FillError> for CommandError {
             FillError::NoPassword | FillError::Telnet | FillError::Changed => {
                 Self::new(ErrorCode::InvalidArgument, error.to_string())
             }
-            FillError::Secret(_) => Self::new(ErrorCode::AuthFailed, error.to_string()),
+            FillError::Secret(_) => Self::new(ErrorCode::SecretUnavailable, error.to_string()),
         }
     }
 }
@@ -102,4 +102,26 @@ pub(crate) async fn session_fill_password(
     )]
     let seen = seen as u64;
     Ok(fill.fill()?.type_password(id.into(), seen).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use tauminus_app::vault::SecretError;
+
+    use super::*;
+
+    #[test]
+    fn a_manager_that_gives_nothing_is_its_own_code() {
+        let error = CommandError::from(FillError::Secret(SecretError {
+            manager: "Bitwarden",
+            message: "Vault is locked.".into(),
+            sign_in: "run bw unlock",
+        }));
+        assert_eq!(error.code, ErrorCode::SecretUnavailable);
+        assert!(
+            error
+                .message
+                .starts_with("Bitwarden did not give the secret")
+        );
+    }
 }

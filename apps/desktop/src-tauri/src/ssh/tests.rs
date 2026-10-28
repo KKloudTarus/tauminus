@@ -381,6 +381,14 @@ fn connect_errors_map_to_stable_codes() {
             ErrorCode::ConnectFailed,
         ),
         (ConnectError::Protocol("x".into()), ErrorCode::ProtocolError),
+        (
+            ConnectError::Secret(tauminus_app::vault::SecretError {
+                manager: "Vault",
+                message: "Error making API request.".into(),
+                sign_in: "run vault login",
+            }),
+            ErrorCode::SecretUnavailable,
+        ),
     ];
     for (error, code) in cases {
         assert_eq!(CommandError::from(SshOpenError::Connect(error)).code, code);

@@ -332,6 +332,12 @@ async function fakeSsh(
       `the host key for ${host}:${port} has changed (recorded at ~/.ssh/known_hosts:3)`,
     );
   }
+  if (host === "locked-manager.test") {
+    throw fail(
+      "secret_unavailable",
+      "Vault did not give the secret: permission denied; if it is locked, run vault login",
+    );
+  }
   if (host === "vault.test") {
     const { sharedFakeVault } = await import("./fake-vault.ts");
     if (!sharedFakeVault().unlocked()) throw fail("vault_locked", "the vault is locked");

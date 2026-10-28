@@ -93,6 +93,9 @@ pub(crate) enum ErrorCode {
     HostKeyChanged,
     HostKeyRevoked,
     AuthFailed,
+    /// A password manager did not give an identity's secret: it is locked,
+    /// signed out, or its CLI is missing.
+    SecretUnavailable,
     /// The user declined a prompt or closed it.
     Cancelled,
     ProtocolError,
