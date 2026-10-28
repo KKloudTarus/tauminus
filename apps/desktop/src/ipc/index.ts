@@ -129,6 +129,8 @@ export {
   type IdentityView,
   type KeychainSpec,
   type KeyKindSpec,
+  type SecretRefSpec,
+  type SecretRefsSpec,
   type VaultClient,
   type VaultStatusSpec,
   tauriVault,

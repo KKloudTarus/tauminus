@@ -13,9 +13,27 @@ import {
 } from "react";
 
 import { PromptDialog } from "@/features/ssh/PromptDialog.tsx";
-import type { AnswerSpec, HostView, IdentityView, KeyKindSpec, PromptKind } from "@/ipc/index.ts";
+import type {
+  AnswerSpec,
+  HostView,
+  IdentityView,
+  KeyKindSpec,
+  PromptKind,
+  SecretRefSpec,
+  SecretRefsSpec,
+} from "@/ipc/index.ts";
 import { messageOf } from "@/features/hosts/hosts-store.ts";
 
+import {
+  addsReferences,
+  hasReferences,
+  managerName,
+  sameReferences,
+  setReferences,
+  type Slot,
+  vaultBeside,
+} from "./references.ts";
+import { SlotSource } from "./SlotSource.tsx";
 import type { VaultStore } from "./vault-store.ts";
 
 /** Moves focus to `ref` once, when its view appears. */
@@ -266,8 +284,9 @@ function Unlocked({
                 <div className="truncate text-xs opacity-70">
                   {[
                     identity.user,
-                    identity.hasPassword ? "password" : undefined,
-                    identity.hasKey ? "key" : undefined,
+                    held("password", identity.hasPassword, identity.references.password),
+                    held("key", identity.hasKey, identity.references.privateKey),
+                    held("passphrase", false, identity.references.passphrase),
                     identity.sync ? "shared through sync" : undefined,
                   ]
                     .filter(Boolean)
@@ -290,6 +309,12 @@ function Unlocked({
       {status && <Settings store={store} status={status} />}
     </div>
   );
+}
+
+/** "password", or where a password manager holds it. */
+function held(what: string, has: boolean, reference: SecretRefSpec | null | undefined) {
+  if (reference) return `${what} from ${managerName(reference.manager)}`;
+  return has ? what : undefined;
 }
 
 /** Where the identity's key comes from on save. */
@@ -324,12 +349,25 @@ function IdentityForm({
   const [removePassword, setRemovePassword] = useState(false);
   const [removeKey, setRemoveKey] = useState(false);
   const [shared, setShared] = useState(identity?.sync ?? false);
+  const [refs, setRefs] = useState<SecretRefsSpec>(setReferences(identity?.references ?? {}));
   const [error, setError] = useState<string | undefined>();
   const [confirming, setConfirming] = useState(false);
   const first = useRef<HTMLInputElement>(null);
   useInitialFocus(first);
+  const was = setReferences(identity?.references ?? {});
+  // What the vault itself holds; a password manager's slot is not stored here.
+  const storedPassword = Boolean(identity?.hasPassword) && !was.password;
+  const storedKey = Boolean(identity?.hasKey) && !was.privateKey;
+  const reference = (slot: Slot) => (next: SecretRefSpec | null) =>
+    setRefs((now) => setReferences({ ...now, [slot]: next }));
   // Removing the key wins over a generate choice left in the select.
-  const generate = removeKey || source === "paste" ? null : source;
+  const generate = removeKey || refs.privateKey || source === "paste" ? null : source;
+  // A removed or generated key has no passphrase, from here or a manager.
+  // The remove box only counts while the key is kept here.
+  const keyGone = (removeKey && !refs.privateKey) || generate !== null;
+  const sent = keyGone ? setReferences({ ...refs, passphrase: null }) : refs;
+  const reads = hasReferences(sent);
+  const changed = !sameReferences(sent, was);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setError(undefined);
@@ -341,11 +379,13 @@ function IdentityForm({
         name,
         user: user || null,
         // Blank keeps what is stored, "" removes it; the fields never show
-        // a stored secret.
-        password: removePassword ? "" : password || null,
-        privateKey: removeKey ? "" : privateKey || null,
-        passphrase: removeKey ? "" : passphrase || null,
-        sync: shared,
+        // a stored secret. A slot a password manager holds sends neither.
+        password: refs.password ? null : removePassword ? "" : password || null,
+        privateKey: refs.privateKey ? null : removeKey ? "" : privateKey || null,
+        passphrase: refs.passphrase ? null : removeKey ? "" : passphrase || null,
+        // Unchanged references are left out, so saving asks nothing.
+        references: changed ? sent : null,
+        sync: shared && !reads,
       })
       .then(onDone)
       .catch((failure: unknown) => setError(messageOf(failure)))
@@ -375,82 +415,117 @@ function IdentityForm({
             className={FIELD}
           />
         </Field>
-        <Field label={identity?.hasPassword ? "Password (stored; type to replace)" : "Password"}>
-          <input
-            type="password"
-            autoComplete="off"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            disabled={removePassword}
-            className={FIELD}
-          />
-        </Field>
-        {identity?.hasPassword && (
-          <Remove checked={removePassword} onChange={setRemovePassword}>
-            Remove the stored password
-          </Remove>
-        )}
-        <Field label={identity?.hasKey ? "Key (one is stored)" : "Key"}>
-          <select
-            value={source}
-            onChange={(e) => {
-              const chosen = KEY_SOURCES.find((k) => k.value === e.target.value);
-              if (chosen) setSource(chosen.value);
-            }}
-            disabled={removeKey}
-            className={FIELD}
-          >
-            {KEY_SOURCES.map(({ value, label }) => (
-              <option key={value} value={value}>
-                {identity?.hasKey && value !== "paste"
-                  ? `${label}, replacing the stored one`
-                  : label}
-              </option>
-            ))}
-          </select>
-        </Field>
-        {source === "paste" && (
-          <Field
-            label={
-              identity?.hasKey ? "Private key (stored; paste to replace)" : "Private key (OpenSSH)"
-            }
-          >
-            <textarea
-              value={privateKey}
-              onChange={(e) => setPrivateKey(e.target.value)}
-              disabled={removeKey}
-              rows={3}
-              spellCheck={false}
-              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-              className={`${FIELD} font-mono text-xs`}
-            />
-          </Field>
-        )}
-        {identity?.hasKey && (
-          <Remove checked={removeKey} onChange={setRemoveKey}>
-            Remove the stored key and its passphrase
-          </Remove>
-        )}
-        {source === "paste" && (
-          <Field label="Key passphrase">
+        <SlotSource
+          label="Password"
+          slot="password"
+          reference={refs.password}
+          like={vaultBeside(refs, "password")}
+          onChange={reference("password")}
+        >
+          <Field label={storedPassword ? "Password (stored; type to replace)" : "Password"}>
             <input
               type="password"
               autoComplete="off"
-              value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={removePassword}
               className={FIELD}
             />
           </Field>
+          {storedPassword && (
+            <Remove checked={removePassword} onChange={setRemovePassword}>
+              Remove the stored password
+            </Remove>
+          )}
+        </SlotSource>
+        <SlotSource
+          label="Private key"
+          slot="privateKey"
+          reference={refs.privateKey}
+          like={vaultBeside(refs, "privateKey")}
+          onChange={reference("privateKey")}
+        >
+          <Field label={storedKey ? "Key (one is stored)" : "Key"}>
+            <select
+              value={source}
+              onChange={(e) => {
+                const chosen = KEY_SOURCES.find((k) => k.value === e.target.value);
+                if (chosen) setSource(chosen.value);
+              }}
+              disabled={removeKey}
+              className={FIELD}
+            >
+              {KEY_SOURCES.map(({ value, label }) => (
+                <option key={value} value={value}>
+                  {storedKey && value !== "paste" ? `${label}, replacing the stored one` : label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {source === "paste" && (
+            <Field
+              label={storedKey ? "Private key (stored; paste to replace)" : "Private key (OpenSSH)"}
+            >
+              <textarea
+                value={privateKey}
+                onChange={(e) => setPrivateKey(e.target.value)}
+                disabled={removeKey}
+                rows={3}
+                spellCheck={false}
+                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                className={`${FIELD} font-mono text-xs`}
+              />
+            </Field>
+          )}
+          {storedKey && (
+            <Remove checked={removeKey} onChange={setRemoveKey}>
+              Remove the stored key and its passphrase
+            </Remove>
+          )}
+        </SlotSource>
+        {!keyGone && (source === "paste" || refs.privateKey) && (
+          <SlotSource
+            label="Key passphrase"
+            slot="passphrase"
+            reference={refs.passphrase}
+            like={vaultBeside(refs, "passphrase")}
+            onChange={reference("passphrase")}
+          >
+            <Field label="Key passphrase">
+              <input
+                type="password"
+                autoComplete="off"
+                value={passphrase}
+                onChange={(e) => setPassphrase(e.target.value)}
+                className={FIELD}
+              />
+            </Field>
+          </SlotSource>
         )}
         <label className="mb-1 flex items-center gap-2">
-          <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={shared && !reads}
+            disabled={reads}
+            onChange={(e) => setShared(e.target.checked)}
+          />
           Share through sync
         </label>
         <p className="mb-3 text-xs opacity-70">
-          {shared
-            ? "Its password and key go to every device that syncs, sealed with the sync key. Stopping later does not take them back from the other devices or the target: change the password and key then."
-            : "Kept on this device only. Hosts that use it still sync, and log in elsewhere only where this identity is too."}
+          {reads
+            ? identity?.sync
+              ? "It reads a password manager, so it stops syncing. The other devices keep the password and key they already have: change them on the target."
+              : "It reads a password manager, so it stays on this device. Other devices sign in to the manager themselves."
+            : shared
+              ? "Its password and key go to every device that syncs, sealed with the sync key. Stopping later does not take them back from the other devices or the target: change the password and key then."
+              : "Kept on this device only. Hosts that use it still sync, and log in elsewhere only where this identity is too."}
         </p>
+        {addsReferences(sent, was) && (
+          <p className="mb-3 text-xs opacity-70">
+            Saving asks you, in a system dialog, to allow each new password manager reference.
+            Tauminus reads it only when a host asks for that secret, and keeps no copy.
+          </p>
+        )}
         <Problem text={error} />
         <div className="flex gap-2">
           {identity && (

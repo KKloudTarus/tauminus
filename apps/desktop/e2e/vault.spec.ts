@@ -150,7 +150,7 @@ test("generates a key, shows its public half, and installs it on a host", async 
   await vault(page).getByRole("button", { name: "New identity" }).click();
   const form = vault(page).getByRole("form", { name: "New identity" });
   await form.getByLabel("Name").fill("Deploy");
-  await form.getByRole("combobox", { name: /^Key/ }).selectOption("ed25519");
+  await form.getByRole("combobox", { name: /^Key( \(one is stored\))?$/ }).selectOption("ed25519");
   await expect(form.getByLabel("Private key (OpenSSH)")).toHaveCount(0);
   await form.getByRole("button", { name: "Save" }).click();
   const list = vault(page).getByRole("list", { name: "Identities" });
@@ -171,12 +171,12 @@ test("removing the key wins over a generate choice", async ({ page }) => {
   await vault(page).getByRole("button", { name: "New identity" }).click();
   const form = vault(page).getByRole("form", { name: "New identity" });
   await form.getByLabel("Name").fill("Deploy");
-  await form.getByRole("combobox", { name: /^Key/ }).selectOption("ed25519");
+  await form.getByRole("combobox", { name: /^Key( \(one is stored\))?$/ }).selectOption("ed25519");
   await form.getByRole("button", { name: "Save" }).click();
   const list = vault(page).getByRole("list", { name: "Identities" });
   await list.getByRole("button", { name: "Edit Deploy" }).click();
   const edit = vault(page).getByRole("form", { name: "Edit Deploy" });
-  await edit.getByRole("combobox", { name: /^Key/ }).selectOption("rsa3072");
+  await edit.getByRole("combobox", { name: /^Key( \(one is stored\))?$/ }).selectOption("rsa3072");
   await edit.getByLabel("Remove the stored key and its passphrase").check();
   await edit.getByRole("button", { name: "Save" }).click();
   await expect(list).toContainText("nothing stored");
@@ -212,4 +212,178 @@ test("an identity is kept here unless shared through sync", async ({ page }) => 
   await expect(list).toContainText("shared through sync");
   await list.getByRole("button", { name: "Edit Deploy" }).click();
   await expect(vault(page).getByLabel("Share through sync")).toBeChecked();
+});
+
+test("a password from 1Password replaces the stored one and keeps the identity here", async ({
+  page,
+}) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Deploy");
+  await form.getByLabel("Password", { exact: true }).fill("hunter2");
+  await form.getByLabel("Share through sync").check();
+  await form.getByLabel("Password from").selectOption("1Password");
+  // The vault's own field goes; the manager's takes its place.
+  await expect(form.getByLabel("Password", { exact: true })).toHaveCount(0);
+  await expect(form).toContainText("asks you, in a system dialog");
+  await expect(form.getByLabel("Share through sync")).toBeDisabled();
+  await expect(form.getByLabel("Share through sync")).not.toBeChecked();
+  await expect(form).toContainText("It reads a password manager, so it stays on this device.");
+  // An empty reference does not save.
+  await form.getByRole("button", { name: "Save" }).click();
+  await expect(form).toBeVisible();
+  await form.getByLabel("Secret reference").fill("op://Ops/db/password");
+  await form.getByRole("button", { name: "Save" }).click();
+
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await expect(list).toContainText("password from 1Password");
+  await expect(list).not.toContainText("shared through sync");
+  await list.getByRole("button", { name: "Edit Deploy" }).click();
+  const edit = vault(page).getByRole("form", { name: "Edit Deploy" });
+  await expect(edit.getByLabel("Password from")).toHaveValue("onePassword");
+  await expect(edit.getByLabel("Secret reference")).toHaveValue("op://Ops/db/password");
+  await expect(edit).not.toContainText("asks you, in a system dialog");
+
+  // Back to this vault: the reference goes, nothing is stored, and
+  // nothing new needs a yes.
+  await edit.getByLabel("Password from").selectOption("This vault");
+  await expect(edit).not.toContainText("asks you, in a system dialog");
+  await expect(edit.getByLabel("Password", { exact: true })).toHaveValue("");
+  await expect(edit.getByLabel("Remove the stored password")).toHaveCount(0);
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(list).not.toContainText("password");
+});
+
+test("a key comes from 1Password or Vault, and its passphrase from any manager", async ({
+  page,
+}) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Ops");
+  const keyFrom = form.getByLabel("Private key from");
+  await expect(keyFrom.getByRole("option")).toHaveText([
+    "This vault",
+    "1Password",
+    "HashiCorp Vault",
+  ]);
+  await expect(form.getByLabel("Key passphrase from").getByRole("option")).toHaveText([
+    "This vault",
+    "1Password",
+    "Bitwarden",
+    "HashiCorp Vault",
+  ]);
+  await keyFrom.selectOption("HashiCorp Vault");
+  await expect(form.getByLabel("Key", { exact: true })).toHaveCount(0);
+  const key = form.getByRole("group", { name: "Private key source" });
+  await expect(key.getByLabel("KV mount")).toHaveValue("secret");
+  await expect(key).toContainText("that token goes to this address");
+  await key.getByLabel("Vault address").fill("https://vault.example.com:8200");
+  await key.getByLabel("Secret path").fill("ssh/ops");
+  await key.getByLabel("Field").fill("private_key");
+  // A passphrase from Vault starts at the key's secret, with its own field.
+  await form.getByLabel("Key passphrase from").selectOption("HashiCorp Vault");
+  const passphrase = form.getByRole("group", { name: "Key passphrase source" });
+  await expect(passphrase.getByLabel("Vault address")).toHaveValue(
+    "https://vault.example.com:8200",
+  );
+  await expect(passphrase.getByLabel("Secret path")).toHaveValue("ssh/ops");
+  await expect(passphrase.getByLabel("Field")).toHaveValue("");
+  await form.getByLabel("Key passphrase from").selectOption("Bitwarden");
+  await form
+    .getByRole("group", { name: "Key passphrase source" })
+    .getByLabel("Item id")
+    .fill("2f2a3b4c-0000-4000-8000-000000000001");
+  await form.getByRole("button", { name: "Save" }).click();
+
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await expect(list).toContainText("key from HashiCorp Vault");
+  await list.getByRole("button", { name: "Edit Ops" }).click();
+  const edit = vault(page).getByRole("form", { name: "Edit Ops" });
+  await expect(edit.getByLabel("Secret path")).toHaveValue("ssh/ops");
+  await expect(edit.getByLabel("Item id")).toHaveValue("2f2a3b4c-0000-4000-8000-000000000001");
+});
+
+test("a removed or generated key takes its passphrase reference with it", async ({ page }) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Ops");
+  await form.getByLabel("Private key (OpenSSH)").fill("-----BEGIN OPENSSH PRIVATE KEY-----");
+  await form.getByLabel("Key passphrase from").selectOption("1Password");
+  await form.getByLabel("Secret reference").fill("op://Ops/key/passphrase");
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await expect(list).toContainText("key · passphrase from 1Password");
+
+  // Removing the key removes what unlocked it.
+  await list.getByRole("button", { name: "Edit Ops" }).click();
+  let edit = vault(page).getByRole("form", { name: "Edit Ops" });
+  await expect(edit).toContainText("It reads a password manager");
+  await edit.getByLabel("Remove the stored key and its passphrase").check();
+  await expect(edit.getByLabel("Share through sync")).toBeEnabled();
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(list).not.toContainText("passphrase");
+  await expect(list).not.toContainText("key");
+
+  // A generated key has no passphrase to read.
+  await list.getByRole("button", { name: "Edit Ops" }).click();
+  edit = vault(page).getByRole("form", { name: "Edit Ops" });
+  await edit.getByLabel("Key passphrase from").selectOption("1Password");
+  await edit.getByLabel("Secret reference").fill("op://Ops/key/passphrase");
+  await edit.getByRole("combobox", { name: /^Key( \(one is stored\))?$/ }).selectOption("ed25519");
+  await expect(edit.getByLabel("Key passphrase from")).toHaveCount(0);
+  await expect(edit).not.toContainText("asks you, in a system dialog");
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(list).toContainText("Ops");
+  await expect(list).toContainText("key");
+  await expect(list).not.toContainText("passphrase");
+});
+
+test("a shared identity that starts reading a manager says what the others keep", async ({
+  page,
+}) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Deploy");
+  await form.getByLabel("Password", { exact: true }).fill("hunter2");
+  await form.getByLabel("Share through sync").check();
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await list.getByRole("button", { name: "Edit Deploy" }).click();
+  const edit = vault(page).getByRole("form", { name: "Edit Deploy" });
+  await edit.getByLabel("Password from").selectOption("Bitwarden");
+  await expect(edit).toContainText("so it stops syncing. The other devices keep the password");
+  await edit.getByLabel("Item id").fill("2f2a3b4c-0000-4000-8000-000000000001");
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(vault(page).getByRole("alert")).toHaveCount(0);
+  await expect(list).toContainText("password from Bitwarden");
+  await expect(list).not.toContainText("shared through sync");
+});
+
+test("a key moved from the vault to a manager keeps the passphrase set beside it", async ({
+  page,
+}) => {
+  await createVault(page);
+  await vault(page).getByRole("button", { name: "New identity" }).click();
+  const form = vault(page).getByRole("form", { name: "New identity" });
+  await form.getByLabel("Name").fill("Ops");
+  await form.getByLabel("Private key (OpenSSH)").fill("-----BEGIN OPENSSH PRIVATE KEY-----");
+  await form.getByRole("button", { name: "Save" }).click();
+  const list = vault(page).getByRole("list", { name: "Identities" });
+  await list.getByRole("button", { name: "Edit Ops" }).click();
+  const edit = vault(page).getByRole("form", { name: "Edit Ops" });
+  await edit.getByLabel("Remove the stored key and its passphrase").check();
+  await expect(edit.getByLabel("Key passphrase from")).toHaveCount(0);
+  await edit.getByLabel("Private key from").selectOption("1Password");
+  await edit
+    .getByRole("group", { name: "Private key source" })
+    .getByLabel("Secret reference")
+    .fill("op://Ops/key/private key");
+  await edit.getByLabel("Key passphrase from").selectOption("Bitwarden");
+  await edit.getByLabel("Item id").fill("2f2a3b4c-0000-4000-8000-000000000001");
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(list).toContainText("key from 1Password · passphrase from Bitwarden");
 });
