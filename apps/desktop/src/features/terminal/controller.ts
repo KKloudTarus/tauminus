@@ -1235,7 +1235,9 @@ export class TerminalController {
    *
    * The erase goes through the output lane, after the output already pushed:
    * written at once, it could land between two chunks of one read, inside an
-   * escape sequence, and the rest of that sequence would print as text. In
+   * escape sequence, and the rest of that sequence would print as text. A
+   * read that itself ends inside one holds the erase until a read ends
+   * outside it. In
    * the alternate screen (vim, less) there are no saved lines, so on Windows
    * it erases nothing there, and the normal screen keeps its scrollback.
    */

@@ -1573,6 +1573,21 @@ describe("TerminalController clearing the scrollback", () => {
     expect(row(controller, cursorY)).toBe("prompt>");
   });
 
+  it("holds the erase on Windows while a read ends inside an escape sequence", async () => {
+    const { sessions, controller } = setup({ conpty: true });
+    await mount(controller);
+    sessions.resolveOpen();
+    await vi.waitFor(() => expect(controller.status.kind).toBe("running"));
+    // Two reads, the first ending inside an SGR.
+    sessions.events.onOutput(new TextEncoder().encode("ab\x1b[01;3"));
+    controller.clearScrollback();
+    sessions.events.onOutput(new TextEncoder().encode("4mBLUE\x1b[0m!"));
+    await vi.waitFor(async () => {
+      await written(controller, "");
+      expect(row(controller, 0)).toBe("abBLUE!");
+    });
+  });
+
   it("erases between reads on Windows, never inside an escape sequence", async () => {
     // Eight-byte chunks, two with xterm.js at once, turns run by the test.
     const tasks: (() => void)[] = [];

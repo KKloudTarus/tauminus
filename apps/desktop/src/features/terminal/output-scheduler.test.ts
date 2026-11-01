@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { OutputScheduler } from "./output-scheduler.ts";
+import { OutputScheduler, endsInsideSequence } from "./output-scheduler.ts";
 
 /** A scheduler whose posted tasks and timers run only when the test says so. */
 function setup(sizes: { turnMs?: number; stallMs?: number } = {}) {
@@ -95,6 +95,37 @@ describe("OutputScheduler", () => {
     a.parseAll();
     expect(log).toEqual(["a:\x1b[1;", "a:3", "a:4mok", "a:!"]);
     expect(a.parsedBytes).toEqual([4, 1, 4]);
+  });
+
+  it("holds the app's own bytes while the last push ends inside a CSI sequence", () => {
+    const { scheduler, runTasks } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b[1;3"));
+    runTasks();
+    a.parseAll();
+    a.lane.pushLocal(bytes("!"));
+    a.lane.pushLocal(bytes("?"));
+    expect(log).toEqual(["a:\x1b[1;", "a:3"]);
+    a.lane.push(bytes("4mok"));
+    runTasks();
+    a.parseAll();
+    expect(log).toEqual(["a:\x1b[1;", "a:3", "a:4mok", "a:!", "a:?"]);
+    expect(a.parsedBytes).toEqual([4, 1, 4]);
+  });
+
+  it("holds the app's own bytes while the last push ends inside a UTF-8 character", () => {
+    const { scheduler } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    // "ế" takes three bytes in UTF-8: the first push stops two bytes in.
+    a.lane.push(new Uint8Array([0xe1, 0xba]));
+    a.parseAll();
+    a.lane.pushLocal(bytes("!"));
+    expect(log).toHaveLength(1);
+    a.lane.push(new Uint8Array([0xbf]));
+    expect(log).toHaveLength(3);
+    expect(log.at(-1)).toBe("a:!");
   });
 
   it("writes the app's own bytes to a quiet lane at once, uncounted", () => {
@@ -390,5 +421,20 @@ describe("OutputScheduler", () => {
     expect(() => new OutputScheduler({ ...sizes, direct: 1.5 })).toThrow(RangeError);
     expect(() => new OutputScheduler({ ...sizes, turnMs: 0 })).toThrow(RangeError);
     expect(() => new OutputScheduler({ ...sizes, stallMs: Number.NaN })).toThrow(RangeError);
+  });
+});
+
+describe("endsInsideSequence", () => {
+  it("sees a CSI without its final byte, a lone ESC, and a partial UTF-8 character", () => {
+    const open = ["ab\x1b[01;3", "ab\x1b[", "ab\x1b", "\x1b[?25"];
+    const closed = ["ab\x1b[01;34m", "ab", "", "\x1b]0;title\x07", "\x1b(B", "ok\x1b[2J"];
+    for (const text of open) expect(endsInsideSequence(bytes(text))).toBe(true);
+    for (const text of closed) expect(endsInsideSequence(bytes(text))).toBe(false);
+    const e = [0xe1, 0xba, 0xbf];
+    expect(endsInsideSequence(new Uint8Array([0x61, ...e.slice(0, 1)]))).toBe(true);
+    expect(endsInsideSequence(new Uint8Array([0x61, ...e.slice(0, 2)]))).toBe(true);
+    expect(endsInsideSequence(new Uint8Array([0x61, ...e]))).toBe(false);
+    expect(endsInsideSequence(new Uint8Array([0xf0, 0x9f, 0x98]))).toBe(true);
+    expect(endsInsideSequence(new Uint8Array([0xf0, 0x9f, 0x98, 0x80]))).toBe(false);
   });
 });
