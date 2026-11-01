@@ -153,6 +153,42 @@ export class OutputScheduler {
 
 /** Chunks a turn keeps with xterm.js at once. */
 const IN_FLIGHT = 2;
+/** Session bytes a lane keeps to judge where a push ended: a long SGR fits. */
+const TAIL_BYTES = 64;
+
+/**
+ * Whether `bytes` end inside a UTF-8 character, inside a CSI sequence, or
+ * right after a lone ESC. Judged from `bytes` alone: a CSI that started
+ * before them goes unseen. O(bytes).
+ */
+export function endsInsideSequence(bytes: Uint8Array): boolean {
+  // A lead byte without all of its continuation bytes.
+  for (let back = 1; back <= Math.min(3, bytes.length); back += 1) {
+    const byte = bytes[bytes.length - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    if (byte >= 0xc0) {
+      const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : 2;
+      if (back < length) return true;
+    }
+    break;
+  }
+  const esc = bytes.lastIndexOf(0x1b);
+  if (esc === -1) return false;
+  if (esc === bytes.length - 1) return true;
+  if (bytes[esc + 1] !== 0x5b) return false;
+  // A CSI ends at its final byte, 0x40 to 0x7e.
+  return !bytes.subarray(esc + 2).some((byte) => byte >= 0x40 && byte <= 0x7e);
+}
+
+/** The last `n` bytes of `before` followed by `data`. O(n). */
+function lastBytes(before: Uint8Array, data: Uint8Array, n: number): Uint8Array {
+  if (data.byteLength >= n) return data.slice(data.byteLength - n);
+  const joined = new Uint8Array(Math.min(n, before.byteLength + data.byteLength));
+  const kept = joined.byteLength - data.byteLength;
+  joined.set(before.subarray(before.byteLength - kept), 0);
+  joined.set(data, kept);
+  return joined;
+}
 
 /** One terminal's queue of output on its way to xterm.js. */
 export class Lane {
@@ -161,6 +197,12 @@ export class Lane {
   readonly #onParsed: (bytes: number) => void;
   /** Chunks of at most `slice` bytes, oldest first, from `#head` on. */
   #chunks: Uint8Array[] = [];
+  /** The queued chunks the app wrote itself, which are parsed but not counted. */
+  readonly #local = new WeakSet<Uint8Array>();
+  /** The last bytes the session pushed, to see whether they end mid-sequence. */
+  #tail: Uint8Array = new Uint8Array(0);
+  /** The app's bytes waiting for a push that ends outside a sequence. */
+  #held: Uint8Array[] = [];
   #head = 0;
   /** Chunks handed to xterm.js in a turn and not parsed yet, at most IN_FLIGHT. */
   #inFlight = 0;
@@ -200,12 +242,43 @@ export class Lane {
       this.#write(data, () => {
         if (!this.#closed) this.#onParsed(data.byteLength);
       });
+    } else {
+      const { slice } = this.#scheduler;
+      for (let start = 0; start < data.byteLength; start += slice) {
+        this.#chunks.push(data.subarray(start, start + slice));
+      }
+      if (this.ready) this.#scheduler.enqueue(this);
+    }
+    this.#tail = lastBytes(this.#tail, data, TAIL_BYTES);
+    if (this.#held.length > 0 && !endsInsideSequence(this.#tail)) {
+      for (const local of this.#held.splice(0)) this.#placeLocal(local);
+    }
+  }
+
+  /**
+   * Writes `data`, which the app made, after everything pushed so far: at
+   * the end of a whole push, never between the chunks a push was cut into,
+   * which can fall inside an escape sequence. A push that itself ended
+   * inside a CSI sequence or a UTF-8 character is finished by a later one,
+   * so `data` waits for the first push that ends outside both. Its bytes
+   * reach no `onParsed`, because the session did not send them.
+   */
+  pushLocal(data: Uint8Array): void {
+    if (this.#closed || data.byteLength === 0) return;
+    if (this.#held.length > 0 || endsInsideSequence(this.#tail)) {
+      this.#held.push(data);
       return;
     }
-    const { slice } = this.#scheduler;
-    for (let start = 0; start < data.byteLength; start += slice) {
-      this.#chunks.push(data.subarray(start, start + slice));
+    this.#placeLocal(data);
+  }
+
+  #placeLocal(data: Uint8Array): void {
+    if (!this.hasQueued && this.#scheduler.isIdle(this)) {
+      this.#write(data, () => {});
+      return;
     }
+    this.#local.add(data);
+    this.#chunks.push(data);
     if (this.ready) this.#scheduler.enqueue(this);
   }
 
@@ -230,6 +303,7 @@ export class Lane {
     this.#closed = true;
     this.#chunks = [];
     this.#head = 0;
+    this.#held = [];
     this.#endTurn();
     this.#scheduler.release(this);
   }
@@ -239,8 +313,9 @@ export class Lane {
     this.#head += 1;
     this.#compact();
     this.#inFlight += 1;
+    const counted = this.#local.has(chunk) ? 0 : chunk.byteLength;
     try {
-      this.#write(chunk, () => this.#parsed(chunk.byteLength));
+      this.#write(chunk, () => this.#parsed(counted));
     } catch (error) {
       // xterm.js throws only past its 50 MB discard limit, which flow
       // control keeps out of reach. The pane cannot go on either way.
@@ -254,7 +329,7 @@ export class Lane {
     if (this.#closed) return;
     this.#inFlight -= 1;
     try {
-      this.#onParsed(bytes);
+      if (bytes > 0) this.#onParsed(bytes);
     } finally {
       this.#continue();
     }
