@@ -14,27 +14,45 @@ use tauri::ipc::Channel;
 use crate::ipc::{
     ChannelSink, CommandError, ErrorCode, GridSize, OutputChunk, SessionExit, SessionHandle,
 };
+use crate::shells::ShellCatalog;
 
-/// Opens a local shell. Output arrives on `on_output`, and `on_exit` fires once
+/// Characters of an unknown shell id an error repeats.
+const SHOWN_ID_CHARS: usize = 64;
+
+/// Opens a local shell: the platform default, or the one `local_shells`
+/// listed as `shell`. Output arrives on `on_output`, and `on_exit` fires once
 /// when the shell ends.
 #[tauri::command]
 #[specta::specta]
 pub(crate) async fn session_open(
     shells: State<'_, LocalShells>,
+    catalog: State<'_, ShellCatalog>,
     size: GridSize,
+    shell: Option<String>,
     on_output: Channel<OutputChunk>,
     on_exit: Channel<SessionExit>,
 ) -> Result<SessionHandle, CommandError> {
     let size = TerminalSize::try_from(size)?;
     let shells = shells.inner().clone();
+    let catalog = catalog.inner().clone();
     let sink = ChannelSink {
         output: on_output,
         exit: on_exit,
     };
-    // Spawning a process blocks for a fork and exec; keep it off the async
-    // worker threads.
+    // Finding a shell and spawning it block: keep them off the async worker
+    // threads.
     let id = tauri::async_runtime::spawn_blocking(move || {
-        shells.open(&LocalShell::default(), size, sink)
+        let program = match shell {
+            None => LocalShell::default(),
+            Some(id) => catalog.find(&id).ok_or_else(|| {
+                let shown: String = id.chars().take(SHOWN_ID_CHARS).collect();
+                CommandError::new(
+                    ErrorCode::NotFound,
+                    format!("{shown:?} is not a shell on this computer"),
+                )
+            })?,
+        };
+        Ok::<_, CommandError>(shells.open(&program, size, sink)?)
     })
     .await
     .map_err(|e| CommandError::new(ErrorCode::Internal, e.to_string()))??;

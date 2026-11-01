@@ -149,6 +149,8 @@ export {
   type ErrorCode,
   type GridSize,
   type PromptHandler,
+  type LocalShellView,
+  type LocalShellsView,
   type PromptKind,
   type RouteSpec,
   type SessionClient,

@@ -742,6 +742,12 @@ describe("TerminalController with TerminalView", () => {
     const controller = new TerminalController(sessions, { spec });
     controllers.push(controller);
     expect(controller.defaultTitle).toBe("a@db:2222");
+    const local = new TerminalController(sessions, {
+      spec: { kind: "local", shell: { id: "pwsh", name: "PowerShell 7" } },
+    });
+    controllers.push(local);
+    expect(local.defaultTitle).toBe("PowerShell 7");
+    expect(setup().controller.defaultTitle).toBe("Terminal");
     await mount(controller);
     expect(sessions.opened[0]?.spec).toBe(spec);
   });

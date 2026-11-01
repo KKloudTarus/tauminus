@@ -21,6 +21,9 @@
 //! it. See [`process`] for why those signals can never hit a reused pid.
 
 mod process;
+mod shells;
+
+pub use shells::{KnownShell, ShellListing, known_shells};
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, PoisonError, mpsc as std_mpsc};

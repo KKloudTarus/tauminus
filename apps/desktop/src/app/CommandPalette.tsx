@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Command, useCommandState } from "cmdk";
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 
 import type { ForwardsStore } from "@/features/forwards/forwards-store.ts";
 import { matchRules, ruleChoices } from "@/features/forwards/rules.ts";
@@ -62,6 +62,7 @@ export function CommandPalette({ shell }: { shell: AppShell }) {
             </Command.Item>
           );
         })}
+        {paletteOpen && <ShellItems shell={shell} />}
         {paletteOpen && <WorkspaceItems shell={shell} />}
         {paletteOpen && shell.snippets && <SnippetItems shell={shell} snippets={shell.snippets} />}
         {paletteOpen && shell.forwards && <RuleItems shell={shell} forwards={shell.forwards} />}
@@ -157,6 +158,54 @@ function SnippetItems({ shell, snippets }: { shell: AppShell; snippets: Snippets
 }
 
 const SNIPPET_ITEMS = 50;
+
+/**
+ * "New tab" and "Default shell" for each shell found besides the platform
+ * default, which only Windows lists. Listed again each time the palette
+ * opens, so a shell installed since shows up.
+ */
+function ShellItems({ shell }: { shell: AppShell }) {
+  const { localShells, defaultShell } = useSyncExternalStore(shell.subscribe, shell.getState);
+  useEffect(() => {
+    void shell.listLocalShells();
+  }, [shell]);
+  if (localShells.length === 0) return null;
+  const items = [
+    ...localShells.map((choice) => ({
+      key: `new/${choice.id}`,
+      label: `New tab: ${choice.name}`,
+      current: false,
+      run: () => shell.newLocalTab(choice),
+    })),
+    ...localShells.map((choice) => ({
+      key: `default/${choice.id}`,
+      label: `Default shell: ${choice.name}`,
+      current: defaultShell?.id === choice.id,
+      run: () => shell.setDefaultShell(choice),
+    })),
+    {
+      key: "default/",
+      label: "Default shell: system default",
+      current: defaultShell === undefined,
+      run: () => shell.setDefaultShell(undefined),
+    },
+  ];
+  return items.map(({ key, label, current, run }) => (
+    <Command.Item
+      key={key}
+      value={`${label}\u0000${key}`}
+      onSelect={() => {
+        shell.setPaletteOpen(false);
+        // As for actions: a new tab takes focus after the palette gives it back.
+        setTimeout(() => setTimeout(run));
+      }}
+      className={ITEM}
+    >
+      <span className="flex-1 truncate">{label}</span>
+      {current && <span className="text-[11px] text-faint">current</span>}
+    </Command.Item>
+  ));
+}
 
 /** "Open workspace" for each saved one; at most 50, so cmdk filters them. */
 function WorkspaceItems({ shell }: { shell: AppShell }) {
