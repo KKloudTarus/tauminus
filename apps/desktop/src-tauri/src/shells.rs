@@ -4,6 +4,7 @@
 //! The shells a local tab can open by id, besides the platform default.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tauminus_domain::LocalShell;
@@ -25,6 +26,8 @@ pub(crate) struct ShellCatalog {
     listed: Arc<Mutex<Option<Vec<KnownShell>>>>,
     /// Held while listing, so one listing runs at a time.
     listing: Arc<Mutex<()>>,
+    /// Listings finished so far, so a caller that waited for one can tell.
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for ShellCatalog {
@@ -45,6 +48,7 @@ impl ShellCatalog {
             list,
             listed: Arc::default(),
             listing: Arc::default(),
+            generation: Arc::default(),
         }
     }
 
@@ -53,6 +57,11 @@ impl ShellCatalog {
     /// ones listed before stay. Blocks; see [`tauminus_pty::known_shells`].
     pub(crate) fn refresh(&self) -> (Vec<KnownShell>, bool) {
         let _one = self.listing.lock().unwrap_or_else(PoisonError::into_inner);
+        self.list_holding_lock()
+    }
+
+    /// [`Self::refresh`], for a caller that holds `listing`.
+    fn list_holding_lock(&self) -> (Vec<KnownShell>, bool) {
         let ShellListing {
             mut shells,
             wsl_answered,
@@ -68,28 +77,54 @@ impl ShellCatalog {
             shells.extend(before.cloned());
         }
         *listed = Some(shells.clone());
+        self.generation.fetch_add(1, Ordering::SeqCst);
         (shells, wsl_answered)
     }
 
     /// The shell listed under `id`. A miss lists once more: the shell may
-    /// be new, or WSL may have been slow when it was last listed.
+    /// be new, or WSL may have been slow when it was last listed. An id
+    /// that no shell could have is refused without listing, and a listing
+    /// that finished while this one waited for its turn is used instead of
+    /// running another.
     pub(crate) fn find(&self, id: &str) -> Option<LocalShell> {
-        let pick = |shells: &[KnownShell]| {
-            shells
-                .iter()
-                .find(|known| known.id == id)
-                .map(|known| known.shell.clone())
-        };
-        let listed = self
-            .listed
+        let seen = self.generation.load(Ordering::SeqCst);
+        if let Some(shell) = self.listed_shell(id) {
+            return Some(shell);
+        }
+        if !could_be_shell(id) {
+            return None;
+        }
+        self.find_after(id, seen)
+    }
+
+    /// The rest of [`Self::find`] after a miss in the listing `seen` counted.
+    fn find_after(&self, id: &str, seen: u64) -> Option<LocalShell> {
+        let _one = self.listing.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.generation.load(Ordering::SeqCst) != seen {
+            return self.listed_shell(id);
+        }
+        let (shells, _) = self.list_holding_lock();
+        shells
+            .into_iter()
+            .find(|known| known.id == id)
+            .map(|known| known.shell)
+    }
+
+    fn listed_shell(&self, id: &str) -> Option<LocalShell> {
+        self.listed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        listed
-            .as_deref()
-            .and_then(pick)
-            .or_else(|| pick(&self.refresh().0))
+            .iter()
+            .flatten()
+            .find(|known| known.id == id)
+            .map(|known| known.shell.clone())
     }
+}
+
+/// Whether `id` has the form of an id the backend gives a shell.
+fn could_be_shell(id: &str) -> bool {
+    matches!(id, "powershell" | "pwsh" | "cmd" | "git-bash")
+        || id.strip_prefix("wsl:").is_some_and(|name| !name.is_empty())
 }
 
 /// The shells this computer has besides the default, found again on each

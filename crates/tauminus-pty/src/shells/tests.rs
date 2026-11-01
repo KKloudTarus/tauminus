@@ -114,6 +114,27 @@ fn offers_only_the_command_prompt_where_nothing_else_is_installed() {
 }
 
 #[test]
+fn prefers_the_store_install_of_powershell_7_to_path() {
+    let vars = [
+        ("SystemRoot", r"C:\Windows"),
+        ("LOCALAPPDATA", r"C:\Users\me\AppData\Local"),
+        ("PATH", r"C:\tools"),
+    ];
+    let shells = Machine::new(
+        &vars,
+        &[
+            r"C:\tools\pwsh.exe",
+            r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\pwsh.exe",
+        ],
+    )
+    .shells();
+    assert_eq!(
+        find(&shells, "pwsh").shell.program.as_deref(),
+        Some(r"C:\Users\me\AppData\Local\Microsoft\WindowsApps\pwsh.exe")
+    );
+}
+
+#[test]
 fn finds_powershell_7_on_path_and_skips_relative_folders() {
     let vars = [
         ("SystemRoot", r"C:\Windows"),

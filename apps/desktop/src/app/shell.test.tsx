@@ -338,6 +338,27 @@ describe("AppShell choosing the local shell", () => {
     expect(app.getState().defaultShell).toBeUndefined();
   });
 
+  it("keeps the default when a listing fails, which proves nothing", async () => {
+    shell().setDefaultShell(pwsh);
+    const app = shell(fakeHosts(), {
+      ...fakeSessions,
+      localShells: () => Promise.reject(new Error("listing failed")),
+    });
+    await app.prepareLocalShells();
+    expect(app.getState().defaultShell).toEqual(pwsh);
+    expect(app.hosts.getSnapshot().notice).toBeUndefined();
+    app.workspace.newTab();
+    expect(app.workspace.focusedSpec()).toEqual({ kind: "local", shell: pwsh });
+  });
+
+  it("names the default as the backend does, not as storage says", async () => {
+    shell().setDefaultShell({ id: "pwsh", name: "‮evil" });
+    const app = listing([pwsh!], true);
+    await app.prepareLocalShells();
+    expect(app.getState().defaultShell).toEqual(pwsh);
+    expect(shell().getState().defaultShell).toEqual(pwsh);
+  });
+
   it("opens one tab in another shell, which the backend starts", async () => {
     const app = shell();
     expect(app.newLocalTab(ubuntu)).toBe(true);

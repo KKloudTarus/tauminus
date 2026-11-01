@@ -1361,41 +1361,54 @@ export class AppShell {
 
   /**
    * Lists the shells a local tab can open again, so one installed since
-   * shows up. Resolves to the list; empty when this window has no backend
-   * for it or the listing failed. A default shell the list no longer has
-   * is dropped, and the user told, so new tabs do not fail on it; when WSL
-   * was too slow to answer, a distribution is not taken for gone.
+   * shows up. Resolves to the list; the last one when the listing failed,
+   * and empty when this window has no backend for it.
+   *
+   * The remembered default is checked against each listing that answered:
+   * one the list no longer has is dropped, and the user told, so new tabs
+   * do not fail on it; a distribution WSL was too slow to list is not taken
+   * for gone. One the list has takes the list's name, so a name edited in
+   * storage never labels a tab. A failed listing proves nothing and leaves
+   * the default alone.
    */
   listLocalShells(): Promise<readonly LocalShellView[]> {
     if (this.#listingShells) return this.#listingShells;
     const listing = this.#sessions.localShells?.();
     if (!listing) return Promise.resolve([]);
     this.#listingShells = listing
-      .catch((error: unknown) => {
-        console.warn("could not list local shells", error);
-        return { shells: [...this.#state.localShells], complete: false };
-      })
-      .then(({ shells, complete }) => {
+      .then(
+        (answer) => ({ ...answer, answered: true }),
+        (error: unknown) => {
+          console.warn("could not list local shells", error);
+          return { shells: [...this.#state.localShells], complete: false, answered: false };
+        },
+      )
+      .then(({ shells, complete, answered }) => {
         this.#listingShells = undefined;
         // An unchanged list leaves the state alone: the palette lists again
         // each time it opens, and new items there move its selection.
         if (!sameShells(shells, this.#state.localShells)) {
           this.#set({ ...this.#state, localShells: shells });
         }
-        const chosen = this.#state.defaultShell;
-        const gone =
-          chosen &&
-          !shells.some((s) => s.id === chosen.id) &&
-          (complete || !chosen.id.startsWith("wsl:"));
-        if (gone) {
-          this.setDefaultShell(undefined);
-          this.hosts.notify(
-            `${chosen.name} is not on this computer; new tabs open the system default shell`,
-          );
-        }
+        if (answered) this.#checkDefaultShell(shells, complete);
         return shells;
       });
     return this.#listingShells;
+  }
+
+  #checkDefaultShell(shells: readonly LocalShellView[], complete: boolean): void {
+    const chosen = this.#state.defaultShell;
+    if (!chosen) return;
+    const listed = shells.find((s) => s.id === chosen.id);
+    if (listed) {
+      if (listed.name !== chosen.name) this.setDefaultShell(listed);
+      return;
+    }
+    if (!complete && chosen.id.startsWith("wsl:")) return;
+    this.setDefaultShell(undefined);
+    this.hosts.notify(
+      `${chosen.name} is not on this computer; new tabs open the system default shell`,
+    );
   }
 
   /**

@@ -39,7 +39,12 @@ pub fn known_shells() -> ShellListing {
     #[cfg(windows)]
     let listing = windows_shells(&Lookup {
         var: &|name| std::env::var(name).ok(),
-        exists: &|path| std::path::Path::new(path).is_file(),
+        // The Store installs PowerShell 7 as an app execution alias, a
+        // reparse point that metadata cannot follow: read the link itself.
+        exists: &|path| {
+            let path = std::path::Path::new(path);
+            path.is_file() || path.symlink_metadata().is_ok_and(|meta| !meta.is_dir())
+        },
         wsl: &query_wsl,
     });
     #[cfg(not(windows))]
@@ -85,9 +90,15 @@ fn windows_shells(lookup: &Lookup<'_>) -> ShellListing {
             &["-NoLogo"],
         ));
     }
+    // The Store's install before PATH, whose folders any user may be able to
+    // write to.
     let pwsh = program_files
         .as_deref()
         .and_then(|dir| found(format!(r"{dir}\PowerShell\7\pwsh.exe")))
+        .or_else(|| {
+            var("LOCALAPPDATA")
+                .and_then(|dir| found(format!(r"{dir}\Microsoft\WindowsApps\pwsh.exe")))
+        })
         .or_else(|| on_path(lookup, "pwsh.exe"));
     if let Some(path) = pwsh {
         shells.push(known("pwsh", "PowerShell 7", path, &["-NoLogo"]));

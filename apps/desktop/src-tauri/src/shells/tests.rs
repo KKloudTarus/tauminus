@@ -50,7 +50,32 @@ fn finds_a_listed_shell_and_refuses_an_unknown_id_after_one_more_look() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(catalog.find("pwsh"), Some(pwsh.shell));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(catalog.find(r"C:\Windows\System32\calc.exe"), None);
+    assert_eq!(catalog.find("wsl:Nope"), None);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn refuses_an_id_no_shell_could_have_without_listing() {
+    let (catalog, calls) = catalog(vec![listing(&[], true)]);
+    for id in [r"C:\Windows\System32\calc.exe", "wsl:", "bash", "", "PWSH"] {
+        assert_eq!(catalog.find(id), None, "{id}");
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn takes_a_listing_that_finished_while_it_waited_instead_of_listing_again() {
+    let ubuntu = shell("wsl:Ubuntu", "Ubuntu (WSL)");
+    let (catalog, calls) = catalog(vec![
+        listing(&[], false),
+        listing(std::slice::from_ref(&ubuntu), true),
+    ]);
+    catalog.refresh();
+    // A tab misses Ubuntu, then waits while the palette's listing runs.
+    let seen = catalog.generation.load(Ordering::SeqCst);
+    catalog.refresh();
+    assert_eq!(catalog.find_after("wsl:Ubuntu", seen), Some(ubuntu.shell));
+    assert_eq!(catalog.find_after("wsl:Gone", seen), None);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
