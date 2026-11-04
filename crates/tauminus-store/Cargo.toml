@@ -38,7 +38,7 @@ rusqlite = { version = "0.40", features = ["bundled-sqlcipher-vendored-openssl"]
 # hkdf, and sha2 are already in the tree through russh.
 # A fair lock for the history's connection, so long deletions take turns
 # with recording; already in the tree through tauri.
-parking_lot = "0.12.5"
+parking_lot = "0.13.0"
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["zeroize"] }
 hkdf = "0.13.0"
 sha2 = { version = "0.11.1", default-features = false }
