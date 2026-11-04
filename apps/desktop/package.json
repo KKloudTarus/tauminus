@@ -32,7 +32,7 @@
     "cmdk": "1.1.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "react-resizable-panels": "4.14.8"
+    "react-resizable-panels": "4.15.0"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
@@ -46,9 +46,9 @@
     "@vitest/browser-playwright": "5.0.5",
     "babel-plugin-react-compiler": "1.0.0",
     "eslint-plugin-react-hooks": "7.1.1",
-    "oxfmt": "0.74.0",
-    "oxlint": "1.89.0",
-    "oxlint-tsgolint": "7.0.2004",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
     "playwright": "1.64.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
