@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Tauminus contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+import { Terminal } from "@xterm/headless";
 import { describe, expect, it } from "vitest";
 
-import { OutputScheduler } from "./output-scheduler.ts";
+import { OutputScheduler, SequenceTracker } from "./output-scheduler.ts";
 
 /** A scheduler whose posted tasks and timers run only when the test says so. */
 function setup(sizes: { turnMs?: number; stallMs?: number } = {}) {
@@ -81,6 +82,123 @@ describe("OutputScheduler", () => {
     expect(log).toEqual(["a:ok"]);
     a.parseAll();
     expect(a.parsedBytes).toEqual([2]);
+  });
+
+  it("writes the app's own bytes after a whole push, and does not count them", () => {
+    const { scheduler, runTasks } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b[1;3"));
+    a.lane.push(bytes("4mok"));
+    // Pushed while the first chunk is out: it waits for the second push.
+    runTasks();
+    a.lane.pushLocal(bytes("!"));
+    a.parseAll();
+    expect(log).toEqual(["a:\x1b[1;", "a:3", "a:4mok", "a:!"]);
+    expect(a.parsedBytes).toEqual([4, 1, 4]);
+  });
+
+  it("holds the app's own bytes while the last push ends inside a CSI sequence", () => {
+    const { scheduler, runTasks } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b[1;3"));
+    runTasks();
+    a.parseAll();
+    a.lane.pushLocal(bytes("!"));
+    a.lane.pushLocal(bytes("?"));
+    expect(log).toEqual(["a:\x1b[1;", "a:3"]);
+    a.lane.push(bytes("4mok"));
+    runTasks();
+    a.parseAll();
+    expect(log).toEqual(["a:\x1b[1;", "a:3", "a:4mok", "a:!", "a:?"]);
+    expect(a.parsedBytes).toEqual([4, 1, 4]);
+  });
+
+  it("holds the app's own bytes while the last push ends inside a UTF-8 character", () => {
+    const { scheduler } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    // "ế" takes three bytes in UTF-8: the first push stops two bytes in.
+    a.lane.push(new Uint8Array([0xe1, 0xba]));
+    a.parseAll();
+    a.lane.pushLocal(bytes("!"));
+    expect(log).toHaveLength(1);
+    a.lane.push(new Uint8Array([0xbf]));
+    expect(log).toHaveLength(3);
+    expect(log.at(-1)).toBe("a:!");
+  });
+
+  it("holds the app's own bytes while a link runs on across pushes", () => {
+    const { scheduler, runTasks } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    const push = (text: string) => {
+      a.lane.push(bytes(text));
+      runTasks();
+      a.parseAll();
+    };
+    // An OSC 8 link longer than the 64 bytes the lane used to keep.
+    push(`ab\x1b]8;;https://example.com/${"x".repeat(80)}`);
+    a.lane.pushLocal(bytes("!"));
+    push("y".repeat(80));
+    expect(log).not.toContain("a:!");
+    push("\x1b\\link");
+    expect(log.at(-1)).toBe("a:!");
+  });
+
+  it("writes the app's held bytes after 100 ms if no push ends the sequence", () => {
+    const { scheduler, advance, timers } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b]"));
+    a.lane.pushLocal(bytes("!"));
+    advance(99);
+    expect(log).toEqual(["a:\x1b]"]);
+    advance(1);
+    expect(log).toEqual(["a:\x1b]", "a:!"]);
+    expect(timers.size).toBe(0);
+  });
+
+  it("writes the next bytes at once after held bytes cut into a sequence", () => {
+    const { scheduler, advance, timers } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b]"));
+    a.lane.pushLocal(bytes("\x1b[3J"));
+    advance(100);
+    // xterm.js ended the OSC at the ESC, so the next erase need not wait.
+    a.lane.pushLocal(bytes("\x1b[3J"));
+    expect(log).toEqual(["a:\x1b]", "a:\x1b[3J", "a:\x1b[3J"]);
+    expect(timers.size).toBe(0);
+  });
+
+  it("stops the wait once a push ends the sequence or the lane closes", () => {
+    const { scheduler, advance, timers } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.push(bytes("\x1b("));
+    a.lane.pushLocal(bytes("!"));
+    expect(timers.size).toBe(1);
+    a.lane.push(bytes("B"));
+    expect(timers.size).toBe(0);
+    expect(log).toEqual(["a:\x1b(", "a:B", "a:!"]);
+    a.lane.push(bytes("\x1b]"));
+    a.lane.pushLocal(bytes("?"));
+    a.lane.close();
+    expect(timers.size).toBe(0);
+    advance(100);
+    expect(log).not.toContain("a:?");
+  });
+
+  it("writes the app's own bytes to a quiet lane at once, uncounted", () => {
+    const { scheduler } = setup();
+    const log: string[] = [];
+    const a = terminal(scheduler, "a", log);
+    a.lane.pushLocal(bytes("local bytes"));
+    expect(log).toEqual(["a:local bytes"]);
+    a.parseAll();
+    expect(a.parsedBytes).toEqual([]);
   });
 
   it("keeps two chunks with the terminal and sends the next from each callback", () => {
@@ -366,5 +484,103 @@ describe("OutputScheduler", () => {
     expect(() => new OutputScheduler({ ...sizes, direct: 1.5 })).toThrow(RangeError);
     expect(() => new OutputScheduler({ ...sizes, turnMs: 0 })).toThrow(RangeError);
     expect(() => new OutputScheduler({ ...sizes, stallMs: Number.NaN })).toThrow(RangeError);
+  });
+});
+
+/** Whether `reads`, fed in order, end inside a sequence. */
+function inside(...reads: Array<string | number[]>): boolean {
+  const tracker = new SequenceTracker();
+  for (const read of reads) {
+    tracker.feed(typeof read === "string" ? bytes(read) : new Uint8Array(read));
+  }
+  return tracker.inside;
+}
+
+describe("SequenceTracker", () => {
+  it("sees an unfinished escape sequence, a control string, and a lone ESC", () => {
+    const open = [
+      "ab\x1b[01;3",
+      "ab\x1b[",
+      "ab\x1b",
+      "\x1b[?25",
+      "ab\x1b]0;C:\\Win",
+      "ab\x1b]",
+      "ab\x1bP1$r",
+      "ab\x1b(",
+      "\x1b]0;title\x1b",
+      "\x1b_app",
+      "\x1bP\x07",
+    ];
+    const closed = [
+      "ab\x1b[01;34m",
+      "ab",
+      "",
+      "\x1b]0;title\x07",
+      "\x1b(B",
+      "ok\x1b[2J",
+      "\x1b]0;title\x1b\\",
+      "\x1bP1$r0m\x1b\\",
+      // CAN and SUB end any sequence; a C0 control inside a CSI does not.
+      "\x1b[01;3\x18",
+      "\x1b]0;title\x1a",
+      "\x1b[1\x07m",
+    ];
+    // Paired with its text, so a failure names the read.
+    for (const text of open) expect([text, inside(text)]).toEqual([text, true]);
+    for (const text of closed) expect([text, inside(text)]).toEqual([text, false]);
+  });
+
+  it("follows a sequence across reads, however long it runs", () => {
+    const title = "x".repeat(200);
+    expect(inside("ab\x1b]0;", title, title)).toBe(true);
+    expect(inside("ab\x1b]0;", title, `${title}\x07`)).toBe(false);
+    expect(inside("\x1b", "[", "01;3")).toBe(true);
+    expect(inside("\x1b", "[", "01;3", "4m")).toBe(false);
+    expect(inside("\x1bP", "1$r", "0m\x1b")).toBe(true);
+    expect(inside("\x1bP", "1$r", "0m\x1b", "\\")).toBe(false);
+  });
+
+  it("sees a UTF-8 character cut short, within a read and across reads", () => {
+    const e = [0xe1, 0xba, 0xbf];
+    expect(inside([0x61, ...e.slice(0, 1)])).toBe(true);
+    expect(inside([0x61, ...e.slice(0, 2)])).toBe(true);
+    expect(inside([0x61, ...e])).toBe(false);
+    expect(inside([0xf0, 0x9f, 0x98])).toBe(true);
+    expect(inside([0xf0, 0x9f, 0x98, 0x80])).toBe(false);
+    expect(inside([0xe1], [0xba])).toBe(true);
+    expect(inside([0xe1], [0xba], [0xbf])).toBe(false);
+    expect(inside([0xf0], [0x9f, 0x98], [0x80])).toBe(false);
+  });
+});
+
+describe("Lane writing to xterm.js", () => {
+  // Two reads that split one sequence, then what the row shows once both
+  // are parsed with the erase between them.
+  const splits: Array<[string, string]> = [
+    ["ab\x1b]0;C:\\Windows\\", "cmd.exe\x07!"],
+    ["ab\x1b]", "0;title\x07!"],
+    ["ab\x1bP1$r", "0m\x1b\\!"],
+    ["ab\x1b(", "B!"],
+  ];
+
+  it.each(splits)("erases after %j without printing the rest of it", async (first, second) => {
+    const term = new Terminal({ cols: 40, rows: 4, allowProposedApi: true });
+    const scheduler = new OutputScheduler({
+      slice: 1024,
+      direct: 1024,
+      turnMs: 10,
+      stallMs: 100,
+      post: (task) => queueMicrotask(task),
+    });
+    const lane = scheduler.lane(
+      (chunk, parsed) => term.write(chunk, parsed),
+      () => {},
+    );
+    lane.push(bytes(first));
+    lane.pushLocal(bytes("\x1b[3J"));
+    lane.push(bytes(second));
+    await new Promise<void>((resolve) => term.write("", resolve));
+    expect(term.buffer.active.getLine(0)?.translateToString(true)).toBe("ab!");
+    term.dispose();
   });
 });

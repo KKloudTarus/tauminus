@@ -19,13 +19,13 @@ afterEach(() => {
   for (const made of shells.splice(0)) made.dispose();
 });
 
-function shell(hosts = fakeHosts()): AppShell {
+function shell(hosts = fakeHosts(), userAgent = "test"): AppShell {
   const made = new AppShell({
     sessions: fakeSessions,
     hosts,
     vault: fakeVault(),
     snippets: fakeSnippets(() => []),
-    userAgent: "test",
+    userAgent,
     storage: localStorage,
     root: document.documentElement,
     clipboard: undefined,
@@ -278,5 +278,39 @@ describe("AppShell sync", () => {
     made.setSyncOpen(false);
     made.syncReviewed(["db"]);
     expect(retried).toBe(1);
+  });
+});
+
+const WINDOWS =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
+
+const text = (data: string | Uint8Array) =>
+  typeof data === "string" ? data : new TextDecoder().decode(data);
+
+/**
+ * How Clear scrollback reaches a local pane's xterm.js: the erase it writes,
+ * and whether it cleared the screen. What each does to the cursor is the
+ * controller's to test, with a pane of a known size.
+ */
+function clearOf(userAgent: string) {
+  const app = shell(fakeHosts(), userAgent);
+  app.workspace.newTab();
+  const { terminal } = app.workspace.terminal(app.workspace.activeTab!.focused)!;
+  const write = vi.spyOn(terminal, "write");
+  const clear = vi.spyOn(terminal, "clear");
+  app.run("terminal.clear");
+  return {
+    written: write.mock.calls.map(([data]) => text(data)),
+    cleared: clear.mock.calls.length,
+  };
+}
+
+describe("AppShell clearing the scrollback", () => {
+  it("drops only the scrollback of a local pane on Windows, where ConPTY places output", () => {
+    expect(clearOf(WINDOWS)).toEqual({ written: ["\x1b[3J"], cleared: 0 });
+  });
+
+  it("clears a local pane's screen elsewhere", () => {
+    expect(clearOf("test")).toEqual({ written: [], cleared: 1 });
   });
 });
