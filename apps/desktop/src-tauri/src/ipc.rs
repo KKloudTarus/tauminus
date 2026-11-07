@@ -40,6 +40,22 @@ pub(crate) struct SessionExit {
     pub(crate) lost: bool,
 }
 
+/// A shell a local tab can open besides the default, by `id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub(crate) struct LocalShellView {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
+/// The shells a local tab can open besides the default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub(crate) struct LocalShellsView {
+    pub(crate) shells: Vec<LocalShellView>,
+    /// False when WSL did not answer in time: its distributions may be
+    /// missing, not gone.
+    pub(crate) complete: bool,
+}
+
 /// Session id as the webview sees it. A `u32` keeps it a plain JavaScript
 /// number; `u64` would need `bigint`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]

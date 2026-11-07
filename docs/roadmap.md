@@ -32,6 +32,7 @@ Project skeleton
 Terminal
 
 - [x] Local PTY adapter over `portable-pty` (bash, zsh, fish, PowerShell)
+- [x] On Windows, choose the local shell: Windows PowerShell, PowerShell 7, Command Prompt, Git Bash, or a WSL distribution, for one tab or as the default for new tabs (the default stays `%ComSpec%` until one is chosen)
 - [x] `TerminalController` with `@xterm/xterm` 6, addons `webgl`, `fit`, `search`, `unicode11`
 - [x] Clickable links through a vetted opener (http and https only), opened with Ctrl+click (Cmd+click on macOS)
 - [x] Output path: Rust coalesces output (immediate after a quiet period, otherwise every 8 ms or at 64 KiB) and sends raw bytes through `tauri::ipc::Channel`
