@@ -153,41 +153,105 @@ export class OutputScheduler {
 
 /** Chunks a turn keeps with xterm.js at once. */
 const IN_FLIGHT = 2;
-/** Session bytes a lane keeps to judge where a push ended: a long SGR fits. */
-const TAIL_BYTES = 64;
+/**
+ * How long the app's bytes wait for the session's output to leave a
+ * sequence. Past that they go anyway, and the rest of the sequence, if it
+ * ever comes, prints as text: better than a Clear that never happens.
+ */
+const HOLD_MS = 100;
+
+const BEL = 0x07;
+const CAN = 0x18;
+const SUB = 0x1a;
+const ESC = 0x1b;
 
 /**
- * Whether `bytes` end inside a UTF-8 character, inside a CSI sequence, or
- * right after a lone ESC. Judged from `bytes` alone: a CSI that started
- * before them goes unseen. O(bytes).
+ * Where xterm.js's parser stands, folded to what an erase written there
+ * would do: nothing in `ground`, and anywhere else it cuts short a sequence
+ * the session has not finished, whose rest then prints as text. `string` is
+ * a DCS, SOS, PM or APC string, which only ESC, CAN or SUB ends.
  */
-export function endsInsideSequence(bytes: Uint8Array): boolean {
-  // A lead byte without all of its continuation bytes.
-  for (let back = 1; back <= Math.min(3, bytes.length); back += 1) {
-    const byte = bytes[bytes.length - back]!;
-    if ((byte & 0xc0) === 0x80) continue;
-    if (byte >= 0xc0) {
-      const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : 2;
-      if (back < length) return true;
-    }
-    break;
+type Parser = "ground" | "escape" | "escapeIntermediate" | "csi" | "osc" | "string";
+
+/** The state after `byte` in `state`, for a byte other than ESC, CAN and SUB. */
+function step(state: Parser, byte: number): Parser {
+  switch (state) {
+    case "escape":
+      if (byte === 0x5b) return "csi";
+      if (byte === 0x5d) return "osc";
+      if (byte === 0x50 || byte === 0x58 || byte === 0x5e || byte === 0x5f) return "string";
+      if (byte >= 0x20 && byte <= 0x2f) return "escapeIntermediate";
+      // C0 controls run without leaving the sequence, and DEL is ignored.
+      return byte < 0x20 || byte === 0x7f ? "escape" : "ground";
+    case "escapeIntermediate":
+      return byte < 0x30 || byte === 0x7f ? "escapeIntermediate" : "ground";
+    case "csi":
+      // A CSI ends at its final byte. A non-ASCII byte ends some CSI states
+      // and not others; taking it as no end holds an erase longer, never
+      // inside a sequence.
+      return byte >= 0x40 && byte <= 0x7e ? "ground" : "csi";
+    default:
+      return state;
   }
-  const esc = bytes.lastIndexOf(0x1b);
-  if (esc === -1) return false;
-  if (esc === bytes.length - 1) return true;
-  if (bytes[esc + 1] !== 0x5b) return false;
-  // A CSI ends at its final byte, 0x40 to 0x7e.
-  return !bytes.subarray(esc + 2).some((byte) => byte >= 0x40 && byte <= 0x7e);
 }
 
-/** The last `n` bytes of `before` followed by `data`. O(n). */
-function lastBytes(before: Uint8Array, data: Uint8Array, n: number): Uint8Array {
-  if (data.byteLength >= n) return data.slice(data.byteLength - n);
-  const joined = new Uint8Array(Math.min(n, before.byteLength + data.byteLength));
-  const kept = joined.byteLength - data.byteLength;
-  joined.set(before.subarray(before.byteLength - kept), 0);
-  joined.set(data, kept);
-  return joined;
+/** Continuation bytes the last UTF-8 character lacks after `bytes`, given `missing` before. */
+function utf8Missing(missing: number, bytes: Uint8Array): number {
+  for (let back = 1; back <= Math.min(4, bytes.length); back += 1) {
+    const byte = bytes[bytes.length - back]!;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return Math.max(0, length - back);
+  }
+  // Continuation bytes only.
+  return Math.max(0, missing - bytes.length);
+}
+
+/**
+ * Follows the session's bytes far enough to tell whether they end inside an
+ * escape sequence, a control string or a UTF-8 character, across any number
+ * of pushes. It mirrors the state table xterm.js 6 parses with
+ * (`EscapeSequenceParser.ts`), folded to the states of `Parser`, for the
+ * 7-bit forms only: a sequence opened by a C1 control goes unseen.
+ *
+ * ESC, CAN and SUB lead to one state from any other, so a push is stepped
+ * through only after the last of them, and only until the parser is back in
+ * the ground state or inside a string, which the bytes left cannot end.
+ * O(bytes) per push, in native searches; the steps cover one sequence.
+ */
+export class SequenceTracker {
+  #parser: Parser = "ground";
+  #utf8Missing = 0;
+
+  /** Whether the bytes so far end inside a sequence, a string or a UTF-8 character. */
+  get inside(): boolean {
+    return this.#parser !== "ground" || this.#utf8Missing > 0;
+  }
+
+  /** Follows `bytes`, which come right after the bytes followed so far. */
+  feed(bytes: Uint8Array): void {
+    this.#utf8Missing = utf8Missing(this.#utf8Missing, bytes);
+    const esc = bytes.lastIndexOf(ESC);
+    const cancel = Math.max(bytes.lastIndexOf(CAN), bytes.lastIndexOf(SUB));
+    let state = this.#parser;
+    let start = 0;
+    if (esc > cancel) {
+      state = "escape";
+      start = esc + 1;
+    } else if (cancel !== -1) {
+      state = "ground";
+      start = cancel + 1;
+    }
+    for (let at = start; at < bytes.length; at += 1) {
+      if (state === "ground" || state === "string") break;
+      if (state === "osc") {
+        if (bytes.indexOf(BEL, at) !== -1) state = "ground";
+        break;
+      }
+      state = step(state, bytes[at]!);
+    }
+    this.#parser = state;
+  }
 }
 
 /** One terminal's queue of output on its way to xterm.js. */
@@ -199,10 +263,12 @@ export class Lane {
   #chunks: Uint8Array[] = [];
   /** The queued chunks the app wrote itself, which are parsed but not counted. */
   readonly #local = new WeakSet<Uint8Array>();
-  /** The last bytes the session pushed, to see whether they end mid-sequence. */
-  #tail: Uint8Array = new Uint8Array(0);
+  /** Where the bytes written so far, the session's and the app's, leave the parser. */
+  readonly #sequence = new SequenceTracker();
   /** The app's bytes waiting for a push that ends outside a sequence. */
   #held: Uint8Array[] = [];
+  /** Cancels the timer that writes `#held` anyway after HOLD_MS. */
+  #cancelHold: (() => void) | undefined;
   #head = 0;
   /** Chunks handed to xterm.js in a turn and not parsed yet, at most IN_FLIGHT. */
   #inFlight = 0;
@@ -249,30 +315,39 @@ export class Lane {
       }
       if (this.ready) this.#scheduler.enqueue(this);
     }
-    this.#tail = lastBytes(this.#tail, data, TAIL_BYTES);
-    if (this.#held.length > 0 && !endsInsideSequence(this.#tail)) {
-      for (const local of this.#held.splice(0)) this.#placeLocal(local);
-    }
+    this.#sequence.feed(data);
+    if (this.#held.length > 0 && !this.#sequence.inside) this.#releaseHeld();
   }
 
   /**
    * Writes `data`, which the app made, after everything pushed so far: at
    * the end of a whole push, never between the chunks a push was cut into,
    * which can fall inside an escape sequence. A push that itself ended
-   * inside a CSI sequence or a UTF-8 character is finished by a later one,
-   * so `data` waits for the first push that ends outside both. Its bytes
-   * reach no `onParsed`, because the session did not send them.
+   * inside an escape sequence, a control string such as an OSC title, or a
+   * UTF-8 character is finished by a later one, so `data` waits for the
+   * first push that ends outside all of them, or HOLD_MS if none comes. Its
+   * bytes reach no `onParsed`, because the session did not send them.
    */
   pushLocal(data: Uint8Array): void {
     if (this.#closed || data.byteLength === 0) return;
-    if (this.#held.length > 0 || endsInsideSequence(this.#tail)) {
+    if (this.#held.length > 0 || this.#sequence.inside) {
       this.#held.push(data);
+      this.#cancelHold ??= this.#scheduler.setTimer(() => this.#releaseHeld(), HOLD_MS);
       return;
     }
     this.#placeLocal(data);
   }
 
+  #releaseHeld(): void {
+    this.#cancelHold?.();
+    this.#cancelHold = undefined;
+    for (const local of this.#held.splice(0)) this.#placeLocal(local);
+  }
+
   #placeLocal(data: Uint8Array): void {
+    // Bytes placed after HOLD_MS end the sequence they cut into, as they do in
+    // xterm.js, so the next erase does not wait for that sequence too.
+    this.#sequence.feed(data);
     if (!this.hasQueued && this.#scheduler.isIdle(this)) {
       this.#write(data, () => {});
       return;
@@ -304,6 +379,8 @@ export class Lane {
     this.#chunks = [];
     this.#head = 0;
     this.#held = [];
+    this.#cancelHold?.();
+    this.#cancelHold = undefined;
     this.#endTurn();
     this.#scheduler.release(this);
   }
