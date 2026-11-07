@@ -222,7 +222,7 @@ export class AppShell {
   readonly #tmuxClient: TmuxClient | undefined;
   readonly #sessions: SessionClient;
   /** The listing of local shells in flight, if any. */
-  #listingShells: Promise<readonly LocalShellView[]> | undefined;
+  #listingShells: Promise<ShellListing> | undefined;
   /** tmux sessions shown as tabs: each control client's host, and the pane showing each window. */
   readonly #tmux = new Map<
     number,
@@ -1253,18 +1253,24 @@ export class AppShell {
     }
     const hosts = this.hosts.getSnapshot().view.hosts;
     // A saved shell opens only if it is still on this computer.
-    const shells = workspace.tabs.some((tab) => namesShell(tab))
-      ? await this.listLocalShells()
-      : [];
+    const listing = workspace.tabs.some((tab) => namesShell(tab))
+      ? await this.#listShells()
+      : NO_SHELLS;
     const missing = new Set<string>();
     const gone = new Set<string>();
     const open = (spec: SavedSpec): SessionSpec => {
       if (spec.kind === "serial") return { kind: "serial", port: spec.port };
       if (spec.kind === "local" && spec.shell) {
-        const wanted = spec.shell.id;
-        const shell = shells.find((s) => s.id === wanted);
+        const saved = spec.shell;
+        const shell = listing.shells.find((s) => s.id === saved.id);
         if (shell) return { kind: "local", shell };
-        gone.add(spec.shell.name);
+        // A failed listing, or a distribution WSL was too slow to list,
+        // proves nothing: the saved shell opens as saved, and the backend
+        // finds it or says why not.
+        if (!listing.answered || (!listing.complete && saved.id.startsWith("wsl:"))) {
+          return { kind: "local", shell: saved };
+        }
+        gone.add(saved.name);
         return { kind: "local" };
       }
       if (spec.kind === "ssh") {
@@ -1372,9 +1378,14 @@ export class AppShell {
    * the default alone.
    */
   listLocalShells(): Promise<readonly LocalShellView[]> {
+    return this.#listShells().then(({ shells }) => shells);
+  }
+
+  /** {@link listLocalShells}, with whether the listing answered and was whole. */
+  #listShells(): Promise<ShellListing> {
     if (this.#listingShells) return this.#listingShells;
     const listing = this.#sessions.localShells?.();
-    if (!listing) return Promise.resolve([]);
+    if (!listing) return Promise.resolve(NO_SHELLS);
     this.#listingShells = listing
       .then(
         (answer) => ({ ...answer, answered: true }),
@@ -1391,7 +1402,7 @@ export class AppShell {
           this.#set({ ...this.#state, localShells: shells });
         }
         if (answered) this.#checkDefaultShell(shells, complete);
-        return shells;
+        return { shells, complete, answered };
       });
     return this.#listingShells;
   }
@@ -1756,6 +1767,19 @@ function mapTemplate<A, B>(template: Template<A>, map: (spec: A) => B): Template
     ? { kind: "pane", spec: map(template.spec) }
     : { ...template, children: template.children.map((child) => mapTemplate(child, map)) };
 }
+
+/**
+ * A listing of local shells: `answered` is false when the backend failed and
+ * `shells` is the last list, `complete` false when WSL did not answer.
+ */
+interface ShellListing {
+  shells: readonly LocalShellView[];
+  complete: boolean;
+  answered: boolean;
+}
+
+/** The listing of a window with no backend for it, or with no shell to look for. */
+const NO_SHELLS: ShellListing = { shells: [], complete: true, answered: true };
 
 /** Whether two listings name the same shells, in the same order. */
 function sameShells(a: readonly LocalShellView[], b: readonly LocalShellView[]): boolean {

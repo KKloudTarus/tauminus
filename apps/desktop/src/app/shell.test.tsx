@@ -352,11 +352,17 @@ describe("AppShell choosing the local shell", () => {
   });
 
   it("names the default as the backend does, not as storage says", async () => {
-    shell().setDefaultShell({ id: "pwsh", name: "‮evil" });
+    shell().setDefaultShell({ id: "pwsh", name: "Not PowerShell" });
     const app = listing([pwsh!], true);
     await app.prepareLocalShells();
     expect(app.getState().defaultShell).toEqual(pwsh);
     expect(shell().getState().defaultShell).toEqual(pwsh);
+  });
+
+  it("does not read a remembered name that could pass for another shell", () => {
+    // A failed listing would leave it labelling the first tab.
+    shell().setDefaultShell({ id: "pwsh", name: "‮evil" });
+    expect(shell().getState().defaultShell).toBeUndefined();
   });
 
   it("opens one tab in another shell, which the backend starts", async () => {
@@ -387,6 +393,41 @@ describe("AppShell choosing the local shell", () => {
     ]);
     expect(fresh.hosts.getSnapshot().notice).toMatch(
       /win: Old shell is not on this computer and opened the system default shell/u,
+    );
+  });
+
+  it("opens a saved shell as saved when the listing fails, for the backend to find", async () => {
+    const app = shell();
+    app.newLocalTab(pwsh);
+    app.saveWorkspace("win");
+    const [saved] = app.workspaces.getSnapshot();
+
+    const fresh = shell(fakeHosts(), {
+      ...fakeSessions,
+      localShells: () => Promise.reject(new Error("listing failed")),
+    });
+    await fresh.openWorkspace(saved!.id);
+    expect(fresh.workspace.focusedSpec()).toEqual({ kind: "local", shell: pwsh });
+    expect(fresh.hosts.getSnapshot().notice).toBeUndefined();
+  });
+
+  it("opens a saved distribution as saved when WSL was too slow to list it", async () => {
+    const app = shell();
+    app.newLocalTab(ubuntu);
+    app.workspace.split("row", { kind: "local", shell: { id: "gone", name: "Old shell" } });
+    app.saveWorkspace("win");
+    const [saved] = app.workspaces.getSnapshot();
+
+    // Ubuntu is missing from a listing WSL did not answer; "gone" is not WSL's.
+    const fresh = listing([pwsh!], false);
+    await fresh.openWorkspace(saved!.id);
+    const panes = paneIds(fresh.workspace.activeTab!.root);
+    expect(panes.map((id) => fresh.workspace.terminal(id)!.spec)).toEqual([
+      { kind: "local", shell: ubuntu },
+      { kind: "local" },
+    ]);
+    expect(fresh.hosts.getSnapshot().notice).toBe(
+      "win: Old shell is not on this computer and opened the system default shell",
     );
   });
 });

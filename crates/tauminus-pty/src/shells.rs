@@ -7,8 +7,9 @@
 //! Unix, `%ComSpec%` (`cmd.exe`) on Windows. On Unix that is the shell the
 //! user picked, so only Windows lists others, found where their installers
 //! put them: Windows PowerShell under the system root, PowerShell 7 under
-//! Program Files or on `PATH`, Git Bash under Program Files, and the
-//! distributions `wsl.exe --list` names.
+//! Program Files, as the Store's alias under `%LOCALAPPDATA%`, or on `PATH`,
+//! Git Bash under Program Files, and the distributions `wsl.exe --list`
+//! names.
 
 use tauminus_domain::LocalShell;
 
@@ -39,12 +40,7 @@ pub fn known_shells() -> ShellListing {
     #[cfg(windows)]
     let listing = windows_shells(&Lookup {
         var: &|name| std::env::var(name).ok(),
-        // The Store installs PowerShell 7 as an app execution alias, a
-        // reparse point that metadata cannot follow: read the link itself.
-        exists: &|path| {
-            let path = std::path::Path::new(path);
-            path.is_file() || path.symlink_metadata().is_ok_and(|meta| !meta.is_dir())
-        },
+        exists: &|path| is_program(std::path::Path::new(path)),
         wsl: &query_wsl,
     });
     #[cfg(not(windows))]
@@ -53,6 +49,20 @@ pub fn known_shells() -> ShellListing {
         wsl_answered: true,
     };
     listing
+}
+
+/// Whether a program can start from `path`. The Store installs PowerShell 7
+/// as an app execution alias, a reparse point that metadata cannot follow,
+/// so the link itself is read. A symlink or a junction that does not lead
+/// to a file is no program: Rust calls a reparse point a symlink only when
+/// its tag is a name surrogate, which an app execution alias (tag
+/// `0x8000001B`) is not, so the alias stays.
+#[cfg(any(windows, test))]
+fn is_program(path: &std::path::Path) -> bool {
+    path.is_file()
+        || path
+            .symlink_metadata()
+            .is_ok_and(|meta| !meta.is_dir() && !meta.file_type().is_symlink())
 }
 
 /// How long `wsl.exe --list` may take before it is stopped.

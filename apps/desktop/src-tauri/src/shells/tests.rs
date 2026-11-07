@@ -80,6 +80,25 @@ fn takes_a_listing_that_finished_while_it_waited_instead_of_listing_again() {
 }
 
 #[test]
+fn lists_again_for_a_distribution_when_wsl_did_not_answer_in_the_listing_it_waited_for() {
+    let ubuntu = shell("wsl:Ubuntu", "Ubuntu (WSL)");
+    let (catalog, calls) = catalog(vec![
+        listing(&[], false),
+        listing(&[], false),
+        listing(std::slice::from_ref(&ubuntu), true),
+    ]);
+    // A cold start: WSL times out, then the palette lists while it is still cold.
+    catalog.refresh();
+    let seen = catalog.generation.load(Ordering::SeqCst);
+    catalog.refresh();
+    // That listing still settles an id that is not a distribution.
+    assert_eq!(catalog.find_after("pwsh", seen), None);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(catalog.find_after("wsl:Ubuntu", seen), Some(ubuntu.shell));
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+}
+
+#[test]
 fn keeps_the_distributions_it_had_when_wsl_is_slow() {
     let cmd = shell("cmd", "Command Prompt");
     let ubuntu = shell("wsl:Ubuntu", "Ubuntu (WSL)");

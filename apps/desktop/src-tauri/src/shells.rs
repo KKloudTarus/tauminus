@@ -22,8 +22,9 @@ type Lister = Arc<dyn Fn() -> ShellListing + Send + Sync>;
 #[derive(Clone)]
 pub(crate) struct ShellCatalog {
     list: Lister,
-    /// The shells as last listed; `None` until the first listing.
-    listed: Arc<Mutex<Option<Vec<KnownShell>>>>,
+    /// The shells as last listed, and whether WSL answered in that listing;
+    /// `None` until the first listing.
+    listed: Arc<Mutex<Option<ShellListing>>>,
     /// Held while listing, so one listing runs at a time.
     listing: Arc<Mutex<()>>,
     /// Listings finished so far, so a caller that waited for one can tell.
@@ -72,11 +73,14 @@ impl ShellCatalog {
         if !wsl_answered {
             let before = listed
                 .iter()
-                .flatten()
+                .flat_map(|listing| &listing.shells)
                 .filter(|known| known.id.starts_with("wsl:"));
             shells.extend(before.cloned());
         }
-        *listed = Some(shells.clone());
+        *listed = Some(ShellListing {
+            shells: shells.clone(),
+            wsl_answered,
+        });
         self.generation.fetch_add(1, Ordering::SeqCst);
         (shells, wsl_answered)
     }
@@ -85,7 +89,8 @@ impl ShellCatalog {
     /// be new, or WSL may have been slow when it was last listed. An id
     /// that no shell could have is refused without listing, and a listing
     /// that finished while this one waited for its turn is used instead of
-    /// running another.
+    /// running another, unless `id` is a distribution and WSL did not
+    /// answer in it.
     pub(crate) fn find(&self, id: &str) -> Option<LocalShell> {
         let seen = self.generation.load(Ordering::SeqCst);
         if let Some(shell) = self.listed_shell(id) {
@@ -101,7 +106,10 @@ impl ShellCatalog {
     fn find_after(&self, id: &str, seen: u64) -> Option<LocalShell> {
         let _one = self.listing.lock().unwrap_or_else(PoisonError::into_inner);
         if self.generation.load(Ordering::SeqCst) != seen {
-            return self.listed_shell(id);
+            let (shell, settled) = self.last_answer(id);
+            if settled {
+                return shell;
+            }
         }
         let (shells, _) = self.list_holding_lock();
         shells
@@ -111,13 +119,24 @@ impl ShellCatalog {
     }
 
     fn listed_shell(&self, id: &str) -> Option<LocalShell> {
-        self.listed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        self.last_answer(id).0
+    }
+
+    /// The shell the last listing has under `id`, and whether that listing
+    /// settles it: a distribution missing from a listing in which WSL did
+    /// not answer may still be there, and no listing settles nothing.
+    fn last_answer(&self, id: &str) -> (Option<LocalShell>, bool) {
+        let listed = self.listed.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(listing) = listed.as_ref() else {
+            return (None, false);
+        };
+        let shell = listing
+            .shells
             .iter()
-            .flatten()
             .find(|known| known.id == id)
-            .map(|known| known.shell.clone())
+            .map(|known| known.shell.clone());
+        let settled = shell.is_some() || listing.wsl_answered || !id.starts_with("wsl:");
+        (shell, settled)
     }
 }
 

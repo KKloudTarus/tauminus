@@ -102,6 +102,11 @@ describe("SavedWorkspaces", () => {
       { id: "", name: "PowerShell 7" },
       { id: 7, name: "PowerShell 7" },
       { id: "x".repeat(200), name: "PowerShell 7" },
+      // A name that could read as another shell, or break a line.
+      { id: "pwsh", name: "‮evil" },
+      { id: "pwsh", name: "Power⁦Shell" },
+      { id: "pwsh", name: "PowerShell\n7" },
+      { id: "pwsh", name: "PowerShell\u009b7" },
     ]) {
       expect(new SavedWorkspaces(memory(holding(shell))).getSnapshot()[0]?.tabs).toEqual([local]);
     }

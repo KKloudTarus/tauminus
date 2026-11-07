@@ -205,14 +205,36 @@ function savedSpec(value: unknown): SavedSpec | undefined {
 /**
  * A saved shell, or undefined for one that is malformed. Only the backend
  * turns the id into a program, and only for a shell it lists, so a
- * crafted id opens nothing.
+ * crafted id opens nothing. The name can label a tab before any listing
+ * has replaced it, so one with a control character, or a bidirectional
+ * control that could make it read as another shell, is refused, as the
+ * backend refuses such names in its own listing.
  */
 export function savedShell(value: unknown): SavedShell | undefined {
   if (!isObject(value)) return undefined;
   const { id, name } = value;
   if (typeof id !== "string" || typeof name !== "string") return undefined;
   if (!id || id.length > MAX_ID || !name.trim() || name.length > MAX_NAME) return undefined;
+  if (hasControls(name)) return undefined;
   return { id, name };
+}
+
+/** Whether `text` has a C0 or C1 control or a Unicode bidirectional control. O(n). */
+function hasControls(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true;
+    if (
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069) ||
+      code === 0x200e ||
+      code === 0x200f ||
+      code === 0x061c
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 const ENCODINGS: readonly EncodingSpec[] = [

@@ -249,3 +249,27 @@ fn drops_a_torn_byte_and_names_that_are_not_names() {
     let output = utf16("Deb\u{7}ian\r\n-x\r\n--help\r\nkali\r\n");
     assert_eq!(wsl_names(&output), ["kali"]);
 }
+
+// Windows needs a privilege to make symlinks; the check is the same there.
+#[cfg(unix)]
+#[test]
+fn takes_a_file_or_a_link_to_one_and_skips_dangling_and_folder_links() {
+    use std::os::unix::fs::symlink;
+    let dir = std::env::temp_dir().join(format!("tauminus-pty-programs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pwsh.exe"), b"").unwrap();
+    symlink(dir.join("pwsh.exe"), dir.join("linked.exe")).unwrap();
+    symlink(dir.join("nowhere.exe"), dir.join("dangling.exe")).unwrap();
+    symlink(&dir, dir.join("folder.exe")).unwrap();
+    let found = [
+        "pwsh.exe",
+        "linked.exe",
+        "dangling.exe",
+        "folder.exe",
+        "missing.exe",
+    ]
+    .map(|name| is_program(&dir.join(name)));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(found, [true, true, false, false, false]);
+}
