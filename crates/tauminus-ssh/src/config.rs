@@ -32,13 +32,15 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 /// resolver. 1000 aliases at 8 in parallel would otherwise take up to 625 s.
 const IMPORT_DEADLINE: Duration = Duration::from_secs(30);
 /// `IdentityFile` values OpenSSH uses, and `ssh -G` prints, when none is
-/// configured.
+/// configured. The list differs between versions: newer ones drop `id_xmss`
+/// and `id_dsa` and add `id_mldsa44_ed25519`, so it holds every name.
 pub(crate) const DEFAULT_IDENTITIES: &[&str] = &[
     "id_rsa",
     "id_ecdsa",
     "id_ecdsa_sk",
     "id_ed25519",
     "id_ed25519_sk",
+    "id_mldsa44_ed25519",
     "id_xmss",
     "id_dsa",
 ];

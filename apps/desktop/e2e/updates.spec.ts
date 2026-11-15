@@ -30,6 +30,14 @@ test("says nothing at start without a new version, and answers when asked", asyn
 
   await page.keyboard.press("Control+Shift+P");
   await input.fill("Check for updates at start");
+  // "Check for updates" stays selected until the filter catches up, and
+  // Enter would run it instead.
+  await expect(page.getByRole("option", { name: /^Check for updates at start/u })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   await input.press("Enter");
-  expect(await page.evaluate(() => window.localStorage.getItem("tauminus.updates.auto"))).toBe("0");
+  await expect
+    .poll(() => page.evaluate(() => window.localStorage.getItem("tauminus.updates.auto")))
+    .toBe("0");
 });
