@@ -174,6 +174,57 @@ fn defaults_are_dropped_so_hosts_inherit_them() {
     assert_eq!(config.tidy(host).identity_files, Vec::<PathBuf>::new());
 }
 
+#[test]
+fn the_default_keys_of_older_and_newer_openssh_are_both_dropped() {
+    let config = OpenSshConfig::file("x".into(), "/home/me".into(), "me".into(), None);
+    let older = [
+        "id_rsa",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519",
+        "id_ed25519_sk",
+        "id_xmss",
+        "id_dsa",
+    ];
+    let newer = [
+        "id_rsa",
+        "id_ecdsa",
+        "id_ecdsa_sk",
+        "id_ed25519",
+        "id_ed25519_sk",
+        "id_mldsa44_ed25519",
+    ];
+    for names in [&older[..], &newer[..]] {
+        let host = ConfigHost {
+            alias: "a".into(),
+            hostname: "a".into(),
+            identity_files: names
+                .iter()
+                .map(|n| PathBuf::from(format!("~/.ssh/{n}")))
+                .collect(),
+            ..ConfigHost::default()
+        };
+        assert_eq!(
+            config.tidy(host).identity_files,
+            Vec::<PathBuf>::new(),
+            "{names:?}"
+        );
+    }
+    let chosen = ConfigHost {
+        alias: "a".into(),
+        hostname: "a".into(),
+        identity_files: vec![
+            PathBuf::from("~/.ssh/id_mldsa44_ed25519"),
+            PathBuf::from("~/.ssh/work"),
+        ],
+        ..ConfigHost::default()
+    };
+    assert_eq!(
+        config.tidy(chosen.clone()).identity_files,
+        chosen.identity_files
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn an_alias_ssh_rejects_is_reported_not_guessed() {
