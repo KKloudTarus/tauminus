@@ -19,7 +19,7 @@ zeroize.workspace = true
 # webauthn.dll reaches a key from a process that is not elevated.
 [target.'cfg(not(windows))'.dependencies]
 anyhow = "1"
-ctap-hid-fido2 = { version = "=3.6.0", default-features = false, features = ["ring"] }
+ctap-hid-fido2 = { version = "=3.6.1", default-features = false, features = ["ring"] }
 
 [lints]
 workspace = true
